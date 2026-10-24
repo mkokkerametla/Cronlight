@@ -15,9 +15,12 @@ and never starts a second scheduler.
 ## Install
 
 ```bash
-dotnet add package cronlight-quartz-scheduler
-dotnet add package cronlight-quartz-scheduler-history   # optional: execution history
+dotnet add package cronlight-quartz-scheduler --prerelease
+dotnet add package cronlight-quartz-scheduler-history --prerelease   # optional: execution history
 ```
+
+Cronlight is in beta: `--prerelease` is needed until 1.0, and options or endpoints may still change
+between betas.
 
 Requires ASP.NET Core 8 or 10 and Quartz.NET 3.x configured with `AddQuartz()`.
 
@@ -158,6 +161,7 @@ builder.Services.AddCronlightHistory(o =>
 | `tests/Cronlight.Tests` | Integration tests (TestServer; SQLite, PostgreSQL, SQL Server, MySQL) |
 | `assets` | Logo (`icon.svg`) and the 128px `icon.png` used as the NuGet package icon |
 | `build/verify-packages.sh` | Checks run on packed `.nupkg` files in CI |
+| `build/smoke-test.sh` | Installs the packed packages into new .NET 8 and .NET 10 apps and runs them |
 | `.github/workflows` | CI and release pipelines |
 
 ## Development
@@ -215,12 +219,14 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
    `CRONLIGHT_REQUIRE_DATABASES=true` makes a missing database fail the run rather than skip its tests.
 4. Pack both packages as `0.1.0-ci.<run>` and verify them with `build/verify-packages.sh` (both target
    frameworks, UI embedded, README, license, symbols, matching dependency versions).
+   `build/smoke-test.sh` then installs them into a new .NET 8 and .NET 10 web app, runs it and checks
+   the dashboard, API and history respond.
 5. Upload the packages and test results as workflow artifacts.
 
 **Release** ([`release.yml`](.github/workflows/release.yml)) runs when a `v*.*.*` tag is pushed:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0      # or v0.2.0-beta.1 for a prerelease
+git tag v0.1.0-beta.1 && git push origin v0.1.0-beta.1   # a -suffix marks a prerelease
 ```
 
 It runs the full CI pipeline with the tag's version, then (after approval on the `nuget` environment)
@@ -230,5 +236,6 @@ One-time setup for releases:
 
 1. On nuget.org, add a **Trusted Publishing** policy for this repository and the `release.yml` workflow.
    No API key is stored in GitHub: each release gets a short-lived key via OIDC.
-2. In the GitHub repo settings, add a variable `NUGET_USER` with your nuget.org username.
+2. In the GitHub repo settings, add a variable `NUGET_USER` with the nuget.org username
+   (`mkokkerametla`).
 3. Create an environment named `nuget` and add yourself as a required reviewer.

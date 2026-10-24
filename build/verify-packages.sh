@@ -42,6 +42,9 @@ if [[ -f "$core" ]]; then
     # grep -c (not -q) reads all input: an early exit would kill unzip with SIGPIPE and trip pipefail
     unzip -p "$core" "lib/$tfm/Cronlight.dll" | grep -ac "Cronlight.wwwroot.index.html" >/dev/null \
       || fail "cronlight-quartz-scheduler: UI not embedded in $tfm assembly"
+    # ManifestEmbeddedFileProvider throws at startup without it
+    unzip -p "$core" "lib/$tfm/Cronlight.dll" | grep -ac "Microsoft.Extensions.FileProviders.Embedded.Manifest.xml" >/dev/null \
+      || fail "cronlight-quartz-scheduler: embedded files manifest missing from $tfm assembly"
   done
 fi
 
