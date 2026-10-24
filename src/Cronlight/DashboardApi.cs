@@ -101,7 +101,8 @@ internal static class DashboardApi
                 meta.RunningSince,
                 // Lets the UI hide controls the user cannot use; the server still enforces it
                 CanManage = await CanManage(http, options.Value),
-                HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null
+                HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null,
+                options.Value.ShowScheduleAssistant
             });
         });
 

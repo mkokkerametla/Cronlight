@@ -2,15 +2,17 @@ import { Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { CronPreview } from '@/components/jobs/cron-preview'
+import { ScheduleAssistant } from '@/components/jobs/schedule-assistant'
 import { emptyTrigger, type TriggerDraft } from '@/lib/job-form'
 
 interface Props {
   triggers: TriggerDraft[]
   onChange: (triggers: TriggerDraft[]) => void
   jobName: string
+  showScheduleAssistant: boolean
 }
 
-export function TriggersEditor({ triggers, onChange, jobName }: Props) {
+export function TriggersEditor({ triggers, onChange, jobName, showScheduleAssistant }: Props) {
   const update = (index: number, patch: Partial<TriggerDraft>) =>
     onChange(triggers.map((t, i) => (i === index ? { ...t, ...patch } : t)))
 
@@ -51,6 +53,7 @@ export function TriggersEditor({ triggers, onChange, jobName }: Props) {
             </Button>
           </div>
           <CronPreview expression={trigger.cronExpression} timeZone={trigger.timeZone} />
+          {showScheduleAssistant && <ScheduleAssistant timeZone={trigger.timeZone} />}
         </div>
       ))}
       <Button

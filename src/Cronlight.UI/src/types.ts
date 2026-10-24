@@ -59,6 +59,7 @@ export interface SchedulerInfo {
   runningSince: string | null
   canManage: boolean
   historyEnabled: boolean
+  showScheduleAssistant: boolean
 }
 
 export interface RunningJob {

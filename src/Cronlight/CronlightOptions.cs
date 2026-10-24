@@ -25,6 +25,13 @@ public class CronlightOptions
     /// </summary>
     public bool AllowManagingUnloadableJobs { get; set; }
 
+    /// <summary>
+    /// Shows a box next to cron expressions where users describe a schedule in plain language and
+    /// open it as a question in ChatGPT or Google (in their own browser; Cronlight sends nothing).
+    /// Set to false where staff may not use external AI or search tools.
+    /// </summary>
+    public bool ShowScheduleAssistant { get; set; } = true;
+
     /// <summary>Assemblies scanned for IJob implementations. Empty = all loaded non-framework assemblies.</summary>
     public List<Assembly> JobAssemblies { get; } = new();
 

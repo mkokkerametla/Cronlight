@@ -43,6 +43,7 @@ interface Props {
   jobType: JobType | undefined
   canManage: boolean
   historyEnabled: boolean
+  showScheduleAssistant: boolean
   actions: DashboardActions
   onClose: () => void
   onViewHistory: (group: string, name: string) => void
@@ -53,6 +54,7 @@ export function JobSheet({
   jobType,
   canManage,
   historyEnabled,
+  showScheduleAssistant,
   actions,
   onClose,
   onViewHistory,
@@ -94,6 +96,7 @@ export function JobSheet({
               <EditJobForm
                 key={`${job.group}.${job.name}`}
                 job={job}
+                showScheduleAssistant={showScheduleAssistant}
                 jobType={jobType}
                 onCancel={() => setEditing(false)}
                 onSave={async request => {
@@ -283,11 +286,13 @@ function JobDetails({ job, children }: { job: Job; children?: ReactNode }) {
 function EditJobForm({
   job,
   jobType,
+  showScheduleAssistant,
   onSave,
   onCancel,
 }: {
   job: Job
   jobType: JobType | undefined
+  showScheduleAssistant: boolean
   onSave: (request: {
     description: string | null
     data: Record<string, string>
@@ -323,7 +328,12 @@ function EditJobForm({
         <Separator />
         <section className="space-y-2">
           <h3 className="text-sm font-medium">Cron triggers</h3>
-          <TriggersEditor triggers={triggers} onChange={setTriggers} jobName={job.name} />
+          <TriggersEditor
+            triggers={triggers}
+            onChange={setTriggers}
+            jobName={job.name}
+            showScheduleAssistant={showScheduleAssistant}
+          />
           {otherTriggers > 0 && (
             <p className="text-xs text-muted-foreground">
               {otherTriggers} non-cron trigger(s) are left unchanged.

@@ -37,6 +37,7 @@ export default function App() {
   const selected = jobs.find(j => jobKey(j) === selectedKey) ?? null
   const canManage = scheduler?.canManage ?? false
   const historyEnabled = scheduler?.historyEnabled ?? false
+  const showScheduleAssistant = scheduler?.showScheduleAssistant ?? false
 
   const changeTab = (next: Tab) => {
     setTab(next)
@@ -167,6 +168,7 @@ export default function App() {
         jobType={jobTypes.find(t => t.typeName === selected?.jobType)}
         canManage={canManage}
         historyEnabled={historyEnabled}
+        showScheduleAssistant={showScheduleAssistant}
         actions={actions}
         onClose={() => setSelectedKey(null)}
         onViewHistory={showJobHistory}
@@ -175,6 +177,7 @@ export default function App() {
         open={creating}
         onOpenChange={setCreating}
         jobTypes={jobTypes}
+        showScheduleAssistant={showScheduleAssistant}
         onCreate={actions.create}
       />
     </div>

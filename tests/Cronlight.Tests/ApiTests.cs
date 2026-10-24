@@ -7,6 +7,22 @@ namespace Cronlight.Tests;
 
 public class ApiTests
 {
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(false, false)]
+    public async Task Scheduler_info_reports_whether_to_show_the_schedule_assistant(bool? setting, bool expected)
+    {
+        await using var host = await TestHost.Start(configure: o =>
+        {
+            if (setting is { } show)
+                o.ShowScheduleAssistant = show;
+        });
+
+        var scheduler = await host.Client().GetFromJsonAsync<JsonElement>("api/scheduler");
+
+        Assert.Equal(expected, scheduler.GetProperty("showScheduleAssistant").GetBoolean());
+    }
+
     [Fact]
     public async Task Ui_is_served_under_the_prefix_with_relative_assets()
     {

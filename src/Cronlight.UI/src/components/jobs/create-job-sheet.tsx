@@ -27,10 +27,17 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   jobTypes: JobType[]
+  showScheduleAssistant: boolean
   onCreate: (request: CreateJobRequest) => Promise<boolean>
 }
 
-export function CreateJobSheet({ open, onOpenChange, jobTypes, onCreate }: Props) {
+export function CreateJobSheet({
+  open,
+  onOpenChange,
+  jobTypes,
+  showScheduleAssistant,
+  onCreate,
+}: Props) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl">
@@ -44,6 +51,7 @@ export function CreateJobSheet({ open, onOpenChange, jobTypes, onCreate }: Props
         {open && (
           <CreateJobForm
             jobTypes={jobTypes}
+            showScheduleAssistant={showScheduleAssistant}
             onCreate={onCreate}
             onDone={() => onOpenChange(false)}
           />
@@ -55,6 +63,7 @@ export function CreateJobSheet({ open, onOpenChange, jobTypes, onCreate }: Props
 
 function CreateJobForm({
   jobTypes,
+  showScheduleAssistant,
   onCreate,
   onDone,
 }: Omit<Props, 'open' | 'onOpenChange'> & { onDone: () => void }) {
@@ -149,7 +158,12 @@ function CreateJobForm({
         <Separator />
         <section className="space-y-2">
           <h3 className="text-sm font-medium">Triggers</h3>
-          <TriggersEditor triggers={triggers} onChange={setTriggers} jobName={name} />
+          <TriggersEditor
+            triggers={triggers}
+            onChange={setTriggers}
+            jobName={name}
+            showScheduleAssistant={showScheduleAssistant}
+          />
         </section>
 
         <Separator />

@@ -63,6 +63,7 @@ Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
 | `AllowAnonymousOutsideDevelopment` | `false` | Without a `ViewPolicy` Cronlight returns 403 outside Development unless this is set |
 | `AllowManagingUnloadableJobs` | `false` | Allow pause/resume/delete on jobs whose type isn't in this app |
 | `JobAssemblies` | all loaded app assemblies | Where to look for `IJob` types offered in "New Job" |
+| `ShowScheduleAssistant` | `true` | Show the "describe your schedule" box that opens the question in ChatGPT or Google. Set to `false` where staff may not use external AI or search tools |
 | `SensitiveKeyPatterns` | password, secret, token, apikey, connectionstring | JobDataMap keys masked in responses |
 
 ## Describing your jobs (optional)
