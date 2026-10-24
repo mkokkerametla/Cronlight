@@ -45,6 +45,7 @@ export function useDashboard() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- state is set only after the awaited fetch resolves
     void refresh()
     api<JobType[]>('job-types')
       .then(setJobTypes)

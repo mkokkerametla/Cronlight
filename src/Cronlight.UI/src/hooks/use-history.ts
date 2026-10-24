@@ -55,6 +55,7 @@ export function useHistory(filter: HistoryFilter, limit = PAGE_SIZE) {
   }, [status, group, name, limit])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- state is set only after the awaited fetch resolves
     void loadFirstPage()
   }, [loadFirstPage])
 
