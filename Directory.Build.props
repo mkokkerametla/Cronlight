@@ -1,0 +1,23 @@
+<Project>
+  <!-- Shared by every project. Only the two libraries opt in to packing. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package metadata">
+    <Authors>Cronlight contributors</Authors>
+    <Copyright>Copyright (c) Cronlight contributors</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>quartz;quartz.net;scheduler;jobs;cron;dashboard;aspnetcore;background-jobs</PackageTags>
+    <!-- Set from the GitHub Actions environment, so forks publish with their own links -->
+    <PackageProjectUrl Condition="'$(GITHUB_REPOSITORY)' != ''">$(GITHUB_SERVER_URL)/$(GITHUB_REPOSITORY)</PackageProjectUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+</Project>

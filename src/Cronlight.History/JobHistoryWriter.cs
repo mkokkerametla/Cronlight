@@ -1,0 +1,163 @@
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Quartz;
+using Quartz.Impl.Matchers;
+
+namespace Cronlight.History;
+
+/// <summary>
+/// Attaches the history listener to the host's scheduler, writes queued records to the store and
+/// applies retention. Registered ahead of Quartz's hosted service, so it starts before the scheduler
+/// runs anything and stops only after the scheduler has finished its last job.
+/// </summary>
+internal sealed class JobHistoryWriter(
+    ISchedulerFactory schedulerFactory,
+    IJobHistoryStore store,
+    JobHistoryListener listener,
+    JobHistoryQueue queue,
+    IOptions<JobHistoryOptions> options,
+    ILogger<JobHistoryWriter> logger) : IHostedService
+{
+    private readonly CancellationTokenSource stopping = new();
+    private Task? writing;
+    private Task? cleaning;
+    private IScheduler? scheduler;
+    private volatile bool initialized;
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        scheduler = await schedulerFactory.GetScheduler(cancellationToken);
+        // GetJobListener(name) throws for unknown names in Quartz 3, so look through the list instead
+        if (scheduler.ListenerManager.GetJobListeners().All(l => l.Name != listener.Name))
+            scheduler.ListenerManager.AddJobListener(listener, GroupMatcher<JobKey>.AnyGroup());
+
+        writing = Task.Run(() => Write(stopping.Token), CancellationToken.None);
+        cleaning = Task.Run(() => Clean(stopping.Token), CancellationToken.None);
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        // The scheduler has already stopped (it is registered after us, so it stops first): drain what is left
+        queue.Complete();
+
+        // Storage never came up: there is nothing to drain into, so stop retrying instead of holding up shutdown
+        if (!initialized)
+            await stopping.CancelAsync();
+
+        try
+        {
+            if (writing != null)
+                await writing.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogWarning("Stopped before all execution history was written");
+        }
+        finally
+        {
+            await stopping.CancelAsync();
+            if (cleaning != null)
+                await cleaning.ContinueWith(_ => { }, TaskScheduler.Default);
+        }
+    }
+
+    private async Task Write(CancellationToken cancellationToken)
+    {
+        await InitializeStore(cancellationToken);
+        if (!initialized)
+        {
+            var lost = 0;
+            while (queue.Reader.TryRead(out _))
+                lost++;
+            if (lost > 0)
+                logger.LogWarning("Execution history storage was never available; {Count} records were not written", lost);
+            return;
+        }
+
+        await foreach (var (historyEvent, record) in queue.Reader.ReadAllAsync(CancellationToken.None))
+        {
+            try
+            {
+                if (historyEvent == HistoryEvent.Started)
+                    await store.RecordStarted(record, CancellationToken.None);
+                else
+                    await store.RecordFinished(record, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                // History must never take the app down; the record is lost but jobs keep running
+                logger.LogWarning(ex, "Could not write execution history for {Group}.{Job}", record.JobGroup, record.JobName);
+            }
+        }
+    }
+
+    private async Task InitializeStore(CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await store.Initialize(cancellationToken);
+                initialized = true;
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Keep queueing meanwhile; records beyond QueueCapacity are dropped
+                var delay = TimeSpan.FromSeconds(Math.Min(60, 5 * attempt));
+                logger.LogError(ex, "Could not initialize execution history storage; retrying in {Delay}", delay);
+                try
+                {
+                    await Task.Delay(delay, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    private async Task Clean(CancellationToken cancellationToken)
+    {
+        if (options.Value.Retention is not { } retention || scheduler == null)
+            return;
+
+        using var timer = new PeriodicTimer(options.Value.CleanupInterval);
+        do
+        {
+            try
+            {
+                var removed = await store.DeleteFiredBefore(scheduler.SchedulerName, DateTimeOffset.UtcNow - retention, cancellationToken);
+                if (removed > 0)
+                    logger.LogInformation("Removed {Count} execution history records older than {Retention}", removed, retention);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Execution history cleanup failed");
+            }
+        }
+        while (await WaitForNextTick(timer, cancellationToken));
+    }
+
+    private static async Task<bool> WaitForNextTick(PeriodicTimer timer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await timer.WaitForNextTickAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+}

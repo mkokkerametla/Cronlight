@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Cronlight.History</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>cronlight-quartz-scheduler-history</PackageId>
+    <Description>Execution history for Cronlight: records every Quartz.NET job run in your Quartz database (SQL Server, PostgreSQL, MySQL, SQLite) or in memory.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\Cronlight\Cronlight.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Single source for the table DDL: used for auto-creation and handed to DBAs as-is -->
+    <EmbeddedResource Include="Schema\*.sql" LogicalName="Cronlight.History.Schema.%(Filename).sql" />
+  </ItemGroup>
+
+</Project>

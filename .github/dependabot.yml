@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      quartz:
+        patterns: ["Quartz*"]
+      test-and-sample:
+        patterns: ["xunit*", "Microsoft.NET.Test.Sdk", "Npgsql", "MySqlConnector", "Microsoft.Data.*", "SQLitePCLRaw*"]
+
+  - package-ecosystem: npm
+    directory: /src/Cronlight.UI
+    schedule:
+      interval: weekly
+    groups:
+      ui:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

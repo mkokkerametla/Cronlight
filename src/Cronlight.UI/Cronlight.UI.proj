@@ -1,0 +1,19 @@
+<Project DefaultTargets="Build">
+  <!--
+    Builds the React UI into ../Cronlight/wwwroot. Invoked from Cronlight.csproj via the
+    MSBuild task, so MSBuild runs it once per build even when the library builds several target
+    frameworks in parallel. Incremental: skipped when no UI source changed.
+  -->
+  <PropertyGroup>
+    <UiOutDir>$(MSBuildThisFileDirectory)..\Cronlight\wwwroot\</UiOutDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <UiSource Include="src\**\*;public\**\*;index.html;package.json;package-lock.json;vite.config.ts;tsconfig*.json;components.json" />
+  </ItemGroup>
+
+  <Target Name="Build" Inputs="@(UiSource)" Outputs="$(UiOutDir)index.html">
+    <Exec Command="npm ci --no-audit --no-fund" Condition="!Exists('node_modules')" />
+    <Exec Command="npm run build" />
+  </Target>
+</Project>

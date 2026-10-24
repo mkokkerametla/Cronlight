@@ -1,0 +1,9 @@
+bin/
+obj/
+*.db
+*.db-*
+node_modules/
+artifacts/
+TestResults/
+# Built from src/Cronlight.UI at build time
+src/Cronlight/wwwroot/

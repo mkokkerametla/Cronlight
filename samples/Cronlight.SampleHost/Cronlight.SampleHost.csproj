@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Quartz.Extensions.Hosting" Version="3.13.1" />
+    <PackageReference Include="Quartz.Serialization.Json" Version="3.13.1" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.2" />
+    <!-- Patched native SQLite (Microsoft.Data.Sqlite 10.0.2 brings a vulnerable 2.1.11) -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cronlight\Cronlight.csproj" />
+    <ProjectReference Include="..\..\src\Cronlight.History\Cronlight.History.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="tables_sqlite.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

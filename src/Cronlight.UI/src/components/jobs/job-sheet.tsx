@@ -1,0 +1,419 @@
+import { useState, type FormEvent, type ReactNode } from 'react'
+import { History, Lock, Pause, Pencil, Play, PlayCircle, Trash2 } from 'lucide-react'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
+import { DataEditor } from '@/components/jobs/data-editor'
+import {
+  ExecutionStatusBadge,
+  StatusBadge,
+  TriggerStateBadge,
+} from '@/components/jobs/status-badge'
+import { TriggersEditor } from '@/components/jobs/triggers-editor'
+import { dataRows, draftsFromTriggers, draftsToRequest, rowsToData } from '@/lib/job-form'
+import type { DashboardActions } from '@/hooks/use-dashboard'
+import { useHistory } from '@/hooks/use-history'
+import { formatDateTime, formatDuration, formatRelative, isPaused, shortType } from '@/lib/format'
+import type { Job, JobType } from '@/types'
+
+interface Props {
+  job: Job | null
+  jobType: JobType | undefined
+  canManage: boolean
+  historyEnabled: boolean
+  actions: DashboardActions
+  onClose: () => void
+  onViewHistory: (group: string, name: string) => void
+}
+
+export function JobSheet({
+  job,
+  jobType,
+  canManage,
+  historyEnabled,
+  actions,
+  onClose,
+  onViewHistory,
+}: Props) {
+  const [editing, setEditing] = useState(false)
+
+  return (
+    <Sheet
+      open={job !== null}
+      onOpenChange={open => {
+        if (!open) {
+          setEditing(false)
+          onClose()
+        }
+      }}
+    >
+      <SheetContent className="w-full gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl">
+        {job && (
+          <>
+            <SheetHeader className="border-b">
+              <div className="flex items-center gap-2 pr-8">
+                <SheetTitle className="truncate">{job.name}</SheetTitle>
+                <StatusBadge job={job} />
+              </div>
+              <SheetDescription>
+                {job.group} ·{' '}
+                {job.loadable ? (job.displayName ?? shortType(job.jobType)) : 'type not loaded'}
+              </SheetDescription>
+              {canManage && job.loadable && !editing && (
+                <JobActions
+                  job={job}
+                  actions={actions}
+                  onEdit={() => setEditing(true)}
+                  onDeleted={onClose}
+                />
+              )}
+            </SheetHeader>
+            {editing ? (
+              <EditJobForm
+                key={`${job.group}.${job.name}`}
+                job={job}
+                jobType={jobType}
+                onCancel={() => setEditing(false)}
+                onSave={async request => {
+                  if (await actions.update(job, request)) setEditing(false)
+                }}
+              />
+            ) : (
+              <JobDetails job={job}>
+                {historyEnabled && (
+                  <RecentRuns
+                    key={`${job.group}.${job.name}`}
+                    group={job.group}
+                    name={job.name}
+                    onViewAll={() => onViewHistory(job.group, job.name)}
+                  />
+                )}
+              </JobDetails>
+            )}
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+function JobActions({
+  job,
+  actions,
+  onEdit,
+  onDeleted,
+}: {
+  job: Job
+  actions: DashboardActions
+  onEdit: () => void
+  onDeleted: () => void
+}) {
+  const paused = isPaused(job)
+  return (
+    <div className="flex flex-wrap gap-2 pt-2">
+      <Button size="sm" onClick={() => actions.run(job, 'trigger')}>
+        <Play /> Run now
+      </Button>
+      {paused ? (
+        <Button size="sm" variant="outline" onClick={() => actions.run(job, 'resume')}>
+          <PlayCircle /> Resume
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => actions.run(job, 'pause')}
+          disabled={job.triggers.length === 0}
+        >
+          <Pause /> Pause
+        </Button>
+      )}
+      <Button size="sm" variant="outline" onClick={onEdit}>
+        <Pencil /> Edit
+      </Button>
+      <AlertDialog>
+        <AlertDialogTrigger asChild>
+          <Button size="sm" variant="destructive" className="ml-auto">
+            <Trash2 /> Delete
+          </Button>
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {job.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The job {job.group}.{job.name} and all {job.triggers.length} of its triggers are
+              removed from the scheduler. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={async () => {
+                if (await actions.remove(job)) onDeleted()
+              }}
+            >
+              Delete job
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+function JobDetails({ job, children }: { job: Job; children?: ReactNode }) {
+  const data = Object.entries(job.data)
+
+  return (
+    <div className="flex-1 space-y-5 overflow-y-auto p-4">
+      {!job.loadable && (
+        <Alert variant="destructive">
+          <Lock />
+          <AlertTitle>Read-only in this dashboard</AlertTitle>
+          <AlertDescription>
+            <p>
+              This job&apos;s type cannot be loaded in this application. It most likely belongs to
+              another app that shares the scheduler.
+            </p>
+            <p className="font-mono text-xs">{job.loadError}</p>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+        <Field label="Type">
+          <span title={job.jobType ?? undefined}>{job.displayName ?? shortType(job.jobType)}</span>
+        </Field>
+        <Field label="Durable">{job.durable ? 'Yes' : 'No'}</Field>
+        {job.description && (
+          <div className="col-span-2">
+            <Field label="Description">{job.description}</Field>
+          </div>
+        )}
+      </dl>
+
+      {children}
+
+      <Separator />
+      <section className="space-y-2">
+        <h3 className="text-sm font-medium">Triggers ({job.triggers.length})</h3>
+        {job.triggers.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No triggers. This job only runs when triggered manually.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {job.triggers.map(t => (
+              <div key={`${t.group}.${t.name}`} className="space-y-2 rounded-lg border p-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="truncate font-medium">{t.name}</span>
+                  <TriggerStateBadge state={t.state} />
+                  <Badge variant="outline" className="ml-auto">
+                    {t.kind}
+                  </Badge>
+                </div>
+                {t.cronExpression && (
+                  <code className="block rounded bg-muted px-2 py-1 font-mono text-xs">
+                    {t.cronExpression}
+                  </code>
+                )}
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
+                  <Field label="Next fire">
+                    <FireTime iso={t.nextFireTimeUtc} empty="Not scheduled" />
+                  </Field>
+                  <Field label="Previous fire">
+                    <FireTime iso={t.previousFireTimeUtc} empty="Never" />
+                  </Field>
+                  {t.timeZone && <Field label="Time zone">{t.timeZone}</Field>}
+                </dl>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {data.length > 0 && (
+        <>
+          <Separator />
+          <section className="space-y-2">
+            <h3 className="text-sm font-medium">Job data</h3>
+            <dl className="divide-y rounded-lg border text-sm">
+              {data.map(([key, value]) => (
+                <div key={key} className="flex gap-4 px-3 py-2">
+                  <dt
+                    className="w-2/5 shrink-0 truncate font-mono text-xs text-muted-foreground"
+                    title={key}
+                  >
+                    {key}
+                  </dt>
+                  <dd className="min-w-0 break-words">{value || '-'}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        </>
+      )}
+    </div>
+  )
+}
+
+function EditJobForm({
+  job,
+  jobType,
+  onSave,
+  onCancel,
+}: {
+  job: Job
+  jobType: JobType | undefined
+  onSave: (request: {
+    description: string | null
+    data: Record<string, string>
+    triggers: ReturnType<typeof draftsToRequest>
+  }) => Promise<void>
+  onCancel: () => void
+}) {
+  const [description, setDescription] = useState(job.description ?? '')
+  const [data, setData] = useState(() => dataRows(jobType, job.data))
+  const [triggers, setTriggers] = useState(() => draftsFromTriggers(job.triggers))
+  const [saving, setSaving] = useState(false)
+  const otherTriggers = job.triggers.filter(t => t.kind !== 'Cron').length
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    await onSave({ description, data: rowsToData(data), triggers: draftsToRequest(triggers) })
+    setSaving(false)
+  }
+
+  return (
+    <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+      <div className="flex-1 space-y-5 overflow-y-auto p-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="edit-description">Description</Label>
+          <Input
+            id="edit-description"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+          />
+        </div>
+
+        <Separator />
+        <section className="space-y-2">
+          <h3 className="text-sm font-medium">Cron triggers</h3>
+          <TriggersEditor triggers={triggers} onChange={setTriggers} jobName={job.name} />
+          {otherTriggers > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {otherTriggers} non-cron trigger(s) are left unchanged.
+            </p>
+          )}
+        </section>
+
+        <Separator />
+        <section className="space-y-2">
+          <h3 className="text-sm font-medium">Job data</h3>
+          <DataEditor rows={data} onChange={setData} />
+        </section>
+      </div>
+
+      <SheetFooter className="flex-row justify-end border-t">
+        <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={saving}>
+          {saving ? 'Saving…' : 'Save changes'}
+        </Button>
+      </SheetFooter>
+    </form>
+  )
+}
+
+function RecentRuns({
+  group,
+  name,
+  onViewAll,
+}: {
+  group: string
+  name: string
+  onViewAll: () => void
+}) {
+  const { records, loaded, error } = useHistory({ status: 'all', job: { group, name } }, 5)
+
+  return (
+    <>
+      <Separator />
+      <section className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium">Recent runs</h3>
+          <Button variant="link" size="sm" className="h-auto p-0" onClick={onViewAll}>
+            <History /> All runs
+          </Button>
+        </div>
+        {error ? (
+          <p className="text-sm text-destructive">{error}</p>
+        ) : !loaded ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : records.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No runs recorded yet.</p>
+        ) : (
+          <ul className="divide-y rounded-lg border text-sm">
+            {records.map(r => (
+              <li key={r.id} className="space-y-1 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <ExecutionStatusBadge status={r.status} />
+                  <span title={formatDateTime(r.firedTimeUtc)}>
+                    {formatRelative(r.firedTimeUtc)}
+                  </span>
+                  <span className="ml-auto text-muted-foreground tabular-nums">
+                    {formatDuration(r.durationMs)}
+                  </span>
+                </div>
+                {r.error && (
+                  <p className="line-clamp-2 text-xs break-words text-destructive" title={r.error}>
+                    {r.error}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </>
+  )
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-0.5">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="truncate">{children}</dd>
+    </div>
+  )
+}
+
+function FireTime({ iso, empty }: { iso: string | null; empty: string }) {
+  if (!iso) return <span className="text-muted-foreground">{empty}</span>
+  return <span title={formatDateTime(iso)}>{formatRelative(iso)}</span>
+}

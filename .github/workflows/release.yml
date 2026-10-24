@@ -1,0 +1,80 @@
+name: Release
+
+# Push a tag like v1.2.0 (or v1.2.0-beta.1 for a prerelease) to publish to NuGet and GitHub Releases
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Read version from tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH[-prerelease]"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$([[ "$version" == *-* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  ci:
+    name: CI
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  publish:
+    name: Publish
+    needs: [version, ci]
+    runs-on: ubuntu-latest
+    # Configure required reviewers on this environment to approve each release
+    environment: nuget
+    permissions:
+      contents: write   # create the GitHub release
+      id-token: write   # NuGet trusted publishing (OIDC), no stored API key
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: packages
+          path: artifacts
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: NuGet login (trusted publishing)
+        id: nuget
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Push to NuGet
+        # .snupkg symbol packages next to each .nupkg are pushed automatically
+        run: >-
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key "${{ steps.nuget.outputs.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          flags=()
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" artifacts/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Cronlight $VERSION" \
+            --generate-notes --verify-tag "${flags[@]}"

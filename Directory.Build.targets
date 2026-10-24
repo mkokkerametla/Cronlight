@@ -1,0 +1,6 @@
+<Project>
+  <!-- Here rather than in Directory.Build.props: IsPackable is only known after the project file -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+</Project>

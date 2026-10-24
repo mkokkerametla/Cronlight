@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Cronlight.SampleHost/Cronlight.SampleHost.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Cronlight.History/Cronlight.History.csproj" />
+    <Project Path="src/Cronlight/Cronlight.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Cronlight.Tests/Cronlight.Tests.csproj" />
+  </Folder>
+</Solution>

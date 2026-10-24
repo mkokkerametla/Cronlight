@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Cronlight</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>cronlight-quartz-scheduler</PackageId>
+    <Description>Cronlight: an embeddable dashboard and API for Quartz.NET. List, create, edit, pause, trigger and monitor jobs from a UI served by your own ASP.NET Core app.</Description>
+    <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- Only the core Quartz API: the host owns scheduler setup, store and hosting -->
+    <PackageReference Include="Quartz" Version="3.13.1" />
+    <!-- Same package that provides AddQuartz(); used to read the host's store settings -->
+    <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.13.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shares QuartzDataSource (connections to the Quartz database) with the history package -->
+    <InternalsVisibleTo Include="Cronlight.History" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.2" />
+  </ItemGroup>
+
+  <!--
+    The UI (../Cronlight.UI) is built into wwwroot and embedded in the assembly.
+    Pass -p:SkipDashboardUi=true to embed an existing wwwroot without running npm.
+  -->
+  <!-- Static copy for steps that skip the build target below, such as packing without building -->
+  <ItemGroup Condition="Exists('wwwroot\index.html')">
+    <EmbeddedResource Include="wwwroot\**\*" />
+  </ItemGroup>
+
+  <Target Name="BuildDashboardUi" BeforeTargets="BeforeBuild">
+    <MSBuild Projects="..\Cronlight.UI\Cronlight.UI.proj"
+             Targets="Build"
+             RemoveProperties="TargetFramework;RuntimeIdentifier"
+             Condition="'$(SkipDashboardUi)' != 'true'" />
+    <Error Condition="!Exists('wwwroot\index.html')"
+           Text="Dashboard UI is missing: build it with npm (see src/Cronlight.UI) or drop SkipDashboardUi." />
+    <!-- Items are added here, not statically, so files produced by the UI build are picked up -->
+    <ItemGroup>
+      <EmbeddedResource Remove="wwwroot\**" />
+      <EmbeddedResource Include="wwwroot\**\*" />
+    </ItemGroup>
+  </Target>
+
+</Project>
