@@ -15,9 +15,9 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <!-- Only the core Quartz API: the host owns scheduler setup, store and hosting -->
-    <PackageReference Include="Quartz" Version="3.13.1" />
+    <PackageReference Include="Quartz" Version="4.6.0" />
     <!-- Same package that provides AddQuartz(); used to read the host's store settings -->
-    <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.13.1" />
+    <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="4.6.0" />
   </ItemGroup>
 
   <ItemGroup>
