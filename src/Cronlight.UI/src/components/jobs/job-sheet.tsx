@@ -331,7 +331,6 @@ function EditJobForm({
           <TriggersEditor
             triggers={triggers}
             onChange={setTriggers}
-            jobName={job.name}
             showScheduleAssistant={showScheduleAssistant}
           />
           {otherTriggers > 0 && (

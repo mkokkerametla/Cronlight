@@ -12,6 +12,14 @@ work=$(mktemp -d)
 port=5321
 trap 'pkill -f "^dotnet bin/Release/net[0-9.]*/SmokeApp.dll" || true' EXIT
 
+# Reads the whole response before matching: `curl | grep -q` under pipefail fails when grep exits
+# early and curl dies with SIGPIPE on a larger response
+contains() {
+  local body
+  body=$(curl -sf "$1") || return 1
+  [[ $body == *"$2"* ]]
+}
+
 for tfm in net8.0 net10.0; do
   app="$work/$tfm"
   mkdir -p "$app"
@@ -65,15 +73,15 @@ EOF
     sleep 1
   done
 
-  curl -sf "$url/" | grep -q '<div id="root">' || { cat app.log; echo "::error::$tfm: dashboard not served"; exit 1; }
+  contains "$url/" '<div id="root">' || { cat app.log; echo "::error::$tfm: dashboard not served"; exit 1; }
   curl -sf "$url/favicon.svg" -o /dev/null || { echo "::error::$tfm: static asset not served"; exit 1; }
-  curl -sf "$url/api/jobs" | grep -q '"name":"smoke"' || { echo "::error::$tfm: job not listed by the API"; exit 1; }
+  contains "$url/api/jobs" '"name":"smoke"' || { echo "::error::$tfm: job not listed by the API"; exit 1; }
   curl -sf -X POST "$url/api/jobs/checks/smoke/trigger" -o /dev/null || { echo "::error::$tfm: trigger failed"; exit 1; }
   for _ in $(seq 20); do
-    curl -sf "$url/api/history?status=Succeeded" | grep -q '"jobName":"smoke"' && break
+    contains "$url/api/history?status=Succeeded" '"jobName":"smoke"' && break
     sleep 0.5
   done
-  curl -sf "$url/api/history?status=Succeeded" | grep -q '"jobName":"smoke"' || { echo "::error::$tfm: run not in history"; exit 1; }
+  contains "$url/api/history?status=Succeeded" '"jobName":"smoke"' || { echo "::error::$tfm: run not in history"; exit 1; }
 
   kill $pid
   wait $pid 2>/dev/null || true

@@ -23,7 +23,10 @@ internal sealed record SqlDialect(string Name, string SchemaResource, bool UsesT
     public string SelectTop(int limit, string columns, string rest) =>
         UsesTop ? $"SELECT TOP ({limit}) {columns} {rest}" : $"SELECT {columns} {rest} LIMIT {limit}";
 
-    /// <summary>The CREATE TABLE/INDEX statements for this dialect, split into single statements.</summary>
+    /// <summary>
+    /// The CREATE TABLE/INDEX statements for this dialect, split into single statements. The table name may
+    /// be schema-qualified; index names are built from the part after the schema.
+    /// </summary>
     public IEnumerable<string> SchemaStatements(string tableName)
     {
         using var stream = typeof(SqlDialect).Assembly.GetManifestResourceStream($"Cronlight.History.Schema.{SchemaResource}.sql")
@@ -31,7 +34,11 @@ internal sealed record SqlDialect(string Name, string SchemaResource, bool UsesT
         using var reader = new StreamReader(stream);
         var script = string.Join('\n', reader.ReadToEnd().Split('\n').Where(line => !line.TrimStart().StartsWith("--")));
 
-        return script.Replace("{TABLE}", tableName)
+        var dot = tableName.LastIndexOf('.');
+        return script
+            .Replace("{TABLE}", tableName)
+            .Replace("{NAME}", tableName[(dot + 1)..])
+            .Replace("{SCHEMA}", tableName[..(dot + 1)])
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 }

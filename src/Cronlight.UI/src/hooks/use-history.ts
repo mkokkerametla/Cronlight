@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@/api'
 import type { ExecutionRecord, HistoryFilter, HistoryPage } from '@/types'
 
@@ -27,7 +27,13 @@ export function useHistory(filter: HistoryFilter, limit = PAGE_SIZE) {
   const group = job?.group
   const name = job?.name
 
+  // Every load takes a new generation and applies its response only if no newer load started meanwhile,
+  // so a slow response for an old filter, or a poll racing "load more", cannot overwrite newer state
+  const generation = useRef(0)
+  const loadingMore = useRef(false)
+
   const loadFirstPage = useCallback(async () => {
+    const current = ++generation.current
     try {
       const page = await api<HistoryPage>(
         query(
@@ -36,14 +42,15 @@ export function useHistory(filter: HistoryFilter, limit = PAGE_SIZE) {
           limit
         )
       )
+      if (current !== generation.current) return
       setRecords(page.records)
       setNextBefore(page.nextBefore)
       setPages(1)
       setError(null)
     } catch (err) {
-      setError((err as Error).message)
+      if (current === generation.current) setError((err as Error).message)
     } finally {
-      setLoaded(true)
+      if (current === generation.current) setLoaded(true)
     }
   }, [status, group, name, limit])
 
@@ -54,19 +61,26 @@ export function useHistory(filter: HistoryFilter, limit = PAGE_SIZE) {
   // Only auto-refresh while just the first page is shown, so "load more" results don't jump around
   useEffect(() => {
     if (pages > 1) return
-    const interval = setInterval(loadFirstPage, POLL_MS)
+    const interval = setInterval(() => {
+      if (!loadingMore.current) void loadFirstPage()
+    }, POLL_MS)
     return () => clearInterval(interval)
   }, [loadFirstPage, pages])
 
   const loadMore = useCallback(async () => {
-    if (nextBefore === null) return
+    if (nextBefore === null || loadingMore.current) return
+    const current = ++generation.current
+    loadingMore.current = true
     try {
       const page = await api<HistoryPage>(query(filter, nextBefore, limit))
+      if (current !== generation.current) return
       setRecords(prev => [...prev, ...page.records])
       setNextBefore(page.nextBefore)
       setPages(p => p + 1)
     } catch (err) {
-      setError((err as Error).message)
+      if (current === generation.current) setError((err as Error).message)
+    } finally {
+      loadingMore.current = false
     }
   }, [filter, nextBefore, limit])
 

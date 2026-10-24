@@ -8,18 +8,17 @@ import { emptyTrigger, type TriggerDraft } from '@/lib/job-form'
 interface Props {
   triggers: TriggerDraft[]
   onChange: (triggers: TriggerDraft[]) => void
-  jobName: string
   showScheduleAssistant: boolean
 }
 
-export function TriggersEditor({ triggers, onChange, jobName, showScheduleAssistant }: Props) {
+export function TriggersEditor({ triggers, onChange, showScheduleAssistant }: Props) {
   const update = (index: number, patch: Partial<TriggerDraft>) =>
     onChange(triggers.map((t, i) => (i === index ? { ...t, ...patch } : t)))
 
   return (
     <div className="space-y-3">
       {triggers.map((trigger, index) => (
-        <div key={index} className="space-y-1.5 rounded-md border p-2.5">
+        <div key={trigger.id} className="space-y-1.5 rounded-md border p-2.5">
           <div className="flex flex-wrap gap-2">
             <Input
               className="min-w-0 flex-[2_1_14rem] font-mono"
@@ -39,7 +38,7 @@ export function TriggersEditor({ triggers, onChange, jobName, showScheduleAssist
               className="min-w-0 flex-[1_1_9rem]"
               value={trigger.name}
               onChange={e => update(index, { name: e.target.value })}
-              placeholder={`${jobName || 'job'}-trigger-${index + 1}`}
+              placeholder="Name (optional)"
               aria-label="Trigger name"
             />
             <Button

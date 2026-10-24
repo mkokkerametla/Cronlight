@@ -34,17 +34,28 @@ export const rowsToData = (rows: DataRow[]): Record<string, string> =>
   )
 
 export interface TriggerDraft {
+  /** Client-only row key, so per-row state (cron preview, schedule assistant) stays with its trigger */
+  id: number
   name: string
   cronExpression: string
   timeZone: string
 }
 
-export const emptyTrigger = (): TriggerDraft => ({ name: '', cronExpression: '', timeZone: '' })
+let lastDraftId = 0
+const nextDraftId = () => ++lastDraftId
+
+export const emptyTrigger = (): TriggerDraft => ({
+  id: nextDraftId(),
+  name: '',
+  cronExpression: '',
+  timeZone: '',
+})
 
 export const draftsFromTriggers = (triggers: Trigger[]): TriggerDraft[] => {
   const cron = triggers
     .filter(t => t.kind === 'Cron')
     .map(t => ({
+      id: nextDraftId(),
       name: t.name,
       cronExpression: t.cronExpression ?? '',
       timeZone: t.timeZone === 'UTC' ? '' : (t.timeZone ?? ''),

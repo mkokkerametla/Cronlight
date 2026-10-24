@@ -24,6 +24,7 @@ internal sealed class JobHistoryWriter(
     private Task? cleaning;
     private IScheduler? scheduler;
     private volatile bool initialized;
+    private readonly TaskCompletionSource storeReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -100,6 +101,7 @@ internal sealed class JobHistoryWriter(
             {
                 await store.Initialize(cancellationToken);
                 initialized = true;
+                storeReady.TrySetResult();
                 return;
             }
             catch (OperationCanceledException)
@@ -127,6 +129,16 @@ internal sealed class JobHistoryWriter(
     {
         if (options.Value.Retention is not { } retention || scheduler == null)
             return;
+
+        // On a new database the table only exists once initialization has created it
+        try
+        {
+            await storeReady.Task.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
 
         using var timer = new PeriodicTimer(options.Value.CleanupInterval);
         do

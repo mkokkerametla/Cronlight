@@ -24,7 +24,9 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore
         lock (gate)
         {
             var node = records.First;
-            while (node != null && !(node.Value.FireInstanceId == record.FireInstanceId && node.Value.SchedulerName == record.SchedulerName))
+            while (node != null && !(node.Value.FireInstanceId == record.FireInstanceId
+                                     && node.Value.RefireCount == record.RefireCount
+                                     && node.Value.SchedulerName == record.SchedulerName))
                 node = node.Next;
 
             if (node == null)

@@ -37,6 +37,15 @@ public class FailingJob : IJob
         throw new InvalidOperationException("Boom: invoice 42 could not be sent");
 }
 
+/// <summary>Fails its first attempt asking Quartz to run it again at once, then succeeds.</summary>
+public class RefireOnceJob : IJob
+{
+    public Task Execute(IJobExecutionContext context) =>
+        context.RefireCount == 0
+            ? throw new JobExecutionException("first attempt failed") { RefireImmediately = true }
+            : Task.CompletedTask;
+}
+
 [CronlightJob("Export")]
 [JobParameter("format", Required = true, Choices = new[] { "csv", "json" })]
 public class ExportJob : IJob

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -213,12 +214,14 @@ internal static class DashboardApi
                 return Results.BadRequest(invalid);
 
             var key = new JobKey(request.Name, string.IsNullOrWhiteSpace(request.Group) ? "DEFAULT" : request.Group);
-            if (!TryBuildTriggers(key, request.Triggers ?? [], out var triggers, out var error))
+            if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
                 return Results.BadRequest(error);
 
             var scheduler = await factory.GetScheduler();
             if (await scheduler.CheckExists(key))
                 return Results.Conflict($"Job {key} already exists");
+            if (await FindTriggerConflict(scheduler, triggers, new HashSet<TriggerKey>()) is { } conflict)
+                return Results.Conflict(conflict);
 
             var job = JobBuilder.Create(type)
                 .WithIdentity(key)
@@ -227,9 +230,8 @@ internal static class DashboardApi
                 .StoreDurably()
                 .Build();
 
-            await scheduler.AddJob(job, replace: false);
-            foreach (var trigger in triggers)
-                await scheduler.ScheduleJob(trigger);
+            // One call stores the job and its triggers together, so a failure leaves nothing behind
+            await scheduler.ScheduleJob(job, triggers, replace: false);
 
             return Results.Created($"jobs/{key.Group}/{key.Name}", new { key.Name, key.Group });
         });
@@ -249,17 +251,19 @@ internal static class DashboardApi
                 return Results.BadRequest(invalid);
 
             var requested = new List<ITrigger>();
-            if (request.Triggers != null && !TryBuildTriggers(key, request.Triggers, out requested, out var error))
-                return Results.BadRequest(error);
+            if (request.Triggers != null)
+            {
+                var current = await scheduler.GetTriggersOfJob(key);
+                if (!TryBuildTriggers(key, request.Triggers, current.Select(t => t.Key).ToList(), out requested, out var error))
+                    return Results.BadRequest(error);
+                var ownCron = current.OfType<ICronTrigger>().Select(t => t.Key).ToHashSet();
+                if (await FindTriggerConflict(scheduler, requested, ownCron) is { } conflict)
+                    return Results.Conflict(conflict);
+            }
 
             if (request.Data != null || request.Description != null)
             {
-                var data = request.Data == null ? existing.JobDataMap : new JobDataMap();
-                foreach (var (k, v) in request.Data ?? new())
-                {
-                    // The UI only ever sees masked secrets; sending the mask back means "unchanged"
-                    data[k] = v == Mask && existing.JobDataMap.ContainsKey(k) ? existing.JobDataMap[k] : v;
-                }
+                var data = request.Data == null ? existing.JobDataMap : MergeJobData(existing.JobDataMap, request.Data);
 
                 var updated = existing.GetJobBuilder()
                     .WithDescription(request.Description ?? existing.Description)
@@ -321,11 +325,16 @@ internal static class DashboardApi
 
     private static async Task ReplaceCronTriggers(IScheduler scheduler, JobKey key, List<ITrigger> requested)
     {
-        var current = (await scheduler.GetTriggersOfJob(key)).OfType<ICronTrigger>().ToDictionary(t => t.Key);
+        var all = await scheduler.GetTriggersOfJob(key);
+        var current = all.OfType<ICronTrigger>().ToDictionary(t => t.Key);
+        var stale = current.Keys.Where(k => requested.All(r => !r.Key.Equals(k))).ToList();
 
-        foreach (var stale in current.Keys.Where(k => requested.All(r => !r.Key.Equals(k))))
-            await scheduler.UnscheduleJob(stale);
+        // Quartz deletes a non-durable job (the default for jobs the host registers) together with its
+        // last trigger. When the edit leaves no triggers, make the job durable so it stays for manual runs.
+        if (requested.Count == 0 && stale.Count == all.Count && await scheduler.GetJobDetail(key) is { Durable: false } job)
+            await scheduler.AddJob(job.GetJobBuilder().StoreDurably().Build(), replace: true);
 
+        // Add and update first, remove last: the job keeps a trigger throughout
         foreach (var trigger in requested.Cast<ICronTrigger>())
         {
             if (!current.TryGetValue(trigger.Key, out var old))
@@ -342,15 +351,79 @@ internal static class DashboardApi
             if (wasPaused)
                 await scheduler.PauseTrigger(trigger.Key);
         }
+
+        foreach (var staleKey in stale)
+            await scheduler.UnscheduleJob(staleKey);
     }
 
-    private static bool TryBuildTriggers(JobKey key, List<TriggerRequest> requests, out List<ITrigger> triggers, out string? error)
+    /// <summary>
+    /// Trigger keys are unique across all jobs, so a name another job's trigger already uses would make
+    /// the save fail halfway. Checked up front instead.
+    /// </summary>
+    private static async Task<string?> FindTriggerConflict(IScheduler scheduler, List<ITrigger> triggers, IReadOnlySet<TriggerKey> own)
+    {
+        foreach (var trigger in triggers.Where(t => !own.Contains(t.Key)))
+        {
+            if (await scheduler.CheckExists(trigger.Key))
+                return $"Trigger name '{trigger.Key.Name}' is already in use in group '{trigger.Key.Group}'";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The edit form sends back every value as the text it was shown (ToString(), secrets masked).
+    /// Values that come back unchanged keep their original object, and changed values keep the
+    /// original primitive type when they convert to it, so non-string job data survives an edit.
+    /// </summary>
+    private static JobDataMap MergeJobData(JobDataMap existing, Dictionary<string, string> requested)
+    {
+        var data = new JobDataMap();
+        foreach (var (k, v) in requested)
+        {
+            var known = existing.TryGetValue(k, out var old);
+            if (known && (v == Mask || (old is not (null or string) && v == old.ToString())))
+                data[k] = old;
+            else if (known && old is not (null or string))
+                data[k] = TryConvert(v, old.GetType()) ?? v;
+            else
+                data[k] = v;
+        }
+        return data;
+    }
+
+    private static object? TryConvert(string value, Type type)
+    {
+        if (type.IsEnum)
+            return Enum.TryParse(type, value, ignoreCase: true, out var parsed) ? parsed : null;
+        if (!typeof(IConvertible).IsAssignableFrom(type))
+            return null;
+        try
+        {
+            // Current culture, matching the ToString() the value was shown with
+            return Convert.ChangeType(value, type, CultureInfo.CurrentCulture);
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
+        {
+            return null;
+        }
+    }
+
+    /// <param name="existing">
+    /// The job's current triggers. A requested name matching one of them keeps that trigger's group
+    /// (host-registered triggers are often in DEFAULT rather than the job's group), and unnamed
+    /// triggers never take one of their names.
+    /// </param>
+    private static bool TryBuildTriggers(JobKey key, List<TriggerRequest> requests, IReadOnlyCollection<TriggerKey> existing,
+        out List<ITrigger> triggers, out string? error)
     {
         triggers = new();
         error = null;
-        for (var i = 0; i < requests.Count; i++)
+        var taken = requests.Where(r => !string.IsNullOrWhiteSpace(r.Name)).Select(r => r.Name!.Trim())
+            .Concat(existing.Select(k => k.Name))
+            .ToHashSet();
+        var next = 1;
+        foreach (var r in requests)
         {
-            var r = requests[i];
             if (string.IsNullOrWhiteSpace(r.CronExpression) || !CronExpression.IsValidExpression(r.CronExpression))
             {
                 error = $"Invalid cron expression '{r.CronExpression}'";
@@ -362,15 +435,29 @@ internal static class DashboardApi
                 return false;
             }
 
-            var name = string.IsNullOrWhiteSpace(r.Name) ? $"{key.Name}-trigger-{i + 1}" : r.Name.Trim();
+            if (new CronExpression(r.CronExpression.Trim()) { TimeZone = tz }.GetNextValidTimeAfter(DateTimeOffset.UtcNow) == null)
+            {
+                error = $"Cron expression '{r.CronExpression}' never fires again";
+                return false;
+            }
+
+            string name;
+            if (!string.IsNullOrWhiteSpace(r.Name))
+                name = r.Name.Trim();
+            else
+            {
+                do name = $"{key.Name}-trigger-{next++}";
+                while (!taken.Add(name));
+            }
             if (triggers.Any(t => t.Key.Name == name))
             {
                 error = $"Duplicate trigger name '{name}'";
                 return false;
             }
 
+            var group = existing.FirstOrDefault(k => k.Name == name)?.Group ?? key.Group;
             triggers.Add(TriggerBuilder.Create()
-                .WithIdentity(name, key.Group)
+                .WithIdentity(name, group)
                 .ForJob(key)
                 .WithCronSchedule(r.CronExpression.Trim(), c => c.InTimeZone(tz))
                 .Build());

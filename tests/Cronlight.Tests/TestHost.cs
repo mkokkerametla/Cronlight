@@ -38,7 +38,9 @@ public sealed class TestHost : IAsyncDisposable
         string environment = "Development",
         Action<CronlightOptions>? configure = null,
         TestDatabase? database = null,
-        Action<JobHistoryOptions>? history = null)
+        Action<JobHistoryOptions>? history = null,
+        bool useProperties = true,
+        Action<IServiceCollection>? services = null)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
         var schedulerName = $"test-{id}";
@@ -57,12 +59,14 @@ public sealed class TestHost : IAsyncDisposable
             q.SchedulerName = schedulerName;
             q.UsePersistentStore(store =>
             {
-                store.UseProperties = true;
+                // Off lets job data hold non-string values, as many host apps do
+                store.UseProperties = useProperties;
                 database.UseFor(store, $"ds-{id}");
                 store.UseNewtonsoftJsonSerializer();
             });
         });
         builder.Services.AddQuartzHostedService();
+        services?.Invoke(builder.Services);
         if (history != null)
             builder.Services.AddCronlightHistory(history);
 

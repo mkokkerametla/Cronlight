@@ -44,6 +44,20 @@ internal static class HistoryScenarios
         Assert.True(scheduler.GetProperty("historyEnabled").GetBoolean());
     }
 
+    public static async Task RecordsEachRefireAttempt(TestHost host)
+    {
+        var client = host.Client();
+        await Create(client, typeof(RefireOnceJob), "retry");
+        await client.PostAsync("api/jobs/DEFAULT/retry/trigger", null);
+
+        var records = await WaitForHistory(client, "?group=DEFAULT&name=retry", r => r.Count(x => x.GetProperty("status").GetString() != "Running") >= 2);
+
+        // Newest first: the second attempt succeeded, the first one failed
+        Assert.Equal(2, records.Count);
+        Assert.Equal(("Succeeded", 1), (records[0].GetProperty("status").GetString(), records[0].GetProperty("refireCount").GetInt32()));
+        Assert.Equal(("Failed", 0), (records[1].GetProperty("status").GetString(), records[1].GetProperty("refireCount").GetInt32()));
+    }
+
     public static async Task RecordsRunningThenCompleted(TestHost host)
     {
         var client = host.Client();
@@ -238,6 +252,50 @@ public class HistoryTests
     }
 
     [Fact]
+    public async Task Sqlite_records_each_refire_attempt()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        await HistoryScenarios.RecordsEachRefireAttempt(host);
+    }
+
+    [Fact]
+    public async Task In_memory_records_each_refire_attempt()
+    {
+        await using var host = await TestHost.Start(history: InMemory);
+        await HistoryScenarios.RecordsEachRefireAttempt(host);
+    }
+
+    [Fact]
+    public async Task Sqlite_history_table_can_be_schema_qualified()
+    {
+        await using var host = await TestHost.Start(history: o =>
+        {
+            Database(o);
+            o.TableName = "main.QUALIFIED_HISTORY";
+        });
+        await HistoryScenarios.RecordsSuccessAndFailure(host);
+        Assert.Equal(4L, await host.Database.Scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'QUALIFIED_HISTORY' AND name LIKE 'IDX%'"));
+    }
+
+    [Fact]
+    public async Task Retention_cleanup_waits_until_the_store_is_ready()
+    {
+        var store = new SlowStartingStore();
+        await using var host = await TestHost.Start(
+            history: o => o.Retention = TimeSpan.FromDays(1),
+            services: s => s.AddSingleton<IJobHistoryStore>(store));
+
+        // Cleanup runs at startup; it must not touch the store before Initialize has finished
+        await Task.Delay(500);
+        Assert.Equal(0, store.Deletes);
+
+        store.Ready.SetResult();
+        await store.FirstDelete.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(store.DeletedBeforeReady);
+    }
+
+    [Fact]
     public async Task Unknown_status_filter_is_rejected()
     {
         await using var host = await TestHost.Start(history: Database);
@@ -364,6 +422,67 @@ public class DatabaseTests
 
     [SkippableTheory]
     [MemberData(nameof(Databases))]
+    public async Task History_records_each_refire_attempt(string name)
+    {
+        await using var host = await Start(name);
+        await HistoryScenarios.RecordsEachRefireAttempt(host);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task History_table_can_be_schema_qualified(string name)
+    {
+        var database = Require(name);
+        var schema = (string)(await database.Scalar(name switch
+        {
+            "PostgreSQL" => "SELECT current_schema()",
+            "SQL Server" => "SELECT SCHEMA_NAME()",
+            _ => "SELECT DATABASE()"
+        }))!;
+        var tableName = $"H_{Guid.NewGuid().ToString("N")[..8]}";
+        var table = $"{schema}.{tableName}";
+        try
+        {
+            await using var host = await TestHost.Start(database: database, history: o =>
+            {
+                o.Storage = JobHistoryStorage.Database;
+                o.TableName = table;
+            });
+            await HistoryScenarios.RecordsSuccessAndFailure(host);
+
+            // A failed CREATE INDEX would be masked: the retry finds the table and carries on without indexes
+            var indexes = await database.Scalar(name switch
+            {
+                "PostgreSQL" => $"SELECT COUNT(*) FROM pg_indexes WHERE schemaname = '{schema}' AND tablename = '{tableName.ToLowerInvariant()}' AND indexname LIKE 'idx%'",
+                "SQL Server" => $"SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID('{table}') AND name LIKE 'IDX%'",
+                _ => $"SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{tableName}' AND INDEX_NAME LIKE 'IDX%'"
+            });
+            Assert.Equal(4, Convert.ToInt32(indexes));
+        }
+        finally
+        {
+            await database.Execute($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Editing_triggers_never_deletes_a_job_registered_by_the_host(string name)
+    {
+        await using var host = await Start(name);
+        await EditScenarios.HostRegisteredJobSurvivesTriggerEdits(host);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Create_stores_nothing_when_a_trigger_cannot_be_scheduled(string name)
+    {
+        await using var host = await Start(name);
+        await EditScenarios.CreateStoresNothingWhenATriggerCannotBeScheduled(host);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
     public async Task Dashboard_create_edit_pause_delete(string name)
     {
         await using var host = await Start(name);
@@ -394,4 +513,32 @@ public class DatabaseTests
         Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync("api/jobs/DEFAULT/inv")).StatusCode);
         Assert.False(await scheduler.CheckExists(new JobKey("inv")));
     }
+}
+
+/// <summary>A custom store whose Initialize waits for the test, to check nothing uses it before then.</summary>
+internal sealed class SlowStartingStore : IJobHistoryStore
+{
+    public TaskCompletionSource Ready { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource FirstDelete { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public int Deletes;
+    public bool DeletedBeforeReady;
+
+    public Task Initialize(CancellationToken cancellationToken) => Ready.Task.WaitAsync(cancellationToken);
+
+    public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
+    {
+        DeletedBeforeReady |= !Ready.Task.IsCompleted;
+        Interlocked.Increment(ref Deletes);
+        FirstDelete.TrySetResult();
+        return Task.FromResult(0);
+    }
+
+    public Task RecordStarted(JobExecutionRecord record, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task RecordFinished(JobExecutionRecord record, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<JobExecutionRecord>>([]);
+
+    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
+        Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
 }

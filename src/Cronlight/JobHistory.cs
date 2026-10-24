@@ -57,7 +57,11 @@ public interface IJobHistoryStore
 
     Task RecordStarted(JobExecutionRecord record, CancellationToken cancellationToken);
 
-    /// <summary>Completes a record started earlier, or inserts it when the start was never recorded.</summary>
+    /// <summary>
+    /// Completes the record started earlier for the same attempt, or inserts it when the start was never
+    /// recorded. An attempt is identified by <see cref="JobExecutionRecord.FireInstanceId"/> together with
+    /// <see cref="JobExecutionRecord.RefireCount"/>: a job refired immediately reuses its fire instance id.
+    /// </summary>
     Task RecordFinished(JobExecutionRecord record, CancellationToken cancellationToken);
 
     /// <summary>Newest first.</summary>

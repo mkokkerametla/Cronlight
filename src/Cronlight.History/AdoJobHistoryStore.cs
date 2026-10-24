@@ -34,12 +34,17 @@ internal sealed class AdoJobHistoryStore(
                 $"History table {tableName} does not exist and CreateTable is off. Create it with the {dialect.Name} script in the package's Schema folder.");
 
         logger.LogInformation("Creating Cronlight history table {Table} ({Dialect})", tableName, dialect.Name);
+        // One transaction where DDL is transactional (all but MySQL): a failing statement must not leave a
+        // table without its indexes, which the existence check above would accept on every later start
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         foreach (var statement in dialect.SchemaStatements(tableName))
         {
             await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
             command.CommandText = statement;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task RecordStarted(JobExecutionRecord record, CancellationToken cancellationToken)
@@ -54,7 +59,7 @@ internal sealed class AdoJobHistoryStore(
         await using var command = connection.CreateCommand();
         command.CommandText =
             $"UPDATE {tableName} SET FINISHED_TIME = {P("finished")}, DURATION_MS = {P("duration")}, STATUS = {P("status")}, " +
-            $"ERROR = {P("error")}, REFIRE_COUNT = {P("refire")} WHERE SCHED_NAME = {P("sched")} AND ENTRY_ID = {P("entry")}";
+            $"ERROR = {P("error")} WHERE SCHED_NAME = {P("sched")} AND ENTRY_ID = {P("entry")} AND REFIRE_COUNT = {P("refire")}";
         Add(command, "finished", record.FinishedTimeUtc?.UtcTicks);
         Add(command, "duration", record.DurationMs);
         Add(command, "status", record.Status.ToString());

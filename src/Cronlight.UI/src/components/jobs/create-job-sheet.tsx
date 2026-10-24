@@ -161,7 +161,6 @@ function CreateJobForm({
           <TriggersEditor
             triggers={triggers}
             onChange={setTriggers}
-            jobName={name}
             showScheduleAssistant={showScheduleAssistant}
           />
         </section>
