@@ -94,6 +94,7 @@ internal static class HistoryScenarios
         var store = host.Services.GetRequiredService<IJobHistoryStore>();
         var old = DateTimeOffset.UtcNow.AddDays(-30);
         var otherScheduler = $"{host.SchedulerName}-other";
+        await WaitForStore(store, host.SchedulerName);
 
         await store.RecordFinished(Record(host.SchedulerName, "old", old), CancellationToken.None);
         await store.RecordFinished(Record(host.SchedulerName, "new", DateTimeOffset.UtcNow), CancellationToken.None);
@@ -131,6 +132,24 @@ internal static class HistoryScenarios
         (await client.GetFromJsonAsync<JsonElement>($"api/history{query}")).GetProperty("records").EnumerateArray().ToList();
 
     /// <summary>History is written in the background, so poll until it shows what the test expects.</summary>
+    // The writer creates the history table in the background after startup; this test uses the store directly
+    private static async Task WaitForStore(IJobHistoryStore store, string schedulerName)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            try
+            {
+                await store.Query(schedulerName, new JobHistoryQuery(), CancellationToken.None);
+                return;
+            }
+            catch (Exception) when (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(100);
+            }
+        }
+    }
+
     public static async Task<List<JsonElement>> WaitForHistory(HttpClient client, string query, Func<List<JsonElement>, bool> done)
     {
         var deadline = DateTime.UtcNow.AddSeconds(15);
