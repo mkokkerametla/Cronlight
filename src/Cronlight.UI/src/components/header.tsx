@@ -1,4 +1,5 @@
-import { CalendarClock, Info } from 'lucide-react'
+import { Info } from 'lucide-react'
+import logo from '@/assets/logo.svg'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,9 +25,7 @@ export function Header({ scheduler }: { scheduler: SchedulerInfo | null }) {
   return (
     <header className="flex flex-wrap items-center gap-3">
       <div className="flex min-w-0 items-center gap-2.5">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <CalendarClock className="size-5" />
-        </div>
+        <img src={logo} alt="Cronlight" className="size-9 shrink-0" />
         <div className="min-w-0">
           <h1 className="truncate text-lg leading-tight font-semibold">
             {scheduler?.schedulerName ?? 'Quartz'}

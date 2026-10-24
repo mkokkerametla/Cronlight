@@ -12,6 +12,7 @@
     <Copyright>Copyright (c) Cronlight contributors</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <PackageTags>quartz;quartz.net;scheduler;jobs;cron;dashboard;aspnetcore;background-jobs</PackageTags>
     <!-- Set from the GitHub Actions environment, so forks publish with their own links -->
     <PackageProjectUrl Condition="'$(GITHUB_REPOSITORY)' != ''">$(GITHUB_SERVER_URL)/$(GITHUB_REPOSITORY)</PackageProjectUrl>

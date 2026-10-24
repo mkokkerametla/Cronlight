@@ -26,6 +26,7 @@ check_package() {
     grep -qx "lib/$tfm/[^/]*\.dll" <<<"$listing" || fail "$id: no assembly for $tfm"
   done
   grep -qx "README.md" <<<"$listing" || fail "$id: README.md not packed"
+  grep -qx "icon.png" <<<"$listing" || fail "$id: icon.png not packed"
   grep -q '<license type="expression">MIT</license>' <<<"$nuspec" || fail "$id: MIT license expression missing"
   grep -q "<version>$version</version>" <<<"$nuspec" || fail "$id: nuspec version is not $version"
   echo "$id $version: $(grep -c . <<<"$listing") files"

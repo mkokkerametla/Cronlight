@@ -1,6 +1,8 @@
+<img src="https://raw.githubusercontent.com/mkokkerametla/Cronlight/main/assets/icon.png" alt="" width="64" height="64" align="left">
+
 # Cronlight
 
-[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
+[![CI](https://github.com/mkokkerametla/Cronlight/actions/workflows/ci.yml/badge.svg)](https://github.com/mkokkerametla/Cronlight/actions/workflows/ci.yml)
 
 **A spotlight on your Quartz.NET jobs.** Cronlight is an embeddable UI and API for
 [Quartz.NET](https://www.quartz-scheduler.net/): add it to the ASP.NET Core app that already runs your
@@ -153,6 +155,7 @@ builder.Services.AddCronlightHistory(o =>
 | `src/Cronlight.UI` | UI source: React, TypeScript, Vite, Tailwind and shadcn/ui. Built into `src/Cronlight/wwwroot` |
 | `samples/Cronlight.SampleHost` | Host app using SQLite, with an HTTP job, demo endpoints and demo `X-Demo-Role` header auth |
 | `tests/Cronlight.Tests` | Integration tests (TestServer; SQLite, PostgreSQL, SQL Server, MySQL) |
+| `assets` | Logo (`icon.svg`) and the 128px `icon.png` used as the NuGet package icon |
 | `build/verify-packages.sh` | Checks run on packed `.nupkg` files in CI |
 | `.github/workflows` | CI and release pipelines |
 
