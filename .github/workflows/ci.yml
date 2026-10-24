@@ -152,3 +152,48 @@ jobs:
           name: packages
           path: artifacts/*
           if-no-files-found: error
+
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/Cronlight.E2E
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            src/Cronlight.UI/package-lock.json
+            tests/Cronlight.E2E/package-lock.json
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props', 'global.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Playwright starts the sample host (dotnet run, which also builds the UI) on a fresh SQLite database
+      - name: Playwright
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            tests/Cronlight.E2E/playwright-report
+            tests/Cronlight.E2E/test-results
+          retention-days: 14

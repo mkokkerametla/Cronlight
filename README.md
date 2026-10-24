@@ -159,6 +159,7 @@ builder.Services.AddCronlightHistory(o =>
 | `src/Cronlight.UI` | UI source: React, TypeScript, Vite, Tailwind and shadcn/ui. Built into `src/Cronlight/wwwroot` |
 | `samples/Cronlight.SampleHost` | Host app using SQLite, with an HTTP job, demo endpoints and demo `X-Demo-Role` header auth |
 | `tests/Cronlight.Tests` | Integration tests (TestServer; SQLite, PostgreSQL, SQL Server, MySQL) |
+| `tests/Cronlight.E2E` | End-to-end tests: Playwright drives the sample host in Chromium |
 | `assets` | Logo (`icon.svg`) and the 128px `icon.png` used as the NuGet package icon |
 | `build/verify-packages.sh` | Checks run on packed `.nupkg` files in CI |
 | `build/smoke-test.sh` | Installs the packed packages into new .NET 8 and .NET 10 apps and runs them |
@@ -200,6 +201,21 @@ dotnet test
 
 The tests recreate the Quartz tables in these databases, so point them at throwaway instances only.
 
+### End-to-end tests
+
+[Playwright](https://playwright.dev) tests in `tests/Cronlight.E2E` start the sample host on a fresh
+SQLite database and drive the dashboard in Chromium: creating, editing, pausing, running and deleting
+jobs, history (including a failing HTTP job), viewer and anonymous access, search, the theme switch and
+the schedule assistant.
+
+```bash
+cd tests/Cronlight.E2E
+npm ci
+npx playwright install chromium   # once
+npx playwright test               # starts the sample host itself, on port 5199 (E2E_PORT)
+npx playwright show-report        # after a failure: traces and screenshots
+```
+
 ### UI components
 
 The UI uses [shadcn/ui](https://ui.shadcn.com) (Radix primitives, `radix-nova` style). Components live in
@@ -222,6 +238,8 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
    `build/smoke-test.sh` then installs them into a new .NET 8 and .NET 10 web app, runs it and checks
    the dashboard, API and history respond.
 5. Upload the packages and test results as workflow artifacts.
+6. End-to-end tests (a separate job): Playwright runs `tests/Cronlight.E2E` against the sample host and
+   uploads its report when a test fails.
 
 **Release** ([`release.yml`](.github/workflows/release.yml)) runs when a `v*.*.*` tag is pushed:
 

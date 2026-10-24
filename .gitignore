@@ -7,3 +7,6 @@ artifacts/
 TestResults/
 # Built from src/Cronlight.UI at build time
 src/Cronlight/wwwroot/
+# Playwright end-to-end test output
+tests/Cronlight.E2E/test-results/
+tests/Cronlight.E2E/playwright-report/
