@@ -21,9 +21,31 @@ internal sealed class AdoJobHistoryStore(
 
     private const string Columns = "ID, " + InsertColumns;
 
+    // The writer initializes the store in the background at startup. Until then the table may not exist yet,
+    // so reads return no history instead of failing; once initialization has failed, reads fail again so the
+    // dashboard shows the problem (for example a missing table with CreateTable off).
+    private volatile bool ready;
+    private volatile bool initializationFailed;
+
+    private bool NotReadyYet => !ready && !initializationFailed;
+
     public string Description => $"{dialect.Name} table {tableName}";
 
     public async Task Initialize(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await CreateTableIfMissing(cancellationToken);
+            ready = true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            initializationFailed = true;
+            throw;
+        }
+    }
+
+    private async Task CreateTableIfMissing(CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnection(cancellationToken);
         if (await TableExists(connection, cancellationToken))
@@ -75,6 +97,9 @@ internal sealed class AdoJobHistoryStore(
 
     public async Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
     {
+        if (NotReadyYet)
+            return [];
+
         await using var connection = await dataSource.OpenConnection(cancellationToken);
         await using var command = connection.CreateCommand();
 
@@ -112,6 +137,9 @@ internal sealed class AdoJobHistoryStore(
 
     public async Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken)
     {
+        if (NotReadyYet)
+            return new JobHistorySummary(sinceUtc, 0, 0, 0, 0);
+
         await using var connection = await dataSource.OpenConnection(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText =

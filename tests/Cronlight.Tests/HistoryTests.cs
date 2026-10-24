@@ -108,7 +108,7 @@ internal static class HistoryScenarios
         var store = host.Services.GetRequiredService<IJobHistoryStore>();
         var old = DateTimeOffset.UtcNow.AddDays(-30);
         var otherScheduler = $"{host.SchedulerName}-other";
-        await WaitForStore(store, host.SchedulerName);
+        await WaitForStore(store);
 
         await store.RecordFinished(Record(host.SchedulerName, "old", old), CancellationToken.None);
         await store.RecordFinished(Record(host.SchedulerName, "new", DateTimeOffset.UtcNow), CancellationToken.None);
@@ -146,22 +146,25 @@ internal static class HistoryScenarios
         (await client.GetFromJsonAsync<JsonElement>($"api/history{query}")).GetProperty("records").EnumerateArray().ToList();
 
     /// <summary>History is written in the background, so poll until it shows what the test expects.</summary>
-    // The writer creates the history table in the background after startup; this test uses the store directly
-    private static async Task WaitForStore(IJobHistoryStore store, string schedulerName)
+    // The writer creates the history table in the background after startup, and this test uses the store
+    // directly. Reads return nothing until then, so probe with a write (under another scheduler name) instead.
+    private static async Task WaitForStore(IJobHistoryStore store)
     {
+        var probe = Record("cronlight-test-probe", "probe", DateTimeOffset.UtcNow);
         var deadline = DateTime.UtcNow.AddSeconds(15);
         while (true)
         {
             try
             {
-                await store.Query(schedulerName, new JobHistoryQuery(), CancellationToken.None);
-                return;
+                await store.RecordFinished(probe, CancellationToken.None);
+                break;
             }
             catch (Exception) when (DateTime.UtcNow < deadline)
             {
                 await Task.Delay(100);
             }
         }
+        await store.DeleteFiredBefore(probe.SchedulerName, DateTimeOffset.UtcNow.AddDays(1), CancellationToken.None);
     }
 
     public static async Task<List<JsonElement>> WaitForHistory(HttpClient client, string query, Func<List<JsonElement>, bool> done)
