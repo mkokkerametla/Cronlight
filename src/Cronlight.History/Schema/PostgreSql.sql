@@ -21,7 +21,9 @@ CREATE TABLE {TABLE} (
     -- 1 for a first attempt, 2 for its first automatic retry, and so on; NULL in rows written before retries
     ATTEMPT INTEGER NULL,
     -- The run's own data (its trigger's, e.g. from a run with different data) as JSON, secrets masked; NULL when none
-    DATA TEXT NULL
+    DATA TEXT NULL,
+    -- What the run logged while it ran, as JSON; NULL when it logged nothing or logs are not kept
+    RUN_LOG TEXT NULL
 );
 CREATE INDEX IDX_{NAME}_ID ON {TABLE} (SCHED_NAME, ID);
 CREATE INDEX IDX_{NAME}_JOB ON {TABLE} (SCHED_NAME, JOB_GROUP, JOB_NAME, ID);

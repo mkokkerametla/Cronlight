@@ -82,10 +82,11 @@ describe('JobSheet', () => {
           }),
           trigger({
             name: 'once',
-            kind: 'Simple',
+            kind: 'Once',
             cronExpression: null,
             timeZone: null,
             nextFireTimeUtc: null,
+            startTimeUtc: '2030-01-01T06:00:00Z',
           }),
         ],
       })
@@ -97,6 +98,7 @@ describe('JobSheet', () => {
     expect(sheet().getByText('0 0 6 ? * MON-FRI')).toBeInTheDocument()
     expect(sheet().getByText('Europe/Paris')).toBeInTheDocument()
     expect(sheet().getByText('Not scheduled')).toBeInTheDocument()
+    expect(sheet().getByText(/^Once, /)).toBeInTheDocument()
     expect(sheet().getByText('eu-west')).toBeInTheDocument()
     expect(sheet().getByText('note').nextSibling).toHaveTextContent('-')
   })
@@ -205,12 +207,14 @@ describe('JobSheet', () => {
         data: { region: 'eu-west' },
         triggers: [
           trigger({ name: 'daily' }),
-          trigger({ name: 'once', kind: 'Simple', cronExpression: null }),
+          trigger({ name: 'retry', kind: 'Retry', cronExpression: null, attempt: 2 }),
         ],
       })
     )
     await userEvent.click(sheet().getByRole('button', { name: /Edit/ }))
-    expect(sheet().getByText('1 non-cron trigger(s) are left unchanged.')).toBeInTheDocument()
+    expect(
+      sheet().getByText('1 other trigger(s), such as waiting retries, are left unchanged.')
+    ).toBeInTheDocument()
 
     await userEvent.clear(sheet().getByLabelText('Description'))
     await userEvent.type(sheet().getByLabelText('Description'), 'new')
@@ -226,6 +230,8 @@ describe('JobSheet', () => {
       // A UTC trigger is edited with an empty zone, which the server reads as UTC
       triggers: [{ name: 'daily', cronExpression: '0 30 7 * * ?', timeZone: null }],
       retry: { maxRetries: 0, delaySeconds: 60, exponential: false },
+      // So a one-time or interval trigger removed in the editor is removed from the job too
+      triggerKinds: ['Cron', 'Once', 'Interval'],
     })
     expect(sheet().queryByRole('button', { name: 'Save changes' })).toBeNull()
     expect(sheet().getByRole('button', { name: /Edit/ })).toBeInTheDocument()

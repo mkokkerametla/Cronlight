@@ -39,6 +39,8 @@ import {
   draftsFromTriggers,
   draftsToRequest,
   draftToRetry,
+  editableKinds,
+  isEditable,
   retryDraft,
   rowsToData,
 } from '@/lib/job-form'
@@ -47,6 +49,7 @@ import { useHistory } from '@/hooks/use-history'
 import {
   describeMisfire,
   describeRetry,
+  describeSchedule,
   errorTone,
   formatDateTime,
   formatDuration,
@@ -299,7 +302,7 @@ function JobDetails({
                   </span>
                   <TriggerStateBadge state={t.state} />
                   <Badge variant="outline" className="ml-auto">
-                    {t.kind}
+                    {kindLabel(t.kind)}
                   </Badge>
                   {t.kind === 'Retry' && onCancelRetry && (
                     <Button
@@ -316,6 +319,9 @@ function JobDetails({
                   <code className="block rounded bg-muted px-2 py-1 font-mono text-xs">
                     {t.cronExpression}
                   </code>
+                )}
+                {describeSchedule(t) && (
+                  <p className="rounded bg-muted px-2 py-1 text-xs">{describeSchedule(t)}</p>
                 )}
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
                   <Field label="Next fire">
@@ -384,7 +390,8 @@ function EditJobForm({
   const [triggers, setTriggers] = useState(() => draftsFromTriggers(job.triggers))
   const [retry, setRetry] = useState(() => retryDraft(job.retry))
   const [saving, setSaving] = useState(false)
-  const otherTriggers = job.triggers.filter(t => t.kind !== 'Cron').length
+  // Waiting retries, and kinds the editor does not handle, are kept as they are
+  const otherTriggers = job.triggers.filter(t => !isEditable(t)).length
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -394,6 +401,8 @@ function EditJobForm({
       data: rowsToData(data),
       triggers: draftsToRequest(triggers),
       retry: draftToRetry(retry),
+      // Every kind the editor shows, so a trigger removed here is removed from the job
+      triggerKinds: editableKinds,
     })
     setSaving(false)
   }
@@ -412,7 +421,7 @@ function EditJobForm({
 
         <Separator />
         <section className="space-y-2">
-          <h3 className="text-sm font-medium">Cron triggers</h3>
+          <h3 className="text-sm font-medium">Triggers</h3>
           <TriggersEditor
             triggers={triggers}
             onChange={setTriggers}
@@ -420,7 +429,7 @@ function EditJobForm({
           />
           {otherTriggers > 0 && (
             <p className="text-xs text-muted-foreground">
-              {otherTriggers} non-cron trigger(s) are left unchanged.
+              {otherTriggers} other trigger(s), such as waiting retries, are left unchanged.
             </p>
           )}
         </section>
@@ -566,6 +575,9 @@ function RecentRuns({
     </>
   )
 }
+
+const kindLabels: Record<string, string> = { Once: 'One time', RunNow: 'Run now (waiting)' }
+const kindLabel = (kind: string) => kindLabels[kind] ?? kind
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (

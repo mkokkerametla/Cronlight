@@ -80,4 +80,13 @@ describe('TriggersEditor', () => {
     const row = screen.getByLabelText('Cron expression').closest('div.rounded-md') as HTMLElement
     expect(within(row).queryByLabelText('Describe the schedule in plain language')).toBeNull()
   })
+
+  it('says an interval trigger needs two runs or more, pointing to one-time triggers', async () => {
+    render(<Editor initial={[{ ...emptyTrigger('Interval'), every: '5', runs: '1' }]} />)
+
+    expect(screen.getByText(/For a single run, choose One time/)).toBeInTheDocument()
+    await userEvent.clear(screen.getByLabelText('Number of runs'))
+    await userEvent.type(screen.getByLabelText('Number of runs'), '3')
+    expect(screen.getByText(/Every 5m, starting now, 3 runs in all/)).toBeInTheDocument()
+  })
 })

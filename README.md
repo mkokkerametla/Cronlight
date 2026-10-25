@@ -176,7 +176,8 @@ or per database) adds each one with `UseCronlight`, before starting it:
 
 ```csharp
 var reports = await new StdSchedulerFactory(properties).GetScheduler();
-reports.JobFactory = app.Services.GetRequiredService<IJobFactory>(); // jobs with constructor dependencies
+// Jobs with constructor dependencies; wrapped so history keeps what each run logs (needs AddCronlightHistory)
+reports.JobFactory = app.Services.GetRequiredService<IJobFactory>().WithCronlightRunLogs(app.Services);
 await reports.UseCronlight(app.Services); // dashboard, history, alerts, retries and secret references
 await reports.Start();
 ```
@@ -229,8 +230,8 @@ Anyone who can create jobs chooses the URL, so the job only calls what you allow
 
 ## Execution history (optional package)
 
-`Cronlight.History` records every run (start, finish, duration, node, outcome and error message) and
-adds a History tab, a "Failed (24h)" card and recent runs per job to the dashboard.
+`Cronlight.History` records every run (start, finish, duration, node, outcome, error message and what the job
+logged) and adds a History tab, a "Failed (24h)" card and recent runs per job to the dashboard.
 
 ```csharp
 builder.Services.AddCronlightHistory(o =>
@@ -246,12 +247,29 @@ builder.Services.AddCronlightHistory(o =>
   history is kept in memory on each node instead, and a warning is logged.
 - **Table creation.** The table is created on startup if missing. Where the app has no DDL rights, set
   `CreateTable = false` and run the script for your database from `src/Cronlight.History/Schema`.
-  Indexes and columns added in later versions (`ATTEMPT` for retries, `DATA` for each run's own data) are added to an existing
+  Indexes and columns added in later versions (`ATTEMPT` for retries, `DATA` for each run's own data, `RUN_LOG`
+  for what runs log) are added to an existing
   table at startup; with `CreateTable = false` a missing one is logged as a warning with the statement to
   run, and history is written without it.
 - **Jobs are never slowed down.** Listeners only queue records; a background writer stores them. If the
   database is unavailable, records beyond `QueueCapacity` are dropped and jobs carry on.
 - **Errors** are stored as exception type and message (truncated to `MaxErrorLength`), never stack traces.
+- **What each run logs** through `ILogger` is kept with it, from the job's own code and from anything it
+  calls or starts (an `HttpClient`, a repository), and shown under "log" in the History tab. Entries are kept
+  from `MinimumLogLevel` (Information) up, and the host's logging filters apply too, under the provider alias
+  `CronlightRunLog` (e.g. `Logging:CronlightRunLog:LogLevel:Default`). A run keeps its first `MaxLogEntries`
+  (200), each up to `MaxLogMessageLength` characters, and says how many it left out. Exceptions are kept as
+  type and message. The run's sensitive job data values (secret parameters and keys matching
+  `SensitiveKeyPatterns`, resolved secret references included) are masked wherever they were logged, before
+  a long message is cut; other
+  secrets a job logs are kept as logged, so treat run logs like your other logs.
+  - Logs are read one run at a time (`GET api/history/{id}/log`); the history list only says whether a run
+    has one (`hasLog`).
+  - Cronlight wraps the host's job factory to do this, so `context.JobInstance` is Cronlight's wrapper
+    around the job. `CaptureLogs = false` turns it off. A factory set only through Quartz properties
+    (`quartz.scheduler.jobFactory.type`) rather than `UseJobFactory` is left alone, with a warning. A scheduler built in code keeps logs once its job
+    factory is wrapped with `WithCronlightRunLogs` ([several schedulers](#several-schedulers-in-one-app)).
+  - Logging that the job leaves running after it returns is not kept.
 - **Misfires.** When a trigger misses its fire time by more than Quartz's misfire threshold (60 seconds by
   default; the scheduler was down, paused or had no free thread), history records it as `Misfired`: at the
   fire time it missed, with how many fire times were missed and what Quartz does about it, e.g. "Missed 3
@@ -278,10 +296,15 @@ builder.Services.AddCronlightHistory(o =>
 | `InMemoryCapacity` | 5000 | Records kept per node by the in-memory store |
 | `QueueCapacity` | 10000 | |
 | `MaxErrorLength` | 2000 | |
+| `CaptureLogs` | `true` | Keep what each run logs |
+| `MinimumLogLevel` | `Information` | Least severe log entries kept |
+| `MaxLogEntries` | 200 | Log entries kept per run |
+| `MaxLogMessageLength` | 1000 | |
 
 ## Audit log
 
-Every change made through the dashboard or its API (create, edit, pause, resume, run now, cancel, delete) is
+Every change made through the dashboard or its API (create, edit, pause, resume, run now, cancel, delete, and
+pausing or resuming a group or the whole scheduler) is
 logged under the `Cronlight.Audit` category: who made it, the job, whether it succeeded, for creates
 and edits what changed, and for runs with different data what was changed for that run. Refused attempts are logged as warnings with the reason, such as a cross-site
 request or read-only mode. Requests turned away by the host's authorization policies before reaching
@@ -385,6 +408,37 @@ class PagerAlertSink(IPagerClient pager) : ICronlightAlertSink
 }
 ```
 
+## Metrics and health checks
+
+Cronlight publishes OpenTelemetry metrics on the `Cronlight` meter (`CronlightMetrics.MeterName`), for every
+scheduler it serves, with or without the dashboard mapped:
+
+```csharp
+builder.Services.AddOpenTelemetry().WithMetrics(m => m.AddMeter(CronlightMetrics.MeterName).AddPrometheusExporter());
+```
+
+| Instrument | Type | |
+|---|---|---|
+| `cronlight.job.runs` | counter | Finished runs, by `cronlight.run.outcome`: succeeded, failed, retried, cancelled or vetoed |
+| `cronlight.job.run.duration` | histogram (s) | How long runs took |
+| `cronlight.job.runs.active` | up-down counter | Runs in progress |
+| `cronlight.job.misfires` | counter | Fire times missed by more than the misfire threshold |
+
+Every instrument is tagged with `cronlight.scheduler`, `cronlight.job.group` and `cronlight.job.name`. Each
+node reports its own runs, so add them up across a cluster. A failure that will be retried counts as
+`retried`, as history shows it.
+
+A health check reports each scheduler:
+
+```csharp
+builder.Services.AddHealthChecks().AddCronlight();
+app.MapHealthChecks("/healthz");
+```
+
+It is unhealthy when a scheduler has shut down or its job store cannot be read (for a database store, a
+query on the Quartz tables, within 10 seconds), and degraded while one has not started yet or is in
+standby. `AddCronlight(failureStatus: HealthStatus.Degraded, tags: ["ready"], timeout: …)` changes those.
+
 ## Behaviour worth knowing
 
 - **Secrets** are shown as `********`. Saving a masked value back keeps the stored value. To keep them
@@ -415,8 +469,28 @@ class PagerAlertSink(IPagerClient pager) : ICronlightAlertSink
   and browser requests marked `Sec-Fetch-Site: cross-site` are refused. Scripts calling the API add the
   header, e.g. `curl -X POST -H "X-Cronlight-Request: 1" …/api/jobs/DEFAULT/nightly/trigger`. Reads
   need no header.
-- **Editing triggers** replaces the job's cron triggers; other trigger types are left alone. A paused
-  trigger stays paused when its schedule changes.
+- **Triggers** made in the dashboard are cron (with a time zone), one-time (runs once at a given time) or
+  interval (every so many seconds, minutes, hours or days, from a start time, forever or a set number of
+  runs). Editing a job in the dashboard replaces those three kinds. Waiting retries, manual runs waiting to
+  start (shown as "Run now"), other trigger types (calendar and daily time interval triggers) and interval
+  triggers that are not a whole number of seconds are shown but left alone. A trigger sent back unchanged is
+  not rescheduled, and a paused trigger stays paused when its schedule changes. An interval trigger whose
+  start has passed moves to its next run after now when it is changed, rather than running at once, and the
+  runs it has had count towards its number of runs.
+  - In the API a trigger is `{ "kind": "Once", "startAtUtc": "…" }` or
+    `{ "kind": "Interval", "intervalSeconds": 300, "startAtUtc": "…", "repeatCount": 9 }` (runs after the
+    first, at least 1; left out repeats forever), and cron is the default kind.
+  - `PUT api/jobs/{group}/{name}` replaces the kinds named in `triggerKinds` (`["Cron", "Once", "Interval"]`,
+    as the dashboard sends). Without it, it replaces cron triggers and the kinds it sends, so a script that
+    only sends cron triggers keeps the job's one-time and interval triggers.
+- **Pausing a group or everything.** A job's menu in the job list pauses or resumes its whole group, and
+  "All jobs" pauses or resumes every job in the scheduler (`POST api/groups/{group}/pause|resume`,
+  `POST api/scheduler/pause|resume`), after asking. Quartz does this in the job store, so it reaches every
+  node, and a job added while everything is paused starts paused (with the in-memory store, also one added to
+  a paused group). Resuming a group or everything resumes jobs that were paused one by one too. A group or
+  scheduler that holds jobs of another app (types
+  not loadable here) is refused unless `AllowManagingUnloadableJobs` is on, rather than half done. Audited as
+  `pause-group`, `resume-group`, `pause-all` and `resume-all`.
 
 ## Repository layout
 

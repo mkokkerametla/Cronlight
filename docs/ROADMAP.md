@@ -40,6 +40,16 @@ These are listed so the roadmap below is read against them:
     misfire is recorded at the fire time it makes up for.
   - Several schedulers: permissions per scheduler (`o.Schedulers[name]`); an added scheduler given its
     properties is read from its tables, like the host's own.
+- Log output for each run: what a job logs through `ILogger` while it runs is kept with that run in history
+  (`RUN_LOG` column), with sensitive job data values masked, and shown in the History tab. Captured by
+  wrapping the host's job factory, so the log follows the run's async flow; a scheduler built in code opts in
+  with `WithCronlightRunLogs`.
+- One-time and interval triggers in the editor, alongside cron. Editing replaces the three kinds and keeps
+  waiting retries and other trigger types.
+- Pausing and resuming a group, or the whole scheduler, from the job list. Refused for groups that hold
+  another app's jobs, and audited.
+- OpenTelemetry metrics on the `Cronlight` meter (runs by outcome, duration, active runs, misfires) and a
+  health check (`AddHealthChecks().AddCronlight()`) for shut-down or unreachable job stores.
 
 ## How Cronlight compares
 
@@ -72,7 +82,7 @@ It lags on:
 - **Quartz 4 support.** Cronlight is built on Quartz 3.13 and does not run on 4.x, which is now the
   current line. Quartz 4 also brings its own retries and execution history, which overlap Cronlight's.
 - remote schedulers (HTTP, agent)
-- live updates, job progress and captured log lines
+- live updates and job progress (captured log lines are now kept per run, but shown once the run has finished)
 - adoption
 
 Suggested order: Quartz 4 support once 4.x settles (see
@@ -111,28 +121,10 @@ affected. To decide:
 - Process-global singletons are gone in 4.x, so `UseCronlight`'s reason for being opt-in (the
   process-wide scheduler registry) may not apply there.
 
-### Log output for each run
-
-Capture what a job logs while it runs and show it with that run in history.
-
-### More trigger types in the editor
-
-One-off (run once at a given time) and simple interval triggers, alongside cron.
-
-### Pause a group or the whole scheduler
-
-Pause and resume every job in a group, or the whole scheduler, from the dashboard. Audited like other
-changes.
-
 ### Live updates
 
 Push changes (runs starting and finishing, jobs paused) to the dashboard, for example with server-sent
 events or SignalR, and fall back to the current polling.
-
-### OpenTelemetry metrics and a health check
-
-- Metrics: runs, failures, duration, misfires and running count per job.
-- A health check that reports an unreachable job store or a scheduler that is not running.
 
 ## 2.0
 
@@ -156,6 +148,11 @@ events or SignalR, and fall back to the current polling.
 - Clearer error messages in general.
 
 ## Known gaps
+
+- No end-to-end tests yet for run logs, one-time and interval triggers, or pausing groups.
+- Run logs are shown once a run has finished; a running job's log so far is not visible.
+- The misfire counter can count a misfire twice when a database store rolls back its misfire handling and
+  reports it again; history keeps one record per misfire.
 
 - No end-to-end tests for alerts, which would need a webhook receiver in the sample host.
 - `RetryTests.A_run_with_different_data_uses_it_for_that_run_and_its_retries_only` failed once on .NET 10

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Quartz.Spi;
 using Cronlight.History;
 
 namespace Cronlight;
@@ -29,6 +30,9 @@ public static class CronlightHistoryExtensions
         services.TryAddSingleton<JobHistoryListener>();
         services.TryAddSingleton<IJobHistoryStore>(CreateStore);
         services.AddSchedulerAttachment<JobHistoryAttachment>();
+        // Ignores everything logged outside a run, so it costs a check per log call
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, RunLogProvider>());
+        services.TryAddSingleton<RunLogMasks>();
 
         // First in the collection: hosted services stop in reverse order, so history is drained after Quartz stops
         if (!services.Any(d => d.ImplementationType == typeof(JobHistoryWriter)))
@@ -36,6 +40,17 @@ public static class CronlightHistoryExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// For a scheduler built in code: wraps its job factory so that what each run logs is kept with it in history
+    /// (<see cref="JobHistoryOptions.CaptureLogs"/>), as it is for the host's own scheduler.
+    /// <c>scheduler.JobFactory = jobFactory.WithCronlightRunLogs(services);</c> before starting it.
+    /// </summary>
+    public static IJobFactory WithCronlightRunLogs(this IJobFactory jobFactory, IServiceProvider services) =>
+        jobFactory is RunLogJobFactory || !services.GetRequiredService<IOptions<JobHistoryOptions>>().Value.CaptureLogs
+            ? jobFactory
+            : new RunLogJobFactory(jobFactory, services.GetRequiredService<IOptions<JobHistoryOptions>>(),
+                services.GetRequiredService<RunLogMasks>());
 
     private static IJobHistoryStore CreateStore(IServiceProvider services)
     {

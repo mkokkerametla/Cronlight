@@ -52,7 +52,26 @@ public record JobExecutionRecord
     /// too. Null when the run used only the job's saved data. Sensitive values are masked, except secret references.
     /// </summary>
     public IReadOnlyDictionary<string, string>? Data { get; init; }
+
+    /// <summary>Whether the run's log was kept: what the job logged while it ran. Read it with <see cref="IJobHistoryStore.GetLog"/>.</summary>
+    public bool HasLog { get; init; }
+
+    /// <summary>
+    /// What the job logged while it ran, given to the store when the run finishes. Queries leave it out, since logs can be
+    /// long, and set <see cref="HasLog"/> instead.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<JobRunLogEntry>? Log { get; init; }
 }
+
+/// <summary>One line a job logged through <c>ILogger</c> while it ran.</summary>
+/// <param name="Level">Trace, Debug, Information, Warning, Error or Critical.</param>
+/// <param name="Category">The logger's category, usually the class that logged it.</param>
+/// <param name="Message">
+/// The formatted message, with the exception's type and message after it when one was logged (not its stack trace).
+/// The run's sensitive job data values are masked.
+/// </param>
+public record JobRunLogEntry(DateTimeOffset TimeUtc, string Level, string Category, string Message);
 
 public record JobHistoryQuery
 {
@@ -96,4 +115,11 @@ public interface IJobHistoryStore
     /// Scoped by scheduler so apps sharing a database keep their own retention.
     /// </summary>
     Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The log kept with a run (<see cref="JobExecutionRecord.Log"/>), by its record's id, or null when it has none. A store
+    /// that keeps no logs need not implement it.
+    /// </summary>
+    Task<IReadOnlyList<JobRunLogEntry>?> GetLog(string schedulerName, long id, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<JobRunLogEntry>?>(null);
 }

@@ -48,6 +48,8 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore
                     && (query.Status == null || r.Status == query.Status)
                     && (query.BeforeId == null || r.Id < query.BeforeId))
                 .Take(Math.Clamp(query.Limit, 1, 500))
+                // Logs are read one run at a time, as the database store does
+                .Select(r => r with { Log = null, HasLog = r.Log != null })
                 .ToList();
             return Task.FromResult(result);
         }
@@ -62,6 +64,12 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore
             return Task.FromResult(new JobHistorySummary(sinceUtc, Count(JobExecutionStatus.Succeeded),
                 Count(JobExecutionStatus.Failed), Count(JobExecutionStatus.Vetoed), Count(JobExecutionStatus.Running)));
         }
+    }
+
+    public Task<IReadOnlyList<JobRunLogEntry>?> GetLog(string schedulerName, long id, CancellationToken cancellationToken)
+    {
+        lock (gate)
+            return Task.FromResult(records.FirstOrDefault(r => r.Id == id && r.SchedulerName == schedulerName)?.Log);
     }
 
     public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken)

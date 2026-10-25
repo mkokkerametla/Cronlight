@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { api, jobPath } from '@/api'
 import { usePolling } from '@/hooks/use-polling'
 import type {
+  BulkAction,
   CreateJobRequest,
   ExecutionRecord,
   HistorySummary,
@@ -184,6 +185,17 @@ export function useDashboard(
         perform(() => api('jobs', { method: 'POST', body: request }), `${request.name} created`),
       update: (job: Job, request: UpdateJobRequest) =>
         perform(() => api(jobPath(job), { method: 'PUT', body: request }), `${job.name} updated`),
+      // Quartz does these in the job store, so they reach every node and every job in the group at once
+      group: (group: string, action: BulkAction) =>
+        perform(
+          () => api(`groups/${encodeURIComponent(group)}/${action}`, { method: 'POST' }),
+          `Group ${group}: ${pastTense[action]}`
+        ),
+      all: (action: BulkAction) =>
+        perform(
+          () => api(`scheduler/${action}`, { method: 'POST' }),
+          `All jobs ${pastTense[action]}`
+        ),
       // Quartz has no batch API, so each job is its own call
       bulk: async (action: JobAction, targets: Job[]) => {
         const results = await Promise.allSettled(

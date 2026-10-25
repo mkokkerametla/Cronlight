@@ -105,7 +105,8 @@ internal sealed class JobHistoryListener(
         {
             FinishedTimeUtc = context.FireTimeUtc + context.JobRunTime,
             DurationMs = (long)context.JobRunTime.TotalMilliseconds,
-            Error = RunOutcome.Error(context, jobException) is { } error ? Truncate(error) : null
+            Error = RunOutcome.Error(context, jobException) is { } error ? Truncate(error) : null,
+            Log = (context.Get(RunLog.ContextKey) as RunLog)?.Close()
         });
     }
 

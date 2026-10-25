@@ -21,17 +21,24 @@ internal sealed class AdoJobHistoryStore(
         "SCHED_NAME, ENTRY_ID, INSTANCE_NAME, JOB_NAME, JOB_GROUP, JOB_TYPE, TRIGGER_NAME, TRIGGER_GROUP, " +
         "SCHEDULED_TIME, FIRED_TIME, FINISHED_TIME, DURATION_MS, STATUS, ERROR, REFIRE_COUNT";
 
-    // Added after the first release: ATTEMPT with retries, DATA for repeating a run exactly. A table created by an
-    // earlier version gets them at startup, unless CreateTable is off; then history is written without them.
+    // Added after the first release: ATTEMPT with retries, DATA for repeating a run exactly, RUN_LOG for what runs logged. A
+    // table created by an earlier version gets them at startup, unless CreateTable is off; then history is written without them.
     private const string AttemptColumn = "ATTEMPT";
     private const string DataColumn = "DATA";
+    private const string LogColumn = "RUN_LOG";
     private static readonly (string Column, string Purpose)[] AddedColumns =
-        [(AttemptColumn, "retry attempts are not recorded"), (DataColumn, "each run's own data is not kept")];
+    [
+        (AttemptColumn, "retry attempts are not recorded"), (DataColumn, "each run's own data is not kept"),
+        (LogColumn, "what runs log is not kept")
+    ];
     private volatile string[] addedColumns = AddedColumns.Select(c => c.Column).ToArray();
 
     private bool Has(string column) => addedColumns.Contains(column);
     private string InsertColumns => string.Join(", ", [BaseColumns, .. addedColumns]);
-    private string Columns => "ID, " + InsertColumns;
+
+    // Queries read whether a run has a log, not the log itself, which can be long
+    private string Columns => string.Join(", ",
+        ["ID", BaseColumns, .. addedColumns.Select(c => c == LogColumn ? $"CASE WHEN {c} IS NULL THEN 0 ELSE 1 END" : c)]);
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -97,9 +104,12 @@ internal sealed class AdoJobHistoryStore(
     {
         await using var connection = await dataSource.OpenConnection(cancellationToken);
         await using var command = connection.CreateCommand();
+        var log = Has(LogColumn) ? $", {LogColumn} = {P("run_log")}" : "";
         command.CommandText =
             $"UPDATE {tableName} SET FINISHED_TIME = {P("finished")}, DURATION_MS = {P("duration")}, STATUS = {P("status")}, " +
-            $"ERROR = {P("error")} WHERE SCHED_NAME = {P("sched")} AND ENTRY_ID = {P("entry")} AND REFIRE_COUNT = {P("refire")}";
+            $"ERROR = {P("error")}{log} WHERE SCHED_NAME = {P("sched")} AND ENTRY_ID = {P("entry")} AND REFIRE_COUNT = {P("refire")}";
+        if (Has(LogColumn))
+            Add(command, "run_log", LogJson(record));
         Add(command, "finished", record.FinishedTimeUtc?.UtcTicks);
         Add(command, "duration", record.DurationMs);
         Add(command, "status", record.Status.ToString());
@@ -174,6 +184,24 @@ internal sealed class AdoJobHistoryStore(
         return new JobHistorySummary(sinceUtc, Count(JobExecutionStatus.Succeeded), Count(JobExecutionStatus.Failed),
             Count(JobExecutionStatus.Vetoed), Count(JobExecutionStatus.Running));
     }
+
+    public async Task<IReadOnlyList<JobRunLogEntry>?> GetLog(string schedulerName, long id, CancellationToken cancellationToken)
+    {
+        if (NotReadyYet || !Has(LogColumn))
+            return null;
+
+        await using var connection = await dataSource.OpenConnection(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {LogColumn} FROM {tableName} WHERE SCHED_NAME = {P("sched")} AND ID = {P("id")}";
+        Add(command, "sched", schedulerName);
+        Add(command, "id", id);
+        return await command.ExecuteScalarAsync(cancellationToken) is string json
+            ? JsonSerializer.Deserialize<List<JobRunLogEntry>>(json, Json)
+            : null;
+    }
+
+    private static string? LogJson(JobExecutionRecord record) =>
+        record.Log is { Count: > 0 } log ? JsonSerializer.Serialize(log, Json) : null;
 
     public async Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken)
     {
@@ -317,6 +345,8 @@ internal sealed class AdoJobHistoryStore(
             Add(command, "attempt", r.Attempt);
         if (Has(DataColumn))
             Add(command, "data", r.Data is { Count: > 0 } data ? JsonSerializer.Serialize(data, Json) : null);
+        if (Has(LogColumn))
+            Add(command, "run_log", LogJson(r));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -347,7 +377,8 @@ internal sealed class AdoJobHistoryStore(
             Error = Text(14),
             RefireCount = Convert.ToInt32(reader.GetValue(15)),
             Attempt = Added(AttemptColumn) is { } a && Long(a) is { } attempt ? (int)attempt : 1,
-            Data = Added(DataColumn) is { } d && Text(d) is { } json ? JsonSerializer.Deserialize<Dictionary<string, string>>(json, Json) : null
+            Data = Added(DataColumn) is { } d && Text(d) is { } json ? JsonSerializer.Deserialize<Dictionary<string, string>>(json, Json) : null,
+            HasLog = Added(LogColumn) is { } l && Long(l) == 1
         };
     }
 

@@ -1,4 +1,5 @@
-import { History, RotateCcw, X } from 'lucide-react'
+import { Fragment, useState } from 'react'
+import { History, RotateCcw, ScrollText, X } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -18,6 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { RunLog } from '@/components/history/run-log'
 import { ExecutionStatusBadge } from '@/components/jobs/status-badge'
 import { useHistory } from '@/hooks/use-history'
 import { useRefreshInterval } from '@/hooks/use-polling'
@@ -55,6 +57,8 @@ export function HistoryTable({
 }: Props) {
   const { records, hasMore, loadMore, error, loaded, refresh } = useHistory(filter)
   const refreshMs = useRefreshInterval()
+  const [openLog, setOpenLog] = useState<number | null>(null)
+  const columns = canManage && onRetry ? 6 : 5
 
   return (
     <div className="space-y-3">
@@ -136,77 +140,100 @@ export function HistoryTable({
             </TableHeader>
             <TableBody>
               {records.map(r => (
-                <TableRow key={r.id} className="align-top">
-                  <TableCell className="max-w-md whitespace-normal">
-                    <button
-                      type="button"
-                      className="text-left font-medium hover:underline"
-                      onClick={() => onOpenJob(r.jobGroup, r.jobName)}
-                    >
-                      {r.jobName}
-                    </button>
-                    <div className="text-xs text-muted-foreground">
-                      {r.jobGroup} · {shortType(r.jobType)}
-                      {r.refireCount > 0 && ` · refire ${r.refireCount}`}
-                      {r.attempt > 1 && ` · attempt ${r.attempt}`}
-                      {startedLate(r) && (
-                        <span className="text-amber-700 dark:text-amber-400">
-                          {` · started ${startedLate(r)} late`}
-                        </span>
-                      )}
-                      {r.data && (
-                        <>
-                          {' · '}
-                          <span
-                            className="underline decoration-dotted"
-                            title={Object.entries(r.data)
-                              .map(([k, v]) => `${k} = ${v}`)
-                              .join('\n')}
-                          >
-                            own data
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    {r.error && (
-                      <p
-                        className={cn('mt-1 line-clamp-2 text-xs break-words', errorTone(r))}
-                        title={r.error}
+                <Fragment key={r.id}>
+                  <TableRow className="align-top">
+                    <TableCell className="max-w-md whitespace-normal">
+                      <button
+                        type="button"
+                        className="text-left font-medium hover:underline"
+                        onClick={() => onOpenJob(r.jobGroup, r.jobName)}
                       >
-                        {r.error}
-                      </p>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <ExecutionStatusBadge status={r.status} />
-                  </TableCell>
-                  <TableCell title={formatDateTime(recordTime(r))}>
-                    {r.status === 'Misfired' && 'missed '}
-                    {formatRelative(recordTime(r))}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatDuration(r.durationMs)}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    {r.instanceName}
-                  </TableCell>
-                  {canManage && onRetry && (
-                    <TableCell className="text-right">
-                      {retryable.includes(r.status) && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          aria-label={`Run ${r.jobName} again`}
-                          onClick={async () => {
-                            if (await onRetry(r)) setTimeout(refresh, 1000)
-                          }}
+                        {r.jobName}
+                      </button>
+                      <div className="text-xs text-muted-foreground">
+                        {r.jobGroup} · {shortType(r.jobType)}
+                        {r.refireCount > 0 && ` · refire ${r.refireCount}`}
+                        {r.attempt > 1 && ` · attempt ${r.attempt}`}
+                        {startedLate(r) && (
+                          <span className="text-amber-700 dark:text-amber-400">
+                            {` · started ${startedLate(r)} late`}
+                          </span>
+                        )}
+                        {r.data && (
+                          <>
+                            {' · '}
+                            <span
+                              className="underline decoration-dotted"
+                              title={Object.entries(r.data)
+                                .map(([k, v]) => `${k} = ${v}`)
+                                .join('\n')}
+                            >
+                              own data
+                            </span>
+                          </>
+                        )}
+                        {r.hasLog && (
+                          <>
+                            {' · '}
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-0.5 hover:text-foreground hover:underline"
+                              aria-expanded={openLog === r.id}
+                              onClick={() => setOpenLog(openLog === r.id ? null : r.id)}
+                            >
+                              <ScrollText className="size-3" />
+                              {openLog === r.id ? 'hide log' : 'log'}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      {r.error && (
+                        <p
+                          className={cn('mt-1 line-clamp-2 text-xs break-words', errorTone(r))}
+                          title={r.error}
                         >
-                          <RotateCcw /> Run again
-                        </Button>
+                          {r.error}
+                        </p>
                       )}
                     </TableCell>
+                    <TableCell>
+                      <ExecutionStatusBadge status={r.status} />
+                    </TableCell>
+                    <TableCell title={formatDateTime(recordTime(r))}>
+                      {r.status === 'Misfired' && 'missed '}
+                      {formatRelative(recordTime(r))}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatDuration(r.durationMs)}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {r.instanceName}
+                    </TableCell>
+                    {canManage && onRetry && (
+                      <TableCell className="text-right">
+                        {retryable.includes(r.status) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label={`Run ${r.jobName} again`}
+                            onClick={async () => {
+                              if (await onRetry(r)) setTimeout(refresh, 1000)
+                            }}
+                          >
+                            <RotateCcw /> Run again
+                          </Button>
+                        )}
+                      </TableCell>
+                    )}
+                  </TableRow>
+                  {openLog === r.id && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={columns} className="whitespace-normal">
+                        <RunLog id={r.id} />
+                      </TableCell>
+                    </TableRow>
                   )}
-                </TableRow>
+                </Fragment>
               ))}
             </TableBody>
           </Table>

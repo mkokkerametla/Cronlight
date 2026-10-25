@@ -67,24 +67,33 @@ describe('rowsToData', () => {
 })
 
 describe('trigger drafts', () => {
-  it('edits only cron triggers, shows UTC as blank and gives each row its own id', () => {
+  it('edits cron, one-time and interval triggers, shows UTC as blank and gives each row its own id', () => {
     const drafts = draftsFromTriggers([
       trigger({ name: 'a', timeZone: 'UTC' }),
       trigger({ name: 'b', timeZone: 'Europe/London' }),
-      trigger({ name: 'once', kind: 'Simple', cronExpression: null }),
+      trigger({
+        name: 'once',
+        kind: 'Once',
+        cronExpression: null,
+        timeZone: null,
+        startTimeUtc: '2030-01-01T06:00:00Z',
+      }),
+      trigger({ name: 'retry', kind: 'Retry', cronExpression: null, timeZone: null }),
+      trigger({ name: 'daily', kind: 'DailyTimeIntervalTriggerImpl', cronExpression: null }),
     ])
 
-    expect(drafts.map(d => [d.name, d.timeZone])).toEqual([
-      ['a', ''],
-      ['b', 'Europe/London'],
+    expect(drafts.map(d => [d.name, d.kind, d.timeZone])).toEqual([
+      ['a', 'Cron', ''],
+      ['b', 'Cron', 'Europe/London'],
+      ['once', 'Once', ''],
     ])
-    expect(new Set(drafts.map(d => d.id)).size).toBe(2)
+    expect(new Set(drafts.map(d => d.id)).size).toBe(3)
   })
 
-  it('starts with one empty row when there are no cron triggers', () => {
+  it('starts with one empty cron row when there are no triggers it edits', () => {
     const [only, ...rest] = draftsFromTriggers([])
     expect(rest).toHaveLength(0)
-    expect(only).toMatchObject({ name: '', cronExpression: '', timeZone: '' })
+    expect(only).toMatchObject({ kind: 'Cron', name: '', cronExpression: '', timeZone: '' })
   })
 
   it('gives every new row a fresh id', () => {
@@ -94,14 +103,14 @@ describe('trigger drafts', () => {
   it('builds the request from rows with a cron expression, trimmed, without client-only ids', () => {
     const request = draftsToRequest([
       {
-        id: 1,
+        ...emptyTrigger(),
         name: ' nightly ',
         cronExpression: ' 0 0 2 * * ? ',
         timeZone: ' Europe/London ',
         skipMissed: true,
       },
-      { id: 2, name: '', cronExpression: '0 0 3 * * ?', timeZone: '', skipMissed: false },
-      { id: 3, name: 'blank', cronExpression: '   ', timeZone: '', skipMissed: false },
+      { ...emptyTrigger(), cronExpression: '0 0 3 * * ?' },
+      { ...emptyTrigger(), name: 'blank', cronExpression: '   ' },
     ])
 
     expect(request).toEqual([
@@ -113,6 +122,66 @@ describe('trigger drafts', () => {
       },
       { name: null, cronExpression: '0 0 3 * * ?', timeZone: null },
     ])
+  })
+
+  it('sends one-time and interval rows with their times in UTC, leaving out unfinished ones', () => {
+    const request = draftsToRequest([
+      { ...emptyTrigger('Once'), name: 'launch', startAt: '2030-03-01T09:30' },
+      { ...emptyTrigger('Once'), name: 'no time' },
+      { ...emptyTrigger('Interval'), every: '15', unit: 'minutes' },
+      {
+        ...emptyTrigger('Interval'),
+        every: '2',
+        unit: 'hours',
+        startAt: '2030-03-01T08:00',
+        runs: '3',
+        skipMissed: true,
+      },
+      { ...emptyTrigger('Interval'), name: 'no interval', every: '0' },
+    ])
+
+    expect(request).toEqual([
+      { name: 'launch', kind: 'Once', startAtUtc: new Date('2030-03-01T09:30').toISOString() },
+      { name: null, kind: 'Interval', intervalSeconds: 900 },
+      {
+        name: null,
+        kind: 'Interval',
+        intervalSeconds: 7200,
+        startAtUtc: new Date('2030-03-01T08:00').toISOString(),
+        // Three runs in all: the first and two repeats
+        repeatCount: 2,
+        skipMissed: true,
+      },
+    ])
+  })
+
+  it('reads an interval in its largest whole unit and its repeats as runs in all', () => {
+    const [every] = draftsFromTriggers([
+      trigger({
+        kind: 'Interval',
+        cronExpression: null,
+        startTimeUtc: '2030-01-01T06:00:00Z',
+        intervalSeconds: 7200,
+        repeatCount: 4,
+      }),
+    ])
+    expect(every).toMatchObject({ every: '2', unit: 'hours', runs: '5' })
+  })
+
+  it('sends back the stored start time while it is unchanged, so the trigger is left alone', () => {
+    const stored = '2030-01-01T06:00:12.345Z'
+    const [draft] = draftsFromTriggers([
+      trigger({
+        kind: 'Interval',
+        cronExpression: null,
+        startTimeUtc: stored,
+        intervalSeconds: 60,
+      }),
+    ])
+    expect(draftsToRequest([draft])[0].startAtUtc).toBe(stored)
+    expect(draftsToRequest([{ ...draft, startAt: '2030-02-01T06:00' }])[0].startAtUtc).toBe(
+      new Date('2030-02-01T06:00').toISOString()
+    )
   })
 
   it('reads whether a trigger skips missed runs from its misfire instruction', () => {

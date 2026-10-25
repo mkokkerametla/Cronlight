@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace Cronlight;
 
 public enum JobHistoryStorage
@@ -38,4 +40,21 @@ public class JobHistoryOptions
 
     /// <summary>Error messages are truncated to this length. Stack traces are never stored.</summary>
     public int MaxErrorLength { get; set; } = 2000;
+
+    /// <summary>
+    /// Keep what each run logs through <c>ILogger</c> with it in history, where the dashboard shows it. Covers the host's
+    /// own scheduler; a scheduler built in code needs its job factory wrapped with
+    /// <see cref="CronlightHistoryExtensions.WithCronlightRunLogs"/>. While on, a run's
+    /// <c>IJobExecutionContext.JobInstance</c> is Cronlight's wrapper around the job.
+    /// </summary>
+    public bool CaptureLogs { get; set; } = true;
+
+    /// <summary>The least severe entries kept in a run's log. The host's logging filters apply too.</summary>
+    public LogLevel MinimumLogLevel { get; set; } = LogLevel.Information;
+
+    /// <summary>Entries kept per run. Later ones are counted, and the log says how many were left out.</summary>
+    public int MaxLogEntries { get; set; } = 200;
+
+    /// <summary>Log messages are truncated to this length.</summary>
+    public int MaxLogMessageLength { get; set; } = 1000;
 }

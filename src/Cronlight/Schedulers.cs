@@ -28,6 +28,22 @@ internal sealed class CronlightSchedulers(ISchedulerFactory factory, IEnumerable
 
     public Task<IScheduler> Default(CancellationToken cancellationToken = default) => factory.GetScheduler(cancellationToken);
 
+    /// <summary>
+    /// The host's scheduler as it was attached at startup. Quartz forgets a scheduler once it has shut down, and asking
+    /// its factory again then creates a new one, so this is how to tell that the host's own has shut down.
+    /// </summary>
+    public IScheduler? AttachedHost { get; private set; }
+
+    public async Task AttachHost(CancellationToken cancellationToken)
+    {
+        var host = await Default(cancellationToken);
+        await Attach(host, cancellationToken);
+        AttachedHost = host;
+    }
+
+    /// <summary>The schedulers the host added, without the host's own, leaving out ones that have shut down.</summary>
+    public IEnumerable<IScheduler> Added => extra.Values.Where(s => !s.IsShutdown).OrderBy(s => s.SchedulerName, StringComparer.Ordinal);
+
     public async Task Add(IScheduler scheduler, QuartzDataSource? dataSource, CancellationToken cancellationToken)
     {
         await Attach(scheduler, cancellationToken);
@@ -56,9 +72,7 @@ internal sealed class CronlightSchedulers(ISchedulerFactory factory, IEnumerable
     /// <summary>Every scheduler served, the host's own first, then by name. Ones that have been shut down are left out.</summary>
     public async Task<IReadOnlyList<IScheduler>> All(CancellationToken cancellationToken = default)
     {
-        var all = new List<IScheduler> { await Default(cancellationToken) };
-        all.AddRange(extra.Values.Where(s => !s.IsShutdown).OrderBy(s => s.SchedulerName, StringComparer.Ordinal));
-        return all;
+        return [await Default(cancellationToken), .. Added];
     }
 
     /// <summary>The scheduler with this name, the host's own for null or empty, or null when none is served by that name.</summary>
@@ -112,8 +126,7 @@ public static class CronlightSchedulerExtensions
 /// <summary>Attaches Cronlight to the host's own scheduler before Quartz starts running jobs.</summary>
 internal sealed class SchedulerRegistration(CronlightSchedulers schedulers) : IHostedService
 {
-    public async Task StartAsync(CancellationToken cancellationToken) =>
-        await schedulers.Attach(await schedulers.Default(cancellationToken), cancellationToken);
+    public Task StartAsync(CancellationToken cancellationToken) => schedulers.AttachHost(cancellationToken);
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

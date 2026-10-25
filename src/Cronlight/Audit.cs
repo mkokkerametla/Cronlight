@@ -14,12 +14,17 @@ namespace Cronlight;
 /// A change made through the dashboard or its API, or an attempt that was refused. Secret values are
 /// never included: a changed secret shows as <c>********</c> on both sides.
 /// </summary>
-/// <param name="Action">create, update, pause, resume, trigger, cancel, cancel-retry or delete.</param>
+/// <param name="Action">
+/// create, update, pause, resume, trigger, cancel, cancel-retry or delete for one job; pause-group or resume-group for every
+/// job in <paramref name="JobGroup"/>, and pause-all or resume-all for every job in the scheduler, with an empty group.
+/// For these the job name is empty.
+/// </param>
 /// <param name="User">The user's name, or "anonymous" when the dashboard allows anonymous access.</param>
 /// <param name="Error">Why the request was refused or failed; null when it succeeded.</param>
 /// <param name="Changes">
 /// What a create or update set, by field: description, triggers, retry, or data.&lt;key&gt;. For a run (trigger),
-/// the data changed for that run only, and retryOf when it repeats a failed run.
+/// the data changed for that run only, and retryOf when it repeats a failed run. For a group or the whole scheduler,
+/// jobs: how many jobs it held.
 /// </param>
 /// <param name="Scheduler">The scheduler the job is in.</param>
 public sealed record CronlightAuditEvent(
@@ -131,11 +136,12 @@ internal static class Audit
     private static (string Group, string Name) Target(EndpointFilterInvocationContext context)
     {
         var route = context.HttpContext.Request.RouteValues;
-        if (route["group"] is string group && route["name"] is string name)
-            return (group, name);
-        // Creating: the job is named in the body
-        var create = context.Arguments.OfType<CreateJobRequest>().FirstOrDefault();
-        return (string.IsNullOrWhiteSpace(create?.Group) ? "DEFAULT" : create.Group, create?.Name ?? "");
+        if (route["group"] is string group)
+            return (group, route["name"] as string ?? "");
+        // Creating: the job is named in the body. Pausing or resuming the whole scheduler names no job
+        if (context.Arguments.OfType<CreateJobRequest>().FirstOrDefault() is not { } create)
+            return ("", "");
+        return (string.IsNullOrWhiteSpace(create.Group) ? "DEFAULT" : create.Group, create.Name ?? "");
     }
 
     private static string ActionName(HttpRequest request)
@@ -144,9 +150,15 @@ internal static class Audit
             return "update";
         if (request.Method == HttpMethods.Delete)
             return "delete";
-        // POST jobs creates; POST jobs/{group}/{name}/{action} pauses, resumes or triggers
-        var last = (request.Path.Value ?? "").TrimEnd('/').Split('/')[^1];
-        return last == "jobs" ? "create" : last;
+        // POST jobs creates; POST jobs/{group}/{name}/{action} pauses, resumes or triggers; POST groups/{group}/{action}
+        // and scheduler/{action} pause or resume many jobs at once
+        var segments = (request.Path.Value ?? "").TrimEnd('/').Split('/');
+        var last = segments[^1];
+        var route = request.RouteValues;
+        return last == "jobs" ? "create"
+            : route.ContainsKey("group") && !route.ContainsKey("name") ? $"{last}-group"
+            : !route.ContainsKey("group") && segments.Length >= 2 && segments[^2] == "scheduler" ? $"{last}-all"
+            : last;
     }
 
     internal static string UserName(ClaimsPrincipal user) =>

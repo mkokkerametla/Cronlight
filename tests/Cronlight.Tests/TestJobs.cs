@@ -157,3 +157,32 @@ public class SelfDeletingJob : IJob
         throw new InvalidOperationException("Failed after deleting itself");
     }
 }
+
+/// <summary>Logs through ILogger while it runs, its apiToken among it, from its own code and from work it starts.</summary>
+public class LoggingJob(Microsoft.Extensions.Logging.ILogger<LoggingJob> logger) : IJob
+{
+    /// <summary>Set once work a run left running (with "linger") has logged, after the run finished.</summary>
+    public static readonly ManualResetEventSlim Lingered = new();
+
+    public async Task Execute(IJobExecutionContext context)
+    {
+        var data = context.MergedJobDataMap;
+        // GetString throws for a missing key
+        string? Get(string key) => data.TryGetValue(key, out var value) ? value?.ToString() : null;
+        if (Get("linger") == "true")
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(500);
+                Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(logger, "Still going after the run");
+                Lingered.Set();
+            });
+        Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(logger, "Calling {Customer} with token {Token}",
+            Get("customer"), Get("apiToken"));
+        Microsoft.Extensions.Logging.LoggerExtensions.LogDebug(logger, "Below the minimum level, so not kept");
+        await Task.Run(() => Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(logger,
+            new TimeoutException("upstream slow"), "Retrying a call"));
+        var lines = int.TryParse(Get("lines"), out var n) ? n : 0;
+        for (var i = 1; i <= lines; i++)
+            Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(logger, "Line {Line}", i);
+    }
+}

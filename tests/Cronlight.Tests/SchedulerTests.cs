@@ -116,7 +116,7 @@ public class SchedulerTests
         var extra = await AddScheduler(host);
         try
         {
-            Assert.Equal(["Cronlight.Alerts", "Cronlight.History", "Cronlight.Retries"],
+            Assert.Equal(["Cronlight.Alerts", "Cronlight.History", "Cronlight.Metrics", "Cronlight.Retries"],
                 extra.ListenerManager.GetJobListeners().Select(l => l.Name).Order());
             Assert.Contains(extra.ListenerManager.GetTriggerListeners(), l => l.Name == "Cronlight.SecretReferences");
 

@@ -1,4 +1,11 @@
-import type { JobParameter, JobRetryPolicy, JobType, Trigger, TriggerRequest } from '@/types'
+import type {
+  EditableTriggerKind,
+  JobParameter,
+  JobRetryPolicy,
+  JobType,
+  Trigger,
+  TriggerRequest,
+} from '@/types'
 
 // Form state <-> API request conversion shared by the create and edit forms
 
@@ -35,12 +42,40 @@ export const rowsToData = (rows: DataRow[]): Record<string, string> =>
     rows.filter(r => r.key.trim() && (r.value !== '' || r.param)).map(r => [r.key.trim(), r.value])
   )
 
+export type IntervalUnit = 'seconds' | 'minutes' | 'hours' | 'days'
+
+export const unitSeconds: Record<IntervalUnit, number> = {
+  seconds: 1,
+  minutes: 60,
+  hours: 3600,
+  days: 86_400,
+}
+
+export const editableKinds: EditableTriggerKind[] = ['Cron', 'Once', 'Interval']
+
+export const isEditable = (trigger: Trigger) => (editableKinds as string[]).includes(trigger.kind)
+
 export interface TriggerDraft {
   /** Client-only row key, so per-row state (cron preview, schedule assistant) stays with its trigger */
   id: number
+  kind: EditableTriggerKind
   name: string
+  /** Cron */
   cronExpression: string
+  /** Cron */
   timeZone: string
+  /** Once and Interval: a datetime-local value, in the viewer's time zone */
+  startAt: string
+  /**
+   * The stored start time and how startAt first showed it. While startAt still shows it, the exact stored time is sent
+   * back, so a trigger left as it was is not rescheduled.
+   */
+  storedStart: { local: string; iso: string } | null
+  /** Interval: how many units between runs */
+  every: string
+  unit: IntervalUnit
+  /** Interval: how many runs in all; empty repeats forever */
+  runs: string
   /** Skip a fire time the scheduler missed, instead of running once as soon as it can */
   skipMissed: boolean
 }
@@ -48,37 +83,99 @@ export interface TriggerDraft {
 let lastDraftId = 0
 const nextDraftId = () => ++lastDraftId
 
-export const emptyTrigger = (): TriggerDraft => ({
+export const emptyTrigger = (kind: EditableTriggerKind = 'Cron'): TriggerDraft => ({
   id: nextDraftId(),
+  kind,
   name: '',
   cronExpression: '',
   timeZone: '',
+  startAt: '',
+  storedStart: null,
+  every: '',
+  unit: 'minutes',
+  runs: '',
   skipMissed: false,
 })
 
+const pad = (n: number) => String(n).padStart(2, '0')
+
+/** A time as a datetime-local input shows it, in the viewer's time zone, to the minute */
+export function toLocalInput(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** A datetime-local value (read in the viewer's time zone) as UTC, or null when it is not a time */
+export function fromLocalInput(value: string): string | null {
+  const time = new Date(value)
+  return value && !Number.isNaN(time.getTime()) ? time.toISOString() : null
+}
+
+/** The largest unit the interval is a whole number of */
+const intervalUnit = (seconds: number): IntervalUnit =>
+  (['days', 'hours', 'minutes'] as const).find(u => seconds % unitSeconds[u] === 0) ?? 'seconds'
+
 export const draftsFromTriggers = (triggers: Trigger[]): TriggerDraft[] => {
-  const cron = triggers
-    .filter(t => t.kind === 'Cron')
-    .map(t => ({
-      id: nextDraftId(),
+  const drafts = triggers.filter(isEditable).map((t): TriggerDraft => {
+    const local = t.startTimeUtc ? toLocalInput(t.startTimeUtc) : ''
+    const unit = intervalUnit(t.intervalSeconds ?? 60)
+    return {
+      ...emptyTrigger(t.kind as EditableTriggerKind),
       name: t.name,
       cronExpression: t.cronExpression ?? '',
       timeZone: t.timeZone === 'UTC' ? '' : (t.timeZone ?? ''),
-      skipMissed: t.misfireInstruction === 'DoNothing',
-    }))
-  return cron.length ? cron : [emptyTrigger()]
+      startAt: local,
+      storedStart: t.startTimeUtc ? { local, iso: t.startTimeUtc } : null,
+      every: t.intervalSeconds ? String(t.intervalSeconds / unitSeconds[unit]) : '',
+      unit,
+      runs: t.repeatCount != null ? String(t.repeatCount + 1) : '',
+      skipMissed: t.skipsMissed ?? t.misfireInstruction === 'DoNothing',
+    }
+  })
+  return drafts.length ? drafts : [emptyTrigger()]
 }
 
+const startAtUtc = (t: TriggerDraft) =>
+  t.storedStart && t.startAt === t.storedStart.local ? t.storedStart.iso : fromLocalInput(t.startAt)
+
+const positive = (text: string) => {
+  const n = Number(text.trim())
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
+/** Rows not filled in enough to say when they run are left out, as an empty cron row always was */
+const complete = (t: TriggerDraft) =>
+  t.kind === 'Once'
+    ? startAtUtc(t) !== null
+    : t.kind === 'Interval'
+      ? positive(t.every) !== null
+      : t.cronExpression.trim() !== ''
+
 export const draftsToRequest = (drafts: TriggerDraft[]): TriggerRequest[] =>
-  drafts
-    .filter(t => t.cronExpression.trim())
-    .map(t => ({
+  drafts.filter(complete).map(t => {
+    const common = {
       name: t.name.trim() || null,
-      cronExpression: t.cronExpression.trim(),
-      timeZone: t.timeZone.trim() || null,
       // Left out when off: Quartz's default, running once as soon as it can
       ...(t.skipMissed && { skipMissed: true }),
-    }))
+    }
+    if (t.kind === 'Once') return { ...common, kind: 'Once', startAtUtc: startAtUtc(t)! }
+    if (t.kind === 'Interval') {
+      const start = startAtUtc(t)
+      const runs = positive(t.runs)
+      return {
+        ...common,
+        kind: 'Interval',
+        intervalSeconds: positive(t.every)! * unitSeconds[t.unit],
+        ...(start && { startAtUtc: start }),
+        ...(runs !== null && { repeatCount: runs - 1 }),
+      }
+    }
+    return {
+      ...common,
+      cronExpression: t.cronExpression.trim(),
+      timeZone: t.timeZone.trim() || null,
+    }
+  })
 
 /** Retry fields as typed, so a field can be empty while it is edited */
 export interface RetryDraft {

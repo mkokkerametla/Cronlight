@@ -9,11 +9,20 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Quartz;
 using Quartz.Impl.Matchers;
+using Quartz.Impl.Triggers;
 
 namespace Cronlight;
 
+/// <param name="Kind">
+/// Cron, Once (runs one time), Interval (runs every so often), Retry (a waiting retry), or the trigger's class name for
+/// other kinds, which the dashboard shows but does not edit.
+/// </param>
 /// <param name="MisfireInstruction">What Quartz does when the trigger misses a fire time, e.g. FireOnceNow or DoNothing.</param>
 /// <param name="Attempt">For a waiting retry, the attempt it will be: 2 for the first retry.</param>
+/// <param name="StartTimeUtc">For Once and Interval triggers: when it runs, or first runs.</param>
+/// <param name="IntervalSeconds">For Interval triggers: the time between runs.</param>
+/// <param name="RepeatCount">For Interval triggers: how many runs follow the first; null when it repeats forever.</param>
+/// <param name="SkipsMissed">A fire time the scheduler misses is skipped, rather than run as soon as it can.</param>
 public record TriggerDto(
     string Name,
     string Group,
@@ -24,7 +33,11 @@ public record TriggerDto(
     DateTimeOffset? NextFireTimeUtc,
     DateTimeOffset? PreviousFireTimeUtc,
     string MisfireInstruction,
-    int? Attempt = null
+    int? Attempt = null,
+    DateTimeOffset? StartTimeUtc = null,
+    long? IntervalSeconds = null,
+    int? RepeatCount = null,
+    bool SkipsMissed = false
 );
 
 public record JobDto(
@@ -57,11 +70,21 @@ public record JobPageDto(
 /// <summary>Counts over every job, whatever the search and filters.</summary>
 public record JobCountsDto(int All, int Active, int Paused, int Unloadable);
 
+/// <param name="CronExpression">For Cron triggers.</param>
+/// <param name="TimeZone">For Cron triggers: the zone the expression is read in; UTC when left out.</param>
 /// <param name="SkipMissed">
 /// When the scheduler misses a fire time (it was down, or had no free thread), skip it and wait for the next one,
-/// instead of running once as soon as it can (Quartz's default).
+/// instead of running once as soon as it can (Quartz's default). A Once trigger that skips its fire time never runs.
 /// </param>
-public record TriggerRequest(string? Name, string CronExpression, string? TimeZone, bool SkipMissed = false);
+/// <param name="Kind">Cron (the default), Once or Interval.</param>
+/// <param name="StartAtUtc">
+/// For Once triggers, when it runs, which must be in the future. For Interval triggers, its first run: now when left
+/// out, and a time already past moves on to the next run after now, keeping the same rhythm.
+/// </param>
+/// <param name="IntervalSeconds">For Interval triggers: the time between runs.</param>
+/// <param name="RepeatCount">For Interval triggers: how many runs follow the first; null (the default) repeats forever.</param>
+public record TriggerRequest(string? Name, string? CronExpression, string? TimeZone, bool SkipMissed = false,
+    string? Kind = null, DateTimeOffset? StartAtUtc = null, long? IntervalSeconds = null, int? RepeatCount = null);
 
 public record CreateJobRequest(
     string Type,
@@ -75,11 +98,16 @@ public record CreateJobRequest(
 );
 
 /// <summary>
-/// Null properties are left unchanged. Triggers replaces the job's cron triggers only. Retry with MaxRetries 0 turns
-/// retries off, even when the job type has a [CronlightRetry] policy.
+/// Null properties are left unchanged. Triggers replaces the job's triggers of the kinds in TriggerKinds; waiting retries,
+/// pending manual runs and other kinds of trigger are always kept. Retry with MaxRetries 0 turns retries off, even when
+/// the job type has a [CronlightRetry] policy.
 /// </summary>
+/// <param name="TriggerKinds">
+/// The kinds of trigger Triggers replaces: Cron, Once and/or Interval. Left out, it replaces cron triggers and the kinds
+/// Triggers holds, so a client that only sends cron triggers keeps the job's others. The dashboard sends all three.
+/// </param>
 public record UpdateJobRequest(string? Description, Dictionary<string, string>? Data, List<TriggerRequest>? Triggers,
-    JobRetryPolicy? Retry = null);
+    JobRetryPolicy? Retry = null, IReadOnlyList<string>? TriggerKinds = null);
 
 /// <summary>Runs a job now. Data overrides the saved job data for this run (and its retries) only.</summary>
 /// <param name="RetryOf">The fire instance id of the failed run this one retries, for the audit log.</param>
@@ -311,6 +339,16 @@ internal static class DashboardApi
             });
         });
 
+        api.MapGet("/history/{id:long}/log", async (long id, HttpContext http, CancellationToken ct) =>
+        {
+            if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
+                return Results.NotFound("Execution history is not enabled.");
+            var scheduler = await Scheduler(http, ct);
+            return await store.GetLog(scheduler.SchedulerName, id, ct) is { } log
+                ? Results.Ok(log)
+                : Results.NotFound("This run has no log.");
+        });
+
         api.MapGet("/history/summary", async (HttpContext http, int? hours, CancellationToken ct) =>
         {
             if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
@@ -423,13 +461,16 @@ internal static class DashboardApi
 
             var requested = new List<ITrigger>();
             IReadOnlyCollection<ITrigger> current = [];
+            IReadOnlySet<string> kinds = EditableKinds;
             if (request.Triggers != null)
             {
+                if (!TryReplacedKinds(request, out kinds, out var badKinds))
+                    return Results.BadRequest(badKinds);
                 current = await scheduler.GetTriggersOfJob(key);
-                if (!TryBuildTriggers(key, request.Triggers, current.Select(t => t.Key).ToList(), out requested, out var error))
+                if (!TryBuildTriggers(key, request.Triggers, current, out requested, out var error))
                     return Results.BadRequest(error);
-                var ownCron = current.OfType<ICronTrigger>().Select(t => t.Key).ToHashSet();
-                if (await FindTriggerConflict(scheduler, requested, ownCron) is { } conflict)
+                var own = current.Where(t => kinds.Contains(Kind(t))).Select(t => t.Key).ToHashSet();
+                if (await FindTriggerConflict(scheduler, requested, own) is { } conflict)
                     return Results.Conflict(conflict);
             }
 
@@ -444,7 +485,7 @@ internal static class DashboardApi
             if (request.Description != null)
                 AddChange(changes, "description", existing.Description, request.Description);
             if (request.Triggers != null)
-                AddChange(changes, "triggers", DescribeTriggers(current), DescribeTriggers(requested));
+                AddChange(changes, "triggers", DescribeTriggers(current, kinds), DescribeTriggers(requested));
             var retryBefore = Retries.For(existing);
             var retryAfter = Retries.For(existing.GetJobBuilder().SetJobData(data).Build());
             if (retryBefore != retryAfter)
@@ -461,7 +502,7 @@ internal static class DashboardApi
             }
 
             if (request.Triggers != null)
-                await ReplaceCronTriggers(scheduler, key, requested);
+                await ReplaceTriggers(scheduler, key, requested, kinds);
 
             return Results.NoContent();
         });
@@ -476,6 +517,43 @@ internal static class DashboardApi
 
         api.MapPost("/jobs/{group}/{name}/runs/{fireInstanceId}/cancel", CancelRun);
         api.MapPost("/jobs/{group}/{name}/retries/{trigger}/cancel-retry", CancelRetry);
+
+        api.MapPost("/groups/{group}/pause", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
+            OnJobs(http, index, o.Value, group, (s, m) => s.PauseJobs(m, ct), ct));
+        api.MapPost("/groups/{group}/resume", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
+            OnJobs(http, index, o.Value, group, (s, m) => s.ResumeJobs(m, ct), ct));
+        api.MapPost("/scheduler/pause", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
+            OnJobs(http, index, o.Value, null, (s, _) => s.PauseAll(ct), ct));
+        api.MapPost("/scheduler/resume", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
+            OnJobs(http, index, o.Value, null, (s, _) => s.ResumeAll(ct), ct));
+    }
+
+    /// <summary>
+    /// Pauses or resumes every job in a group, or with a null group every job in the scheduler. Quartz does it in the
+    /// job store, so it reaches every node. Jobs another app owns (their type cannot be loaded here) are not this
+    /// dashboard's to change, so unless AllowManagingUnloadableJobs is on, a group or scheduler holding any is refused
+    /// rather than half done.
+    /// </summary>
+    private static async Task<IResult> OnJobs(HttpContext http, JobIndexReader index, CronlightOptions options, string? group,
+        Func<IScheduler, GroupMatcher<JobKey>, Task> action, CancellationToken cancellationToken)
+    {
+        var scheduler = await Scheduler(http, cancellationToken);
+        var jobs = (await index.Read(scheduler, cancellationToken)).Where(j => group == null || j.Group == group).ToList();
+        if (group != null && jobs.Count == 0)
+            return Results.NotFound($"Group '{group}' has no jobs.");
+
+        var foreign = jobs.Where(j => !j.Loadable).ToList();
+        if (foreign.Count > 0 && !options.AllowManagingUnloadableJobs)
+            return Results.Problem(
+                title: "Some jobs are read-only in this dashboard.",
+                detail: $"{(group == null ? "The scheduler" : $"Group '{group}'")} has {foreign.Count} job(s) whose type cannot be loaded in " +
+                        $"this application, such as {foreign[0].Group}.{foreign[0].Name}. They probably belong to another application " +
+                        "sharing this scheduler. Pause or resume jobs one by one instead.",
+                statusCode: StatusCodes.Status409Conflict);
+
+        Audit.RecordChanges(http, new Dictionary<string, CronlightAuditChange> { ["jobs"] = new(null, jobs.Count.ToString()) });
+        await action(scheduler, GroupMatcher<JobKey>.GroupEquals(group ?? ""));
+        return Results.NoContent();
     }
 
     /// <summary>
@@ -633,10 +711,35 @@ internal static class DashboardApi
         }
     }
 
-    private static async Task ReplaceCronTriggers(IScheduler scheduler, JobKey key, List<ITrigger> requested)
+    /// <summary>The kinds of trigger the dashboard creates and edits (see <see cref="Kind"/>).</summary>
+    private static readonly IReadOnlySet<string> EditableKinds = new HashSet<string> { "Cron", "Once", "Interval" };
+
+    private static string? EditableKind(string? kind) =>
+        EditableKinds.FirstOrDefault(k => string.Equals(k, kind ?? "Cron", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The kinds of trigger an update replaces: those it names, else cron and the kinds it sends.</summary>
+    private static bool TryReplacedKinds(UpdateJobRequest request, out IReadOnlySet<string> kinds, out string? error)
+    {
+        error = null;
+        var sent = request.Triggers!.Select(t => EditableKind(t.Kind)).OfType<string>().ToHashSet();
+        if (request.TriggerKinds == null)
+        {
+            kinds = sent.Append("Cron").ToHashSet();
+            return true;
+        }
+
+        kinds = request.TriggerKinds.Select(EditableKind).OfType<string>().ToHashSet();
+        if (request.TriggerKinds.FirstOrDefault(k => EditableKind(k) == null) is { } unknown)
+            error = $"Unknown trigger kind '{unknown}' in triggerKinds; expected Cron, Once or Interval";
+        else if (sent.Except(kinds).FirstOrDefault() is { } missing)
+            error = $"Triggers holds a {missing} trigger, but triggerKinds does not name {missing}";
+        return error == null;
+    }
+
+    private static async Task ReplaceTriggers(IScheduler scheduler, JobKey key, List<ITrigger> requested, IReadOnlySet<string> kinds)
     {
         var all = await scheduler.GetTriggersOfJob(key);
-        var current = all.OfType<ICronTrigger>().ToDictionary(t => t.Key);
+        var current = all.Where(t => kinds.Contains(Kind(t))).ToDictionary(t => t.Key);
         var stale = current.Keys.Where(k => requested.All(r => !r.Key.Equals(k))).ToList();
 
         // Quartz deletes a non-durable job (the default for jobs the host registers) together with its
@@ -645,15 +748,14 @@ internal static class DashboardApi
             await scheduler.AddJob(job.GetJobBuilder().StoreDurably().Build(), replace: true);
 
         // Add and update first, remove last: the job keeps a trigger throughout
-        foreach (var trigger in requested.Cast<ICronTrigger>())
+        foreach (var trigger in requested)
         {
             if (!current.TryGetValue(trigger.Key, out var old))
             {
                 await scheduler.ScheduleJob(trigger);
                 continue;
             }
-            if (old.CronExpressionString == trigger.CronExpressionString && old.TimeZone.Id == trigger.TimeZone.Id
-                && old.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing == (trigger.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing))
+            if (SameSchedule(old, trigger))
                 continue;
 
             // Rescheduling replaces the trigger, so carry over a paused state explicitly
@@ -666,6 +768,16 @@ internal static class DashboardApi
         foreach (var staleKey in stale)
             await scheduler.UnscheduleJob(staleKey);
     }
+
+    /// <summary>Whether a trigger sent back by the editor still says what the stored one does, so it is left alone.</summary>
+    private static bool SameSchedule(ITrigger old, ITrigger requested) => (old, requested) switch
+    {
+        (ICronTrigger o, ICronTrigger r) => o.CronExpressionString == r.CronExpressionString && o.TimeZone.Id == r.TimeZone.Id
+            && Misfires.SkipsMissed(o) == Misfires.SkipsMissed(r),
+        (ISimpleTrigger o, ISimpleTrigger r) => o.RepeatInterval == r.RepeatInterval && o.RepeatCount == r.RepeatCount
+            && o.StartTimeUtc == r.StartTimeUtc && Misfires.SkipsMissed(o) == Misfires.SkipsMissed(r),
+        _ => false,
+    };
 
     /// <summary>
     /// Trigger keys are unique across all jobs, so a name another job's trigger already uses would make
@@ -727,34 +839,17 @@ internal static class DashboardApi
     /// (host-registered triggers are often in DEFAULT rather than the job's group), and unnamed
     /// triggers never take one of their names.
     /// </param>
-    private static bool TryBuildTriggers(JobKey key, List<TriggerRequest> requests, IReadOnlyCollection<TriggerKey> existing,
+    private static bool TryBuildTriggers(JobKey key, List<TriggerRequest> requests, IReadOnlyCollection<ITrigger> existing,
         out List<ITrigger> triggers, out string? error)
     {
         triggers = new();
         error = null;
         var taken = requests.Where(r => !string.IsNullOrWhiteSpace(r.Name)).Select(r => r.Name!.Trim())
-            .Concat(existing.Select(k => k.Name))
+            .Concat(existing.Select(t => t.Key.Name))
             .ToHashSet();
         var next = 1;
         foreach (var r in requests)
         {
-            if (string.IsNullOrWhiteSpace(r.CronExpression) || !CronExpression.IsValidExpression(r.CronExpression))
-            {
-                error = $"Invalid cron expression '{r.CronExpression}'";
-                return false;
-            }
-            if (!TryResolveTimeZone(r.TimeZone, out var tz))
-            {
-                error = $"Unknown time zone '{r.TimeZone}'";
-                return false;
-            }
-
-            if (new CronExpression(r.CronExpression.Trim()) { TimeZone = tz }.GetNextValidTimeAfter(DateTimeOffset.UtcNow) == null)
-            {
-                error = $"Cron expression '{r.CronExpression}' never fires again";
-                return false;
-            }
-
             string name;
             if (!string.IsNullOrWhiteSpace(r.Name))
                 name = r.Name.Trim();
@@ -769,19 +864,110 @@ internal static class DashboardApi
                 return false;
             }
 
-            var group = existing.FirstOrDefault(k => k.Name == name)?.Group ?? key.Group;
-            triggers.Add(TriggerBuilder.Create()
-                .WithIdentity(name, group)
-                .ForJob(key)
-                .WithCronSchedule(r.CronExpression.Trim(), c =>
-                {
-                    c.InTimeZone(tz);
-                    if (r.SkipMissed)
-                        c.WithMisfireHandlingInstructionDoNothing();
-                })
-                .Build());
+            var stored = existing.FirstOrDefault(t => t.Key.Name == name);
+            var builder = TriggerBuilder.Create()
+                .WithIdentity(name, stored?.Key.Group ?? key.Group)
+                .ForJob(key);
+            error = (r.Kind ?? "Cron").ToLowerInvariant() switch
+            {
+                "cron" => Cron(r, builder),
+                "once" => Once(r, builder, stored),
+                "interval" => Interval(r, builder, stored),
+                _ => $"Unknown trigger kind '{r.Kind}'; expected Cron, Once or Interval",
+            };
+            if (error != null)
+                return false;
+            triggers.Add(builder.Build());
         }
         return true;
+    }
+
+    private static string? Cron(TriggerRequest r, TriggerBuilder builder)
+    {
+        if (string.IsNullOrWhiteSpace(r.CronExpression) || !CronExpression.IsValidExpression(r.CronExpression))
+            return $"Invalid cron expression '{r.CronExpression}'";
+        if (!TryResolveTimeZone(r.TimeZone, out var tz))
+            return $"Unknown time zone '{r.TimeZone}'";
+        if (new CronExpression(r.CronExpression.Trim()) { TimeZone = tz }.GetNextValidTimeAfter(DateTimeOffset.UtcNow) == null)
+            return $"Cron expression '{r.CronExpression}' never fires again";
+
+        builder.WithCronSchedule(r.CronExpression.Trim(), c =>
+        {
+            c.InTimeZone(tz);
+            if (r.SkipMissed)
+                c.WithMisfireHandlingInstructionDoNothing();
+        });
+        return null;
+    }
+
+    /// <param name="stored">The job's trigger by this name, if it has one: sent back unchanged, its time may have passed.</param>
+    private static string? Once(TriggerRequest r, TriggerBuilder builder, ITrigger? stored)
+    {
+        if (r.StartAtUtc is not { } start)
+            return "A one-time trigger needs the time it runs (startAtUtc)";
+        if (start <= DateTimeOffset.UtcNow && (stored as ISimpleTrigger)?.StartTimeUtc != start)
+            return $"The time {start.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC is in the past";
+
+        builder.StartAt(start).WithSimpleSchedule(s =>
+        {
+            // Explicit rather than Quartz's smart policy, so the dashboard shows exactly what happens
+            if (r.SkipMissed)
+                s.WithMisfireHandlingInstructionNextWithRemainingCount();
+            else
+                s.WithMisfireHandlingInstructionFireNow();
+        });
+        return null;
+    }
+
+    private const long MaxIntervalSeconds = 366L * 24 * 60 * 60;
+
+    private static string? Interval(TriggerRequest r, TriggerBuilder builder, ITrigger? stored)
+    {
+        if (r.IntervalSeconds is not { } seconds || seconds < 1 || seconds > MaxIntervalSeconds)
+            return "The interval must be between 1 second and 366 days, in seconds (intervalSeconds)";
+        if (r.RepeatCount is < 0)
+            return "The repeat count cannot be negative; leave it out to repeat forever";
+        // Quartz would store it as a one-time trigger, and the interval would be lost
+        if (r.RepeatCount == 0)
+            return "An interval trigger that runs once is a one-time trigger: use kind Once, or a repeat count of 1 or more";
+        var interval = TimeSpan.FromSeconds(seconds);
+
+        var now = DateTimeOffset.UtcNow;
+        var start = r.StartAtUtc ?? now;
+        var repeat = r.RepeatCount ?? SimpleTriggerImpl.RepeatIndefinitely;
+        var old = stored != null && Kind(stored) == "Interval" ? (ISimpleTrigger)stored : null;
+        // Sent back as it is stored: left alone (ReplaceTriggers does not reschedule it), however long ago it started
+        var unchanged = old != null && old.StartTimeUtc == start && old.RepeatInterval == interval && old.RepeatCount == repeat
+            && Misfires.SkipsMissed(old) == r.SkipMissed;
+        if (!unchanged && start < now)
+        {
+            // A start already past, as an edited trigger sends back, moves to the next run on the same rhythm, so that
+            // changing the trigger does not run the job at once
+            start += interval * Math.Ceiling((now - start) / interval);
+            // Quartz counts runs from the start, so the runs this trigger has had come off the runs left
+            if (old != null && repeat != SimpleTriggerImpl.RepeatIndefinitely)
+            {
+                var left = repeat + 1 - old.TimesTriggered;
+                if (left < 1)
+                    return $"Trigger '{old.Key.Name}' has already run {old.TimesTriggered} times, as many as it was asked to; " +
+                           "ask for more runs, or remove it";
+                repeat = left - 1;
+            }
+        }
+
+        builder.StartAt(start).WithSimpleSchedule(s =>
+        {
+            s.WithInterval(interval);
+            if (repeat == SimpleTriggerImpl.RepeatIndefinitely)
+                s.RepeatForever();
+            else
+                s.WithRepeatCount(repeat);
+            if (r.SkipMissed)
+                s.WithMisfireHandlingInstructionNextWithRemainingCount();
+            else
+                s.WithMisfireHandlingInstructionNowWithExistingCount();
+        });
+        return null;
     }
 
     private static readonly string[] JobStatuses = ["Active", "Paused", "Unloadable"];
@@ -822,21 +1008,54 @@ internal static class DashboardApi
         {
             var state = await scheduler.GetTriggerState(trigger.Key);
             var cron = trigger as ICronTrigger;
+            var retry = trigger.Key.Group == Retries.TriggerGroup;
+            var kind = Kind(trigger);
+            // Waiting retries and pending manual runs are simple triggers too, but not schedules of the job
+            var simple = kind is "Once" or "Interval" ? (ISimpleTrigger)trigger : null;
             result.Add(new TriggerDto(
                 trigger.Key.Name,
                 trigger.Key.Group,
-                cron != null ? "Cron" : trigger.Key.Group == Retries.TriggerGroup ? "Retry" : trigger is ISimpleTrigger ? "Simple" : trigger.GetType().Name,
+                kind,
                 cron?.CronExpressionString,
                 cron?.TimeZone.Id,
                 state.ToString(),
                 trigger.GetNextFireTimeUtc(),
                 trigger.GetPreviousFireTimeUtc(),
                 Misfires.Instruction(trigger),
-                trigger.Key.Group == Retries.TriggerGroup && int.TryParse(trigger.JobDataMap.GetString(Retries.AttemptKey), out var attempt) ? attempt : null
+                // Quartz's GetString throws for a missing key, as on a trigger put in the retry group by hand
+                retry && trigger.JobDataMap.TryGetValue(Retries.AttemptKey, out var value) && int.TryParse(value?.ToString(), out var attempt)
+                    ? attempt
+                    : null,
+                simple?.StartTimeUtc,
+                kind == "Interval" ? (long)simple!.RepeatInterval.TotalSeconds : null,
+                simple is { RepeatCount: > 0 } ? simple.RepeatCount : null,
+                Misfires.SkipsMissed(trigger)
             ));
         }
         return result;
     }
+
+    /// <summary>
+    /// Cron, Once and Interval, which the dashboard edits; Retry for a waiting retry and RunNow for a manual run waiting to
+    /// start (e.g. behind a run of a job that does not run concurrently), which it shows but never changes; else the
+    /// trigger's class name. A simple trigger whose interval is not a whole number of seconds up to 366 days is shown by
+    /// class name too, since the editor could not send it back as it is.
+    /// </summary>
+    private static string Kind(ITrigger trigger) => trigger switch
+    {
+        ICronTrigger => "Cron",
+        _ when trigger.Key.Group == Retries.TriggerGroup => "Retry",
+        ISimpleTrigger { RepeatCount: 0 } when IsManualRun(trigger) => "RunNow",
+        ISimpleTrigger { RepeatCount: 0 } => "Once",
+        ISimpleTrigger s when s.RepeatInterval.Ticks % TimeSpan.TicksPerSecond == 0
+            && s.RepeatInterval.TotalSeconds is >= 1 and <= MaxIntervalSeconds => "Interval",
+        _ => trigger.GetType().Name,
+    };
+
+    // Quartz's TriggerJob names its trigger MT_ and a random number, in the default group
+    private static bool IsManualRun(ITrigger trigger) =>
+        trigger.Key.Group == SchedulerConstants.DefaultGroup && trigger.Key.Name.StartsWith("MT_", StringComparison.Ordinal)
+        && long.TryParse(trigger.Key.Name.AsSpan(3), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _);
 
     private static async Task<bool> CanManage(HttpContext http, CronlightOptions options, string schedulerName)
     {
@@ -916,10 +1135,23 @@ internal static class DashboardApi
             ? $"'{key}' is reserved: job data keys starting with '{Retries.ReservedPrefix}' are Cronlight's own"
             : null;
 
-    private static string? DescribeTriggers(IEnumerable<ITrigger> triggers) =>
-        string.Join("; ", triggers.OfType<ICronTrigger>().Select(t => $"{t.CronExpressionString} ({t.TimeZone.Id}{(t.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing ? ", skips missed" : "")})")) is { Length: > 0 } text
+    private static string? DescribeTriggers(IEnumerable<ITrigger> triggers, IReadOnlySet<string>? kinds = null) =>
+        string.Join("; ", triggers.Where(t => (kinds ?? EditableKinds).Contains(Kind(t))).Select(DescribeTrigger)) is { Length: > 0 } text
             ? text
             : null;
+
+    private static string DescribeTrigger(ITrigger trigger)
+    {
+        var skips = Misfires.SkipsMissed(trigger) ? ", skips missed" : "";
+        return trigger switch
+        {
+            ICronTrigger cron => $"{cron.CronExpressionString} ({cron.TimeZone.Id}{skips})",
+            ISimpleTrigger { RepeatCount: 0 } once => $"once at {once.StartTimeUtc.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC{skips}",
+            ISimpleTrigger every => $"every {(long)every.RepeatInterval.TotalSeconds}s from {every.StartTimeUtc.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC" +
+                (every.RepeatCount > 0 ? $", {every.RepeatCount + 1} runs" : "") + skips,
+            _ => trigger.Key.ToString(),
+        };
+    }
 
     internal static bool IsSensitive(string key, HashSet<string> secretKeys, CronlightOptions options) =>
         secretKeys.Contains(key)

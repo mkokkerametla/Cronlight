@@ -36,6 +36,10 @@ public static class CronlightExtensions
         services.TryAddSingleton<RetryListener>();
         services.AddSchedulerAttachment<RetryAttachment>();
         services.AddSchedulerAttachment<SecretReferenceAttachment>();
+        // Costs nothing until something listens to the meter (CronlightMetrics.MeterName)
+        services.AddMetrics();
+        services.TryAddSingleton<MetricsListener>();
+        services.AddSchedulerAttachment<MetricsAttachment>();
         return services;
     }
 

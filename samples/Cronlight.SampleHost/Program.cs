@@ -71,6 +71,9 @@ builder.Services.AddCronlight(o =>
     builder.Configuration.GetSection("Cronlight").Bind(o);
 });
 
+// Health of every scheduler served, for load balancers and Kubernetes probes: GET /healthz
+builder.Services.AddHealthChecks().AddCronlight();
+
 var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -93,6 +96,7 @@ app.MapGet("/demo/slow", async () =>
     return Results.Ok();
 });
 app.MapCronlight("/ops/jobs");
+app.MapHealthChecks("/healthz");
 
 app.Run();
 

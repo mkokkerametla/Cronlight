@@ -1,7 +1,10 @@
+using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Quartz;
+using Quartz.Spi;
 
 namespace Cronlight.History;
 
@@ -9,14 +12,41 @@ internal sealed class JobHistoryAttachment(
     JobHistoryListener listener,
     JobHistoryQueue queue,
     MisfireLinks links,
+    ISchedulerFactory factory,
+    IServiceProvider services,
+    IOptions<JobHistoryOptions> options,
+    IOptions<QuartzOptions> quartz,
     ILogger<JobHistoryAttachment> logger) : ISchedulerAttachment
 {
-    public Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
+    private const string JobFactoryProperty = "quartz.scheduler.jobFactory.type";
+
+    // By instance rather than name: a scheduler shut down and created again under its name gets wrapped too
+    private readonly ConditionalWeakTable<IScheduler, object> wrapped = new();
+
+    public async Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
         scheduler.AddJobListenerOnce(listener);
         scheduler.AddTriggerListenerOnce(new MisfireListener("Cronlight.History.Misfires", scheduler, Record, logger));
-        return Task.CompletedTask;
+
+        // Quartz cannot say which factory a scheduler built in code uses, so the host wraps that one itself
+        // (WithCronlightRunLogs). The host's own scheduler uses the factory its Quartz options name, which AddQuartz
+        // registers in DI: AddQuartz's own, or the host's from UseJobFactory.
+        if (!options.Value.CaptureLogs || services.GetService<IJobFactory>() is not { } jobFactory
+            || scheduler.SchedulerName != (await factory.GetScheduler(cancellationToken)).SchedulerName
+            || !wrapped.TryAdd(scheduler, jobFactory))
+            return;
+        if (quartz.Value.GetValueOrDefault(JobFactoryProperty) is { } configured && !Names(configured, jobFactory.GetType()))
+        {
+            logger.LogWarning("Run logs are not kept for scheduler {Scheduler}: its job factory ({Configured}) is not the one " +
+                "registered for IJobFactory ({Registered})", scheduler.SchedulerName, configured, jobFactory.GetType().FullName);
+            return;
+        }
+        scheduler.JobFactory = jobFactory.WithCronlightRunLogs(services);
     }
+
+    // Quartz properties name types as "Namespace.Type, Assembly"
+    private static bool Names(string configured, Type type) =>
+        configured == type.FullName || configured.StartsWith(type.FullName + ",", StringComparison.Ordinal);
 
     // A misfire is not a run, so it is written finished, under its own id: a misfire reported again after a
     // rollback replaces its record rather than adding another

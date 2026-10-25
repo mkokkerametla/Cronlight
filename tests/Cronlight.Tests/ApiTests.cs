@@ -315,7 +315,7 @@ public class ApiTests
         Assert.Equal("Paused", monthly.GetProperty("state").GetString());
 
         var once = triggers["once"];
-        Assert.Equal("Simple", once.GetProperty("kind").GetString());
+        Assert.Equal("Once", once.GetProperty("kind").GetString());
         Assert.Equal(JsonValueKind.Null, once.GetProperty("cronExpression").ValueKind);
         Assert.Equal("Normal", once.GetProperty("state").GetString());
         var next = once.GetProperty("nextFireTimeUtc").GetDateTimeOffset();

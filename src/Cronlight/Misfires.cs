@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Quartz;
+using Quartz.Impl.Triggers;
 using Quartz.Spi;
 
 namespace Cronlight;
@@ -134,6 +135,19 @@ internal static class Misfires
             _ => instruction.ToString(),
         };
     }
+
+    /// <summary>
+    /// Whether a missed fire time is skipped rather than run as soon as the scheduler can. Quartz's smart policy skips
+    /// for a simple trigger that repeats forever, and runs once now for every other kind.
+    /// </summary>
+    public static bool SkipsMissed(ITrigger trigger) => trigger switch
+    {
+        ICronTrigger => trigger.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing,
+        ISimpleTrigger simple => trigger.MisfireInstruction is MisfireInstruction.SimpleTrigger.RescheduleNextWithRemainingCount
+                or MisfireInstruction.SimpleTrigger.RescheduleNextWithExistingCount
+            || trigger.MisfireInstruction == MisfireInstruction.SmartPolicy && simple.RepeatCount == SimpleTriggerImpl.RepeatIndefinitely,
+        _ => false,
+    };
 
     private static string Duration(TimeSpan span) => span switch
     {

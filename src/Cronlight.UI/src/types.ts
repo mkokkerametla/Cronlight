@@ -2,10 +2,14 @@
 
 export type TriggerState = 'None' | 'Normal' | 'Paused' | 'Complete' | 'Error' | 'Blocked'
 
+/** The kinds the dashboard edits */
+export type EditableTriggerKind = 'Cron' | 'Once' | 'Interval'
+
 export interface Trigger {
   name: string
   group: string
-  kind: 'Cron' | 'Simple' | string
+  /** Retry is a waiting retry and RunNow a manual run waiting to start; other kinds (by class name) are shown but not edited */
+  kind: EditableTriggerKind | 'Retry' | string
   cronExpression: string | null
   timeZone: string | null
   state: TriggerState
@@ -15,6 +19,14 @@ export interface Trigger {
   misfireInstruction?: string
   /** For a waiting retry (kind Retry), the attempt it will be: 2 for the first retry */
   attempt?: number | null
+  /** Once and Interval: when it runs, or first runs */
+  startTimeUtc?: string | null
+  /** Interval: the time between runs */
+  intervalSeconds?: number | null
+  /** Interval: how many runs follow the first; null repeats forever */
+  repeatCount?: number | null
+  /** A missed fire time is skipped rather than run as soon as the scheduler can */
+  skipsMissed?: boolean
 }
 
 /** How often, and how long apart, a failed run is retried */
@@ -143,8 +155,18 @@ export interface CronPreview {
 
 export interface TriggerRequest {
   name: string | null
-  cronExpression: string
-  timeZone: string | null
+  /** Cron when left out */
+  kind?: EditableTriggerKind
+  /** Cron */
+  cronExpression?: string
+  /** Cron; UTC when null */
+  timeZone?: string | null
+  /** Once: when it runs. Interval: its first run, now when left out */
+  startAtUtc?: string
+  /** Interval */
+  intervalSeconds?: number
+  /** Interval: runs after the first; left out repeats forever */
+  repeatCount?: number
   /** Skip a missed fire time instead of running once as soon as the scheduler can */
   skipMissed?: boolean
 }
@@ -163,6 +185,8 @@ export interface UpdateJobRequest {
   description: string | null
   data: Record<string, string>
   triggers: TriggerRequest[]
+  /** The kinds triggers replaces; left out, cron and the kinds it holds */
+  triggerKinds?: EditableTriggerKind[]
   /** maxRetries 0 turns retries off, even when the job type has a policy */
   retry: JobRetryPolicy
 }
@@ -175,6 +199,9 @@ export interface RunJobRequest {
 }
 
 export type JobAction = 'trigger' | 'pause' | 'resume'
+
+/** Pausing or resuming every job in a group, or in the scheduler */
+export type BulkAction = 'pause' | 'resume'
 
 export type ExecutionStatus =
   | 'Running'
@@ -208,6 +235,16 @@ export interface ExecutionRecord {
   attempt: number
   /** The run's own data (e.g. from a run with different data), secrets masked; null when it used the saved data */
   data?: Record<string, string> | null
+  /** What the job logged while it ran was kept; read it from history/{id}/log */
+  hasLog?: boolean
+}
+
+/** One line a job logged while it ran */
+export interface RunLogEntry {
+  timeUtc: string
+  level: 'Trace' | 'Debug' | 'Information' | 'Warning' | 'Error' | 'Critical'
+  category: string
+  message: string
 }
 
 export interface HistoryPage {

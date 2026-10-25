@@ -20,7 +20,12 @@ const jobs: Job[] = [
 ]
 
 function renderTable(overrides: Partial<Parameters<typeof JobsTable>[0]> = {}) {
-  const actions = { run: vi.fn(), bulk: vi.fn(async () => {}) } as unknown as DashboardActions
+  const actions = {
+    run: vi.fn(),
+    bulk: vi.fn(async () => {}),
+    group: vi.fn(async () => true),
+    all: vi.fn(async () => true),
+  } as unknown as DashboardActions
   const onSelect = vi.fn()
   const onQueryChange = vi.fn()
   render(
@@ -170,5 +175,38 @@ describe('JobsTable', () => {
     renderTable({ jobs: [] })
 
     expect(screen.getByText('This scheduler has no jobs yet.')).toBeInTheDocument()
+  })
+
+  it("pauses a job's group only once asked, saying what resuming undoes", async () => {
+    const { actions } = renderTable()
+
+    await userEvent.click(screen.getByRole('button', { name: 'More actions for send-invoices' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Resume group billing/ }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(
+      within(dialog).getByText(/including jobs that were paused one by one/)
+    ).toBeInTheDocument()
+    expect(actions.group).not.toHaveBeenCalled()
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Resume group' }))
+    expect(actions.group).toHaveBeenCalledWith('billing', 'resume')
+  })
+
+  it('pauses every job after confirming, and cancelling does nothing', async () => {
+    const { actions } = renderTable()
+
+    await userEvent.click(screen.getByRole('button', { name: 'All jobs' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Pause all jobs/ }))
+    await userEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' })
+    )
+    expect(actions.all).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'All jobs' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Pause all jobs/ }))
+    await userEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Pause all jobs' })
+    )
+    expect(actions.all).toHaveBeenCalledWith('pause')
   })
 })

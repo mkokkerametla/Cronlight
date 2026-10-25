@@ -1,4 +1,4 @@
-import type { ExecutionRecord, Job, JobRetryPolicy, JobStatus } from '@/types'
+import type { ExecutionRecord, Job, JobRetryPolicy, JobStatus, Trigger } from '@/types'
 
 export type { JobStatus }
 
@@ -95,6 +95,14 @@ export function formatSeconds(seconds: number): string {
   const s = seconds % 60
   if (h) return m ? `${h}h ${m}m` : `${h}h`
   return s ? `${m}m ${s}s` : `${m}m`
+}
+
+/** What a one-time or interval trigger does, e.g. "Every 5m, 10 runs in all"; null for other kinds */
+export function describeSchedule(t: Trigger): string | null {
+  if (t.kind === 'Once') return `Once, ${formatDateTime(t.startTimeUtc)}`
+  if (t.kind !== 'Interval' || !t.intervalSeconds) return null
+  const runs = t.repeatCount != null ? `, ${t.repeatCount + 1} runs in all` : ''
+  return `Every ${formatSeconds(t.intervalSeconds)} from ${formatDateTime(t.startTimeUtc)}${runs}`
 }
 
 /** "every 10 seconds", or "every second" */

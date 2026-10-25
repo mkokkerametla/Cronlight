@@ -22,8 +22,9 @@ public class ReportsScheduler(IServiceProvider services, IJobFactory jobFactory)
             ["quartz.scheduler.instanceName"] = Name,
             ["quartz.threadPool.maxConcurrency"] = "2",
         }).GetScheduler(cancellationToken);
-        // The host's DI job factory, so jobs with constructor dependencies run here too
-        scheduler.JobFactory = jobFactory;
+        // The host's DI job factory, so jobs with constructor dependencies run here too, wrapped so that what each run
+        // logs is kept with it in history, as it is for the host's own scheduler
+        scheduler.JobFactory = jobFactory.WithCronlightRunLogs(services);
         // Before Start, so history, alerts, retries and secret references cover its first runs
         await scheduler.UseCronlight(services, cancellationToken);
         await scheduler.Start(cancellationToken);

@@ -75,7 +75,9 @@ describe('CreateJobSheet', () => {
   it('starts with the first job type and its parameters, defaults filled in', () => {
     render(<Harness onCreate={vi.fn()} />)
 
-    expect(within(sheet()).getByRole('combobox')).toHaveTextContent('Send invoices')
+    expect(within(sheet()).getByRole('combobox', { name: 'Job type' })).toHaveTextContent(
+      'Send invoices'
+    )
     expect(within(sheet()).getByText('Emails open invoices')).toBeInTheDocument()
     expect(within(sheet()).getByLabelText(/customerId/)).toHaveValue(null)
     expect(within(sheet()).getByLabelText('currency')).toHaveValue('EUR')
@@ -123,7 +125,7 @@ describe('CreateJobSheet', () => {
     render(<Harness onCreate={onCreate} />)
     const form = within(sheet())
 
-    await userEvent.click(form.getByRole('combobox'))
+    await userEvent.click(form.getByRole('combobox', { name: 'Job type' }))
     await userEvent.click(screen.getByRole('option', { name: /Build report/ }))
 
     expect(form.queryByLabelText(/customerId/)).toBeNull()

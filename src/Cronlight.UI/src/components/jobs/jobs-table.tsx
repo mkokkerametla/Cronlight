@@ -15,9 +15,20 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
@@ -49,7 +60,7 @@ import {
   typeLabel,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { Job, JobAction, JobPage, JobQuery, JobStatus } from '@/types'
+import type { BulkAction, Job, JobAction, JobPage, JobQuery, JobStatus } from '@/types'
 
 const ALL = 'all'
 // Typing waits this long before searching, so the server is asked once per pause rather than per key
@@ -178,10 +189,15 @@ export function JobsTable({
           </Button>
         )}
         {canManage && (
+          <div className="ml-auto">
+            <SchedulerActions actions={actions} />
+          </div>
+        )}
+        {canManage && (
           <Tooltip>
             <TooltipTrigger asChild>
               {/* span keeps the tooltip working while the button is disabled */}
-              <span className="ml-auto">
+              <span>
                 <Button onClick={onNewJob} disabled={!canCreate}>
                   <Plus /> New job
                 </Button>
@@ -366,6 +382,7 @@ function RowActions({
   onOpen: () => void
 }) {
   const paused = isPaused(job)
+  const [confirming, setConfirming] = useState<BulkTarget | null>(null)
   return (
     <div className="flex justify-end gap-1">
       <Tooltip>
@@ -403,8 +420,111 @@ function RowActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={onOpen}>Open details</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setConfirming({ group: job.group, action: 'pause' })}>
+            <Pause /> Pause group {job.group}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setConfirming({ group: job.group, action: 'resume' })}>
+            <PlayCircle /> Resume group {job.group}
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <ConfirmBulk target={confirming} onClose={() => setConfirming(null)} actions={actions} />
     </div>
+  )
+}
+
+/** Every job in a group, or with a null group every job in the scheduler */
+interface BulkTarget {
+  group: string | null
+  action: BulkAction
+}
+
+function bulkText({ group, action }: BulkTarget) {
+  if (group === null)
+    return action === 'pause'
+      ? {
+          title: 'Pause every job?',
+          description:
+            'No job in this scheduler runs on schedule until it is resumed, on any node, and jobs added meanwhile start paused too. Jobs can still be run by hand.',
+          confirm: 'Pause all jobs',
+        }
+      : {
+          title: 'Resume every job?',
+          description:
+            'Every paused job in this scheduler runs on schedule again, including jobs that were paused one by one.',
+          confirm: 'Resume all jobs',
+        }
+  return action === 'pause'
+    ? {
+        title: `Pause group ${group}?`,
+        description: `No job in group ${group} runs on schedule until the group is resumed, on any node. Jobs can still be run by hand. With the in-memory job store, jobs added to the group meanwhile start paused too.`,
+        confirm: 'Pause group',
+      }
+    : {
+        title: `Resume group ${group}?`,
+        description: `Every paused job in group ${group} runs on schedule again, including jobs that were paused one by one.`,
+        confirm: 'Resume group',
+      }
+}
+
+/** Asks before pausing or resuming many jobs at once: it reaches every node, and resuming undoes pauses of single jobs */
+function ConfirmBulk({
+  target,
+  onClose,
+  actions,
+}: {
+  target: BulkTarget | null
+  onClose: () => void
+  actions: DashboardActions
+}) {
+  const text = target && bulkText(target)
+  return (
+    <AlertDialog open={target !== null} onOpenChange={open => !open && onClose()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{text?.title}</AlertDialogTitle>
+          <AlertDialogDescription>{text?.description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              if (!target) return
+              void (target.group === null
+                ? actions.all(target.action)
+                : actions.group(target.group, target.action))
+            }}
+          >
+            {text?.confirm}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+/** Pauses or resumes every job in the scheduler, after asking */
+function SchedulerActions({ actions }: { actions: DashboardActions }) {
+  const [confirming, setConfirming] = useState<BulkTarget | null>(null)
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" aria-label="All jobs">
+            <MoreHorizontal /> All jobs
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => setConfirming({ group: null, action: 'pause' })}>
+            <Pause /> Pause all jobs
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setConfirming({ group: null, action: 'resume' })}>
+            <PlayCircle /> Resume all jobs
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ConfirmBulk target={confirming} onClose={() => setConfirming(null)} actions={actions} />
+    </>
   )
 }
