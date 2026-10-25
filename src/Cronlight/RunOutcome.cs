@@ -21,7 +21,7 @@ internal static class RunOutcome
         {
             JobExecutionStatus.Succeeded => null,
             JobExecutionStatus.Cancelled => context.Get(CronlightContextKeys.CancelledBy) is string user ? $"Cancelled by {user}" : "Cancelled",
-            _ => Describe(exception!),
+            _ => Describe(exception!) + (context.Get(RetryPlanner.ProblemKey) is string problem ? $" (its retry could not be scheduled: {problem})" : ""),
         };
 
     // Quartz wraps what the job threw as JobExecutionException -> SchedulerException("Job threw an unhandled
@@ -30,9 +30,15 @@ internal static class RunOutcome
     // Only type and message are kept: stack traces are long and more likely to carry sensitive details.
     private static string Describe(JobExecutionException exception)
     {
-        Exception cause = exception;
-        while (cause is SchedulerException { InnerException: { } inner })
-            cause = inner;
+        var cause = Cause(exception)!;
         return $"{cause.GetType().Name}: {cause.Message}";
+    }
+
+    /// <summary>What the job threw, inside Quartz's wrapping.</summary>
+    public static Exception? Cause(Exception? exception)
+    {
+        while (exception is SchedulerException { InnerException: { } inner })
+            exception = inner;
+        return exception;
     }
 }

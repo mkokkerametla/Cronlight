@@ -1,5 +1,6 @@
 using System.Data.Common;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
@@ -20,12 +21,19 @@ internal sealed class AdoJobHistoryStore(
         "SCHED_NAME, ENTRY_ID, INSTANCE_NAME, JOB_NAME, JOB_GROUP, JOB_TYPE, TRIGGER_NAME, TRIGGER_GROUP, " +
         "SCHEDULED_TIME, FIRED_TIME, FINISHED_TIME, DURATION_MS, STATUS, ERROR, REFIRE_COUNT";
 
-    // Added with retries. A table created by an earlier version gets it at startup, unless CreateTable is off.
+    // Added after the first release: ATTEMPT with retries, DATA for repeating a run exactly. A table created by an
+    // earlier version gets them at startup, unless CreateTable is off; then history is written without them.
     private const string AttemptColumn = "ATTEMPT";
-    private volatile bool hasAttempt = true;
+    private const string DataColumn = "DATA";
+    private static readonly (string Column, string Purpose)[] AddedColumns =
+        [(AttemptColumn, "retry attempts are not recorded"), (DataColumn, "each run's own data is not kept")];
+    private volatile string[] addedColumns = AddedColumns.Select(c => c.Column).ToArray();
 
-    private string InsertColumns => hasAttempt ? $"{BaseColumns}, {AttemptColumn}" : BaseColumns;
+    private bool Has(string column) => addedColumns.Contains(column);
+    private string InsertColumns => string.Join(", ", [BaseColumns, .. addedColumns]);
     private string Columns => "ID, " + InsertColumns;
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     // The writer initializes the store in the background at startup. Until then the table may not exist yet,
     // so reads return no history instead of failing; once initialization has failed, reads fail again so the
@@ -183,30 +191,45 @@ internal sealed class AdoJobHistoryStore(
     /// </summary>
     private async Task AddMissingColumns(DbConnection connection, CancellationToken cancellationToken)
     {
-        try
+        var present = new List<string>();
+        foreach (var (column, purpose) in AddedColumns)
         {
-            await using var probe = connection.CreateCommand();
-            probe.CommandText = $"SELECT {AttemptColumn} FROM {tableName} WHERE 1 = 0";
-            await probe.ExecuteScalarAsync(cancellationToken);
-            return;
-        }
-        catch (DbException)
-        {
-        }
+            try
+            {
+                await using var probe = connection.CreateCommand();
+                probe.CommandText = $"SELECT {column} FROM {tableName} WHERE 1 = 0";
+                await probe.ExecuteScalarAsync(cancellationToken);
+                present.Add(column);
+                continue;
+            }
+            catch (DbException)
+            {
+            }
 
-        var statement = $"ALTER TABLE {tableName} ADD {AttemptColumn} {(dialect == SqlDialect.PostgreSql || dialect == SqlDialect.Sqlite ? "INTEGER" : "INT")} NULL";
-        if (!createTable)
-        {
-            hasAttempt = false;
-            logger.LogWarning("History table {Table} has no {Column} column, so retry attempts are not recorded. Add it with: {Statement}",
-                tableName, AttemptColumn, statement);
-            return;
+            var statement = $"ALTER TABLE {tableName} ADD {column} {ColumnType(column)} NULL";
+            if (!createTable)
+            {
+                logger.LogWarning("History table {Table} has no {Column} column, so {Purpose}. Add it with: {Statement}",
+                    tableName, column, purpose, statement);
+                continue;
+            }
+            logger.LogInformation("Adding column {Column} to history table {Table}", column, tableName);
+            await using var command = connection.CreateCommand();
+            command.CommandText = statement;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            present.Add(column);
         }
-        logger.LogInformation("Adding column {Column} to history table {Table}", AttemptColumn, tableName);
-        await using var command = connection.CreateCommand();
-        command.CommandText = statement;
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        addedColumns = present.ToArray();
     }
+
+    private string ColumnType(string column) => (column, dialect) switch
+    {
+        (AttemptColumn, _) when dialect == SqlDialect.PostgreSql || dialect == SqlDialect.Sqlite => "INTEGER",
+        (AttemptColumn, _) => "INT",
+        (_, _) when dialect == SqlDialect.SqlServer => "NVARCHAR(MAX)",
+        (_, _) when dialect == SqlDialect.MySql => "MEDIUMTEXT",
+        _ => "TEXT",
+    };
 
     /// <summary>
     /// Indexes added after the first release, which tables created by an earlier version lack. With CreateTable
@@ -273,7 +296,8 @@ internal sealed class AdoJobHistoryStore(
         command.CommandText =
             $"INSERT INTO {tableName} ({InsertColumns}) VALUES ({P("sched")}, {P("entry")}, {P("instance")}, " +
             $"{P("job")}, {P("group")}, {P("type")}, {P("trigger")}, {P("triggerGroup")}, {P("scheduled")}, {P("fired")}, " +
-            $"{P("finished")}, {P("duration")}, {P("status")}, {P("error")}, {P("refire")}{(hasAttempt ? $", {P("attempt")}" : "")})";
+            $"{P("finished")}, {P("duration")}, {P("status")}, {P("error")}, {P("refire")}" +
+            string.Concat(addedColumns.Select(c => $", {P(c.ToLowerInvariant())}")) + ")";
         Add(command, "sched", r.SchedulerName);
         Add(command, "entry", r.FireInstanceId);
         Add(command, "instance", r.InstanceName);
@@ -289,8 +313,10 @@ internal sealed class AdoJobHistoryStore(
         Add(command, "status", r.Status.ToString());
         Add(command, "error", r.Error);
         Add(command, "refire", r.RefireCount);
-        if (hasAttempt)
+        if (Has(AttemptColumn))
             Add(command, "attempt", r.Attempt);
+        if (Has(DataColumn))
+            Add(command, "data", r.Data is { Count: > 0 } data ? JsonSerializer.Serialize(data, Json) : null);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -299,6 +325,8 @@ internal sealed class AdoJobHistoryStore(
         string? Text(int i) => reader.IsDBNull(i) ? null : reader.GetString(i);
         long? Long(int i) => reader.IsDBNull(i) ? null : Convert.ToInt64(reader.GetValue(i));
         DateTimeOffset? Time(int i) => Long(i) is { } ticks ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
+        // Added columns follow the base ones, in the order present
+        int? Added(string column) => Array.IndexOf(addedColumns, column) is >= 0 and var i ? 16 + i : null;
 
         return new JobExecutionRecord
         {
@@ -318,7 +346,8 @@ internal sealed class AdoJobHistoryStore(
             Status = Enum.Parse<JobExecutionStatus>(reader.GetString(13)),
             Error = Text(14),
             RefireCount = Convert.ToInt32(reader.GetValue(15)),
-            Attempt = hasAttempt && Long(16) is { } attempt ? (int)attempt : 1
+            Attempt = Added(AttemptColumn) is { } a && Long(a) is { } attempt ? (int)attempt : 1,
+            Data = Added(DataColumn) is { } d && Text(d) is { } json ? JsonSerializer.Deserialize<Dictionary<string, string>>(json, Json) : null
         };
     }
 

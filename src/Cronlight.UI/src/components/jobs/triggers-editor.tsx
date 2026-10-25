@@ -1,6 +1,9 @@
 import { Plus, X } from 'lucide-react'
+import { useId } from 'react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { CronPreview } from '@/components/jobs/cron-preview'
 import { ScheduleAssistant } from '@/components/jobs/schedule-assistant'
 import { emptyTrigger, type TriggerDraft } from '@/lib/job-form'
@@ -12,6 +15,7 @@ interface Props {
 }
 
 export function TriggersEditor({ triggers, onChange, showScheduleAssistant }: Props) {
+  const id = useId()
   const update = (index: number, patch: Partial<TriggerDraft>) =>
     onChange(triggers.map((t, i) => (i === index ? { ...t, ...patch } : t)))
 
@@ -52,6 +56,17 @@ export function TriggersEditor({ triggers, onChange, showScheduleAssistant }: Pr
             </Button>
           </div>
           <CronPreview expression={trigger.cronExpression} timeZone={trigger.timeZone} />
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={`${id}-skip-${trigger.id}`}
+              checked={trigger.skipMissed}
+              onCheckedChange={checked => update(index, { skipMissed: checked === true })}
+            />
+            <Label htmlFor={`${id}-skip-${trigger.id}`} className="text-xs font-normal">
+              Skip missed runs (when the scheduler was down or busy) instead of running once when it
+              can
+            </Label>
+          </div>
           {showScheduleAssistant && <ScheduleAssistant timeZone={trigger.timeZone} />}
         </div>
       ))}

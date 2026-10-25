@@ -99,6 +99,7 @@ public static class CronlightExtensions
 
         var api = group.MapGroup("/api");
         api.AddErrorHandling(logger);
+        api.RequireSchedulerAccess(manage: false);
         api.MapReadEndpoints();
 
         var manage = api.MapGroup("");
@@ -107,6 +108,7 @@ public static class CronlightExtensions
         // First, so refused requests (forged, read-only mode) are audited too
         manage.AddAuditing(endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(Audit.LoggerCategory));
         manage.RequireDashboardRequests();
+        manage.RequireSchedulerAccess(manage: true);
         if (options.ReadOnly)
         {
             manage.AddEndpointFilter((_, _) =>

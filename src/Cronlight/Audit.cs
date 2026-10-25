@@ -14,7 +14,7 @@ namespace Cronlight;
 /// A change made through the dashboard or its API, or an attempt that was refused. Secret values are
 /// never included: a changed secret shows as <c>********</c> on both sides.
 /// </summary>
-/// <param name="Action">create, update, pause, resume, trigger, cancel or delete.</param>
+/// <param name="Action">create, update, pause, resume, trigger, cancel, cancel-retry or delete.</param>
 /// <param name="User">The user's name, or "anonymous" when the dashboard allows anonymous access.</param>
 /// <param name="Error">Why the request was refused or failed; null when it succeeded.</param>
 /// <param name="Changes">

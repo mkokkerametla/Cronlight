@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Specialized;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -22,15 +23,29 @@ internal interface ISchedulerAttachment
 internal sealed class CronlightSchedulers(ISchedulerFactory factory, IEnumerable<ISchedulerAttachment> attachments)
 {
     private readonly ConcurrentDictionary<string, IScheduler> extra = new(StringComparer.Ordinal);
+    // Added schedulers whose database the host described, so their tables can be read directly
+    private readonly ConcurrentDictionary<string, QuartzDataSource> dataSources = new(StringComparer.Ordinal);
 
     public Task<IScheduler> Default(CancellationToken cancellationToken = default) => factory.GetScheduler(cancellationToken);
 
-    public async Task Add(IScheduler scheduler, CancellationToken cancellationToken)
+    public async Task Add(IScheduler scheduler, QuartzDataSource? dataSource, CancellationToken cancellationToken)
     {
         await Attach(scheduler, cancellationToken);
-        if (scheduler.SchedulerName != (await Default(cancellationToken)).SchedulerName)
-            extra[scheduler.SchedulerName] = scheduler;
+        if (scheduler.SchedulerName == (await Default(cancellationToken)).SchedulerName)
+            return;
+        extra[scheduler.SchedulerName] = scheduler;
+        if (dataSource?.Provider != null)
+            dataSources[scheduler.SchedulerName] = dataSource;
     }
+
+    /// <summary>
+    /// The database whose Quartz tables hold this scheduler: the host's own, given its data source, or an added
+    /// scheduler's when the host gave its properties. Null for in-memory stores and added schedulers without them.
+    /// </summary>
+    public async Task<QuartzDataSource?> DataSource(IScheduler scheduler, QuartzDataSource hosts, CancellationToken cancellationToken) =>
+        scheduler.SchedulerName == (await Default(cancellationToken)).SchedulerName
+            ? hosts.Provider != null ? hosts : null
+            : dataSources.GetValueOrDefault(scheduler.SchedulerName);
 
     public async Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
@@ -81,7 +96,17 @@ public static class CronlightSchedulerExtensions
     /// its first runs are covered too. The dashboard picks a scheduler with its <c>?scheduler=</c> parameter.
     /// </summary>
     public static Task UseCronlight(this IScheduler scheduler, IServiceProvider services, CancellationToken cancellationToken = default) =>
-        services.GetRequiredService<CronlightSchedulers>().Add(scheduler, cancellationToken);
+        services.GetRequiredService<CronlightSchedulers>().Add(scheduler, null, cancellationToken);
+
+    /// <summary>
+    /// As <see cref="UseCronlight(IScheduler, IServiceProvider, CancellationToken)"/>, given the Quartz properties the
+    /// scheduler was built from. With an ADO job store, the dashboard then reads its tables directly, as it does for
+    /// the host's own scheduler: its job list costs two queries however many jobs it has, and its Running tab shows
+    /// every node.
+    /// </summary>
+    public static Task UseCronlight(this IScheduler scheduler, IServiceProvider services, NameValueCollection properties,
+        CancellationToken cancellationToken = default) =>
+        services.GetRequiredService<CronlightSchedulers>().Add(scheduler, QuartzDataSource.ForProperties(properties, services), cancellationToken);
 }
 
 /// <summary>Attaches Cronlight to the host's own scheduler before Quartz starts running jobs.</summary>

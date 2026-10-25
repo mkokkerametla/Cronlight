@@ -41,6 +41,8 @@ export interface TriggerDraft {
   name: string
   cronExpression: string
   timeZone: string
+  /** Skip a fire time the scheduler missed, instead of running once as soon as it can */
+  skipMissed: boolean
 }
 
 let lastDraftId = 0
@@ -51,6 +53,7 @@ export const emptyTrigger = (): TriggerDraft => ({
   name: '',
   cronExpression: '',
   timeZone: '',
+  skipMissed: false,
 })
 
 export const draftsFromTriggers = (triggers: Trigger[]): TriggerDraft[] => {
@@ -61,6 +64,7 @@ export const draftsFromTriggers = (triggers: Trigger[]): TriggerDraft[] => {
       name: t.name,
       cronExpression: t.cronExpression ?? '',
       timeZone: t.timeZone === 'UTC' ? '' : (t.timeZone ?? ''),
+      skipMissed: t.misfireInstruction === 'DoNothing',
     }))
   return cron.length ? cron : [emptyTrigger()]
 }
@@ -72,6 +76,8 @@ export const draftsToRequest = (drafts: TriggerDraft[]): TriggerRequest[] =>
       name: t.name.trim() || null,
       cronExpression: t.cronExpression.trim(),
       timeZone: t.timeZone.trim() || null,
+      // Left out when off: Quartz's default, running once as soon as it can
+      ...(t.skipMissed && { skipMissed: true }),
     }))
 
 /** Retry fields as typed, so a field can be empty while it is edited */
@@ -79,19 +85,29 @@ export interface RetryDraft {
   maxRetries: string
   delaySeconds: string
   exponential: boolean
+  /** Exception type names, comma separated; empty retries every failure */
+  retryOn: string
 }
 
 export const retryDraft = (policy: JobRetryPolicy | null | undefined): RetryDraft => ({
   maxRetries: String(policy?.maxRetries ?? 0),
   delaySeconds: String(policy?.delaySeconds ?? 60),
   exponential: policy?.exponential ?? false,
+  retryOn: (policy?.retryOn ?? []).join(', '),
 })
 
-export const draftToRetry = (draft: RetryDraft): JobRetryPolicy => ({
-  maxRetries: Number(draft.maxRetries) || 0,
-  delaySeconds: Number(draft.delaySeconds) || 0,
-  exponential: draft.exponential,
-})
+export const draftToRetry = (draft: RetryDraft): JobRetryPolicy => {
+  const retryOn = draft.retryOn
+    .split(',')
+    .map(t => t.trim())
+    .filter(Boolean)
+  return {
+    maxRetries: Number(draft.maxRetries) || 0,
+    delaySeconds: Number(draft.delaySeconds) || 0,
+    exponential: draft.exponential,
+    ...(retryOn.length > 0 && { retryOn }),
+  }
+}
 
 /** Values that differ from the saved job data, for a run with different data. Masked secrets are unchanged. */
 export const changedData = (

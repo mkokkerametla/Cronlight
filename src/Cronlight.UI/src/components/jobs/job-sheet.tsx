@@ -45,6 +45,7 @@ import {
 import type { DashboardActions } from '@/hooks/use-dashboard'
 import { useHistory } from '@/hooks/use-history'
 import {
+  describeMisfire,
   describeRetry,
   errorTone,
   formatDateTime,
@@ -53,9 +54,10 @@ import {
   isPaused,
   recordTime,
   shortType,
+  startedLate,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { Job, JobType, UpdateJobRequest } from '@/types'
+import type { Job, JobType, Trigger, UpdateJobRequest } from '@/types'
 
 interface Props {
   job: Job | null
@@ -139,7 +141,14 @@ export function JobSheet({
                 }}
               />
             ) : (
-              <JobDetails job={job}>
+              <JobDetails
+                job={job}
+                onCancelRetry={
+                  canManage && job.loadable
+                    ? trigger => actions.cancelRetry(job, trigger)
+                    : undefined
+                }
+              >
                 {historyEnabled && (
                   <RecentRuns
                     key={`${job.group}.${job.name}`}
@@ -227,7 +236,15 @@ function JobActions({
   )
 }
 
-function JobDetails({ job, children }: { job: Job; children?: ReactNode }) {
+function JobDetails({
+  job,
+  onCancelRetry,
+  children,
+}: {
+  job: Job
+  onCancelRetry?: (trigger: Trigger) => void
+  children?: ReactNode
+}) {
   const data = Object.entries(job.data)
 
   return (
@@ -277,11 +294,23 @@ function JobDetails({ job, children }: { job: Job; children?: ReactNode }) {
             {job.triggers.map(t => (
               <div key={`${t.group}.${t.name}`} className="space-y-2 rounded-lg border p-3 text-sm">
                 <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">{t.name}</span>
+                  <span className="truncate font-medium">
+                    {t.kind === 'Retry' && t.attempt ? `Retry, attempt ${t.attempt}` : t.name}
+                  </span>
                   <TriggerStateBadge state={t.state} />
                   <Badge variant="outline" className="ml-auto">
                     {t.kind}
                   </Badge>
+                  {t.kind === 'Retry' && onCancelRetry && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Cancel retry ${t.name}`}
+                      onClick={() => onCancelRetry(t)}
+                    >
+                      Cancel
+                    </Button>
+                  )}
                 </div>
                 {t.cronExpression && (
                   <code className="block rounded bg-muted px-2 py-1 font-mono text-xs">
@@ -296,6 +325,13 @@ function JobDetails({ job, children }: { job: Job; children?: ReactNode }) {
                     <FireTime iso={t.previousFireTimeUtc} empty="Never" />
                   </Field>
                   {t.timeZone && <Field label="Time zone">{t.timeZone}</Field>}
+                  {describeMisfire(t.misfireInstruction) && (
+                    <Field label="If a fire time is missed">
+                      <span title={t.misfireInstruction}>
+                        {describeMisfire(t.misfireInstruction)}
+                      </span>
+                    </Field>
+                  )}
                 </dl>
               </div>
             ))}
@@ -504,6 +540,11 @@ function RecentRuns({
                   </span>
                   {r.attempt > 1 && (
                     <span className="text-xs text-muted-foreground">attempt {r.attempt}</span>
+                  )}
+                  {startedLate(r) && (
+                    <span className="text-xs text-amber-700 dark:text-amber-400">
+                      started {startedLate(r)} late
+                    </span>
                   )}
                   <span className="ml-auto text-muted-foreground tabular-nums">
                     {formatDuration(r.durationMs)}

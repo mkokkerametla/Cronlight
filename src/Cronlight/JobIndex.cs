@@ -21,9 +21,10 @@ internal sealed record JobIndexEntry(string Group, string Name, bool Loadable, s
 /// Reads every job's type and trigger states without loading each job. For ADO stores that is two queries on
 /// the Quartz tables, however many jobs there are, so the dashboard can search, filter, count and page on
 /// the server and load full details only for the page it shows.
-/// The tables are those of the host's own scheduler; another scheduler the host added is read through its API.
+/// Another scheduler the host added is read this way only when the host gave its properties to UseCronlight;
+/// otherwise through its API.
 /// </summary>
-internal sealed class JobIndexReader(QuartzDataSource dataSource, CronlightSchedulers schedulers, JobTypeCatalog catalog,
+internal sealed class JobIndexReader(QuartzDataSource hostDataSource, CronlightSchedulers schedulers, JobTypeCatalog catalog,
     ILogger<JobIndexReader> logger)
 {
     // Quartz stores job types as "Namespace.Type, Assembly"; resolving one is costly, and the answer does not change
@@ -32,11 +33,11 @@ internal sealed class JobIndexReader(QuartzDataSource dataSource, CronlightSched
     public async Task<IReadOnlyList<JobIndexEntry>> Read(IScheduler scheduler, CancellationToken cancellationToken)
     {
         var meta = await scheduler.GetMetaData(cancellationToken);
-        if (meta.JobStoreSupportsPersistence && dataSource.Provider != null && await IsHosts(scheduler, cancellationToken))
+        if (meta.JobStoreSupportsPersistence && await schedulers.DataSource(scheduler, hostDataSource, cancellationToken) is { } dataSource)
         {
             try
             {
-                return await ReadTables(meta.SchedulerName, cancellationToken);
+                return await ReadTables(dataSource, meta.SchedulerName, cancellationToken);
             }
             catch (Exception ex) when (ex is DbException or InvalidOperationException)
             {
@@ -47,7 +48,7 @@ internal sealed class JobIndexReader(QuartzDataSource dataSource, CronlightSched
         return await ReadScheduler(scheduler, cancellationToken);
     }
 
-    private async Task<IReadOnlyList<JobIndexEntry>> ReadTables(string schedulerName, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<JobIndexEntry>> ReadTables(QuartzDataSource dataSource, string schedulerName, CancellationToken cancellationToken)
     {
         var prefix = dataSource.TablePrefix;
         await using var connection = await dataSource.OpenConnection(cancellationToken);
@@ -84,9 +85,6 @@ internal sealed class JobIndexReader(QuartzDataSource dataSource, CronlightSched
         }
         return result;
     }
-
-    private async Task<bool> IsHosts(IScheduler scheduler, CancellationToken cancellationToken) =>
-        scheduler.SchedulerName == (await schedulers.Default(cancellationToken)).SchedulerName;
 
     /// <summary>For the in-memory store, another scheduler, or when the tables cannot be read: the scheduler's own API.</summary>
     private async Task<IReadOnlyList<JobIndexEntry>> ReadScheduler(IScheduler scheduler, CancellationToken cancellationToken)

@@ -19,6 +19,7 @@ function renderSheet(subject: Job, overrides: Partial<Parameters<typeof JobSheet
     runWithData: vi.fn(async () => true),
     remove: vi.fn(async () => true),
     update: vi.fn(async () => true),
+    cancelRetry: vi.fn(async () => true),
   } as unknown as DashboardActions
   const onClose = vi.fn()
   const onViewHistory = vi.fn()
@@ -98,6 +99,27 @@ describe('JobSheet', () => {
     expect(sheet().getByText('Not scheduled')).toBeInTheDocument()
     expect(sheet().getByText('eu-west')).toBeInTheDocument()
     expect(sheet().getByText('note').nextSibling).toHaveTextContent('-')
+  })
+
+  it('shows a waiting retry with its attempt, cancels it, and says what happens to missed runs', async () => {
+    const retry = trigger({
+      name: 'r1',
+      group: 'Cronlight.Retries',
+      kind: 'Retry',
+      cronExpression: null,
+      attempt: 2,
+      misfireInstruction: 'FireNow',
+    })
+    const subject = job({
+      triggers: [trigger({ misfireInstruction: 'DoNothing' }), retry],
+    })
+    const { actions } = renderSheet(subject)
+
+    expect(sheet().getByText('Retry, attempt 2')).toBeInTheDocument()
+    expect(sheet().getByText('Skipped; waits for the next fire time')).toBeInTheDocument()
+    expect(sheet().getByText('Runs once as soon as it can')).toBeInTheDocument()
+    await userEvent.click(sheet().getByRole('button', { name: 'Cancel retry r1' }))
+    expect(actions.cancelRetry).toHaveBeenCalledWith(subject, retry)
   })
 
   it('says when a job only runs manually', () => {

@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Quartz;
 using Quartz.Impl;
 using Quartz.Impl.Matchers;
@@ -13,12 +14,12 @@ namespace Cronlight.Tests;
 public class SchedulerTests
 {
     /// <summary>An in-memory scheduler, added to the host's dashboard with UseCronlight unless told otherwise.</summary>
-    private static async Task<IScheduler> AddScheduler(TestHost host, bool useCronlight = true)
+    private static async Task<IScheduler> AddScheduler(TestHost host, bool useCronlight = true, string? name = null)
     {
         var scheduler = await new StdSchedulerFactory(new NameValueCollection
         {
             // Quartz keeps schedulers in a process-wide registry, so each test's has its own name
-            ["quartz.scheduler.instanceName"] = $"extra-{Guid.NewGuid().ToString("N")[..8]}",
+            ["quartz.scheduler.instanceName"] = name ?? UniqueName("extra"),
             ["quartz.threadPool.maxConcurrency"] = "2",
         }).GetScheduler();
         if (useCronlight)
@@ -32,6 +33,8 @@ public class SchedulerTests
             .Select(e => e.GetString()).ToList();
 
     private static string Status(JsonElement record) => record.GetProperty("status").GetString()!;
+
+    private static string UniqueName(string prefix) => $"{prefix}-{Guid.NewGuid().ToString("N")[..8]}";
 
     [Fact]
     public async Task Each_scheduler_has_its_own_jobs_history_and_audit_trail()
@@ -141,6 +144,81 @@ public class SchedulerTests
         finally
         {
             await extra.Shutdown(waitForJobsToComplete: true);
+        }
+    }
+
+    [Fact]
+    public async Task A_scheduler_can_be_shown_or_left_changeable_only_to_some_users()
+    {
+        var audit = new AuditTests.RecordingSink();
+        var hidden = UniqueName("a-hidden");
+        var watched = UniqueName("b-watched");
+        await using var host = await TestHost.Start(
+            configure: o =>
+            {
+                o.ViewPolicy = "Viewers";
+                o.ManagePolicy = "Viewers";
+                o.Schedulers[hidden] = new CronlightSchedulerAccess { ViewPolicy = "Admins" };
+                o.Schedulers[watched] = new CronlightSchedulerAccess { ManagePolicy = "Admins" };
+            },
+            services: s => s.AddSingleton<ICronlightAuditSink>(audit));
+        var extras = new[] { await AddScheduler(host, name: hidden), await AddScheduler(host, name: watched) };
+        try
+        {
+            var viewer = host.Client("viewer");
+            var admin = host.Client("admin");
+            Assert.Equal([host.SchedulerName, watched], await Schedulers(viewer));
+            Assert.Equal([host.SchedulerName, hidden, watched], await Schedulers(admin));
+
+            var refused = await viewer.GetAsync($"api/jobs/search?scheduler={hidden}");
+            Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+            Assert.Contains($"You do not have access to scheduler '{hidden}'", await refused.Content.ReadAsStringAsync());
+            Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync($"api/jobs/search?scheduler={hidden}")).StatusCode);
+
+            // Seen but not changed by viewers, who still manage the host's own scheduler
+            Assert.False((await viewer.GetFromJsonAsync<JsonElement>($"api/scheduler?scheduler={watched}")).GetProperty("canManage").GetBoolean());
+            var create = await viewer.PostJson($"api/jobs?scheduler={watched}", new { type = typeof(PlainJob).FullName, name = "nope" });
+            Assert.Equal(HttpStatusCode.Forbidden, create.StatusCode);
+            Assert.Equal((false, 403, watched), (audit.Events[^1].Succeeded, audit.Events[^1].StatusCode, audit.Events[^1].Scheduler));
+            Assert.Equal(HttpStatusCode.Created,
+                (await viewer.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "fine" })).StatusCode);
+            Assert.Equal(HttpStatusCode.Created,
+                (await admin.PostJson($"api/jobs?scheduler={watched}", new { type = typeof(PlainJob).FullName, name = "fine" })).StatusCode);
+        }
+        finally
+        {
+            foreach (var extra in extras)
+                await extra.Shutdown();
+        }
+    }
+
+    [Fact]
+    public async Task An_added_scheduler_with_a_database_store_is_read_from_its_tables_when_given_its_properties()
+    {
+        await using var host = await TestHost.Start();
+        // The host's own settings, as another scheduler on the same database would have them
+        var properties = new NameValueCollection();
+        foreach (var (key, value) in host.Services.GetRequiredService<IOptions<QuartzOptions>>().Value)
+            if (!key.Contains("jobFactory", StringComparison.Ordinal))
+                properties[key] = value;
+        var name = UniqueName("stored");
+        properties["quartz.scheduler.instanceName"] = name;
+        var scheduler = await new StdSchedulerFactory(properties).GetScheduler();
+        await scheduler.UseCronlight(host.Services, properties);
+        await scheduler.Start();
+        try
+        {
+            var client = host.Client();
+            var query = $"?scheduler={name}";
+            Assert.Equal(HttpStatusCode.Created,
+                (await client.PostJson($"api/jobs{query}", new { type = typeof(PlainJob).FullName, name = "stored-job" })).StatusCode);
+            Assert.Equal(1, (await client.GetFromJsonAsync<JsonElement>($"api/jobs/search{query}")).GetProperty("total").GetInt32());
+            // Read from QRTZ_FIRED_TRIGGERS, which covers every node, rather than this node's running jobs
+            Assert.Equal("cluster", (await client.GetFromJsonAsync<JsonElement>($"api/running{query}")).GetProperty("source").GetString());
+        }
+        finally
+        {
+            await scheduler.Shutdown();
         }
     }
 }

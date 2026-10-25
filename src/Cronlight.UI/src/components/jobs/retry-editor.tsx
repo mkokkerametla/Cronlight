@@ -55,6 +55,16 @@ export function RetryEditor({
           Double the wait after each retry
         </Label>
       </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-retry-on`}>Only retry these exceptions</Label>
+        <Input
+          id={`${id}-retry-on`}
+          placeholder="Every failure, e.g. HttpRequestException, TimeoutException"
+          value={value.retryOn}
+          disabled={retries === 0}
+          onChange={e => onChange({ ...value, retryOn: e.target.value })}
+        />
+      </div>
       <p className="text-xs text-muted-foreground">
         {retries === 0
           ? 'A failed run is not retried.'

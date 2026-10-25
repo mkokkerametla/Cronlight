@@ -93,14 +93,33 @@ describe('trigger drafts', () => {
 
   it('builds the request from rows with a cron expression, trimmed, without client-only ids', () => {
     const request = draftsToRequest([
-      { id: 1, name: ' nightly ', cronExpression: ' 0 0 2 * * ? ', timeZone: ' Europe/London ' },
-      { id: 2, name: '', cronExpression: '0 0 3 * * ?', timeZone: '' },
-      { id: 3, name: 'blank', cronExpression: '   ', timeZone: '' },
+      {
+        id: 1,
+        name: ' nightly ',
+        cronExpression: ' 0 0 2 * * ? ',
+        timeZone: ' Europe/London ',
+        skipMissed: true,
+      },
+      { id: 2, name: '', cronExpression: '0 0 3 * * ?', timeZone: '', skipMissed: false },
+      { id: 3, name: 'blank', cronExpression: '   ', timeZone: '', skipMissed: false },
     ])
 
     expect(request).toEqual([
-      { name: 'nightly', cronExpression: '0 0 2 * * ?', timeZone: 'Europe/London' },
+      {
+        name: 'nightly',
+        cronExpression: '0 0 2 * * ?',
+        timeZone: 'Europe/London',
+        skipMissed: true,
+      },
       { name: null, cronExpression: '0 0 3 * * ?', timeZone: null },
     ])
+  })
+
+  it('reads whether a trigger skips missed runs from its misfire instruction', () => {
+    const drafts = draftsFromTriggers([
+      trigger({ name: 'skips', misfireInstruction: 'DoNothing' }),
+      trigger({ name: 'runs', misfireInstruction: 'SmartPolicy' }),
+    ])
+    expect(drafts.map(d => d.skipMissed)).toEqual([true, false])
   })
 })

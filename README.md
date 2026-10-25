@@ -136,6 +136,14 @@ the attribute later applies to it.
   stored like any trigger, so in a cluster any node may run it and it survives a restart. It carries the
   failed run's trigger data, so a run started with different data is retried with that data.
 - **Only failures are retried**, not cancelled or vetoed runs. Waits are capped at a day.
+- **Only some failures**, if you like: `[CronlightRetry(3, RetryOn = [typeof(HttpRequestException)])]`, or
+  "Only retry these exceptions" in the editor, retries only those exception types (by full or short name)
+  and types derived from them. Other failures fail at once.
+- **Waiting retries** show on the job's page as a `Retry` trigger with its attempt number, and can be
+  cancelled there (`POST …/jobs/{group}/{name}/retries/{trigger}/cancel-retry`, audited as `cancel-retry`).
+  The attempt that failed stays `Retried` in history, and no alert is sent for it.
+- **A retry that cannot be scheduled** (the job store is unavailable, or the job was deleted meanwhile)
+  leaves the run `Failed`, with the reason after its error, and it counts for alerts.
 - **Pausing** the job pauses a waiting retry too. A job paused while its run was failing keeps the
   retry paused; a manual run of a paused job is retried as usual.
 - **History** shows an attempt that will be retried as `Retried`, with its attempt number, and only the last
@@ -156,9 +164,10 @@ curl -X POST -H "X-Cronlight-Request: 1" -H "Content-Type: application/json" \
   -d '{"data":{"region":"us"}}' …/api/jobs/DEFAULT/nightly/trigger
 ```
 
-The History tab has **Run again** on runs that failed, were vetoed or were cancelled. It runs the job with
-its saved data (history does not keep a run's own data), and the audit log records which run it repeats as
-`retryOf`.
+The History tab has **Run again** on runs that failed, were vetoed or were cancelled. It repeats the run
+with that run's own data: history keeps each run's trigger data (such as the values of a run with different
+data, shown as "own data"), with sensitive values masked, so a masked secret is run with the saved value. The
+audit log records which run it repeats as `retryOf`.
 
 ## Several schedulers in one app
 
@@ -179,12 +188,18 @@ history and failure streaks, and audit events and alerts name the scheduler.
 
 - Only schedulers added this way are served. Quartz keeps every scheduler in the process in one registry,
   which can include other apps' schedulers; Cronlight leaves those alone, and asking for one returns 404.
-- Cronlight reads the database tables of the `AddQuartz` scheduler only. Another scheduler is read through
-  Quartz's API: its job list loads each job, which suits hundreds of jobs rather than thousands, and its
-  Running tab shows this node's runs only.
+- Cronlight reads the database tables of the `AddQuartz` scheduler directly. For another scheduler with a
+  database store, pass the properties it was built from, `await reports.UseCronlight(app.Services, properties)`,
+  and its tables are read the same way. Without them it is read through Quartz's API: its job list loads
+  each job, which suits hundreds of jobs rather than thousands, and its Running tab shows this node's runs
+  only.
 - History of every scheduler goes into the one history table (`SCHED_NAME` tells them apart), and
   `Retention` applies to each.
-- The same permissions apply to every scheduler.
+- **Permissions per scheduler** come on top of `ViewPolicy` and `ManagePolicy`:
+  `o.Schedulers["Billing"] = new() { ViewPolicy = "BillingTeam", ManagePolicy = "BillingAdmins" }`. A user
+  without its view policy does not see it in the picker and gets 403 from its API; one without its manage
+  policy (falling back to its view policy) sees it read-only. Schedulers not listed are open to everyone
+  the dashboard admits. Refusals are audited.
 
 The sample host has a second, in-memory scheduler named Reports (`samples/Cronlight.SampleHost/ReportsScheduler.cs`).
 
@@ -231,7 +246,7 @@ builder.Services.AddCronlightHistory(o =>
   history is kept in memory on each node instead, and a warning is logged.
 - **Table creation.** The table is created on startup if missing. Where the app has no DDL rights, set
   `CreateTable = false` and run the script for your database from `src/Cronlight.History/Schema`.
-  Indexes and columns added in later versions (such as `ATTEMPT`, for retries) are added to an existing
+  Indexes and columns added in later versions (`ATTEMPT` for retries, `DATA` for each run's own data) are added to an existing
   table at startup; with `CreateTable = false` a missing one is logged as a warning with the statement to
   run, and history is written without it.
 - **Jobs are never slowed down.** Listeners only queue records; a background writer stores them. If the
@@ -241,8 +256,13 @@ builder.Services.AddCronlightHistory(o =>
   default; the scheduler was down, paused or had no free thread), history records it as `Misfired`: at the
   fire time it missed, with how many fire times were missed and what Quartz does about it, e.g. "Missed 3
   fire times, the first by 2h 5m; Quartz runs it once now (misfire instruction FireOnceNow)." A run that
-  follows appears as a run of its own. The count ignores the trigger's calendar, so times a calendar
-  excludes are counted as missed too. Triggers with `IgnoreMisfirePolicy` fire every missed time instead
+  follows appears as a run of its own, scheduled at the fire time it makes up for, so it shows how late it
+  started (when the misfire was handled on the node that runs it). The count ignores the trigger's calendar,
+  so times a calendar excludes are counted as missed too.
+- **Late starts.** Any run that started 5 seconds or more after its scheduled time is marked "started …
+  late" in History and in the job's recent runs.
+- **What a trigger does when it misses a run** shows on the job's page. Cron triggers made in the dashboard
+  run once as soon as they can (Quartz's default), or, with "Skip missed runs", wait for the next fire time. Triggers with `IgnoreMisfirePolicy` fire every missed time instead
   and are not reported as misfires. Filter the History tab by *Misfired* to see them all.
 - **Retention** is applied hourly by every node and only touches its own scheduler's rows, so apps sharing
   a database keep their own retention.
@@ -428,7 +448,13 @@ ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://localhost:5099 dotnet 
 
 # UI with hot reload against the running sample: http://localhost:5173/
 cd src/Cronlight.UI && npm run dev
+
+# Or both at once (Ctrl+C stops both); --port changes the sample's port
+build/run.sh --ui
 ```
+
+In VS Code, Run and Debug has **Sample host** (with the debugger attached) and **Sample host + UI dev
+server** (`.vscode/launch.json`).
 
 `dotnet build -p:SkipDashboardUi=true` embeds an existing `wwwroot` without running npm.
 

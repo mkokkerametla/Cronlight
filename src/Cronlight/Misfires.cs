@@ -10,6 +10,7 @@ namespace Cronlight;
 /// <param name="MissedFireTimeUtc">The first fire time it missed.</param>
 /// <param name="DetectedUtc">When Quartz noticed: when the scheduler restarted, or when a thread came free.</param>
 /// <param name="Description">How many fire times it missed, by how long, and what Quartz does about it.</param>
+/// <param name="RunsNow">Quartz runs it as soon as it can, so its next run is the one that catches up.</param>
 /// <param name="Id">
 /// The same for the same trigger and missed fire time. A database store whose misfire handling fails rolls it back
 /// and reports the misfire again on its next pass, so this keeps a repeat from being recorded or alerted twice.
@@ -22,7 +23,8 @@ internal sealed record Misfire(
     TriggerKey Trigger,
     DateTimeOffset MissedFireTimeUtc,
     DateTimeOffset DetectedUtc,
-    string Description);
+    string Description,
+    bool RunsNow);
 
 /// <summary>
 /// Hears one scheduler's misfires. Quartz passes a misfired trigger without its scheduler, so each scheduler gets
@@ -82,25 +84,26 @@ internal static class Misfires
             : count > MaxCounted
                 ? $"Missed {MaxCounted}+ fire times, the first by {late}"
                 : $"Missed {count} fire times, the first by {late}";
+        var (outcome, runsNow) = Outcome(trigger, nowUtc);
         return new Misfire(Id(trigger.Key, missed), schedulerName, instanceName, trigger.JobKey, trigger.Key, missed, nowUtc,
-            $"{what}; {Outcome(trigger, nowUtc)} (misfire instruction {Instruction(trigger)}).");
+            $"{what}; {outcome} (misfire instruction {Instruction(trigger)}).", runsNow);
     }
 
     /// <summary>
     /// Applies the misfire instruction to a copy, as Quartz is about to apply it to the trigger. The trigger's
     /// calendar is left out, since reading it could wait on the job store: a calendar only moves a later fire time.
     /// </summary>
-    private static string Outcome(ITrigger trigger, DateTimeOffset nowUtc)
+    private static (string Text, bool RunsNow) Outcome(ITrigger trigger, DateTimeOffset nowUtc)
     {
         if (trigger.Clone() is not IOperableTrigger copy)
-            return "Quartz applies its misfire instruction";
+            return ("Quartz applies its misfire instruction", false);
         copy.UpdateAfterMisfire(null);
         // Running now puts the next fire time ahead of the trigger's own next one; skipping lands on that one or later
         var next = copy.GetNextFireTimeUtc();
         var regular = trigger.GetFireTimeAfter(nowUtc);
-        return next == null ? "it has no fire times left, so it will not run again"
-            : regular == null || next < regular ? "Quartz runs it once now"
-            : "Quartz skips it and waits for the next fire time";
+        return next == null ? ("it has no fire times left, so it will not run again", false)
+            : regular == null || next < regular ? ("Quartz runs it once now", true)
+            : ("Quartz skips it and waits for the next fire time", false);
     }
 
     // Short enough for the history table's entry id column with any trigger key
@@ -111,11 +114,13 @@ internal static class Misfires
     }
 
     /// <summary>The instruction's name, as the trigger builders spell it.</summary>
-    private static string Instruction(ITrigger trigger)
+    public static string Instruction(ITrigger trigger)
     {
         var instruction = trigger.MisfireInstruction;
         if (instruction == MisfireInstruction.SmartPolicy)
             return "SmartPolicy";
+        if (instruction == MisfireInstruction.IgnoreMisfirePolicy)
+            return "IgnoreMisfirePolicy";
         // Cron, calendar interval and daily time interval triggers share theirs
         return (trigger is ISimpleTrigger, instruction) switch
         {

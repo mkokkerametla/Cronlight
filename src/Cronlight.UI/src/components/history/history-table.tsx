@@ -29,6 +29,7 @@ import {
   formatRelative,
   recordTime,
   shortType,
+  startedLate,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { ExecutionRecord, ExecutionStatus, HistoryFilter } from '@/types'
@@ -148,6 +149,24 @@ export function HistoryTable({
                       {r.jobGroup} · {shortType(r.jobType)}
                       {r.refireCount > 0 && ` · refire ${r.refireCount}`}
                       {r.attempt > 1 && ` · attempt ${r.attempt}`}
+                      {startedLate(r) && (
+                        <span className="text-amber-700 dark:text-amber-400">
+                          {` · started ${startedLate(r)} late`}
+                        </span>
+                      )}
+                      {r.data && (
+                        <>
+                          {' · '}
+                          <span
+                            className="underline decoration-dotted"
+                            title={Object.entries(r.data)
+                              .map(([k, v]) => `${k} = ${v}`)
+                              .join('\n')}
+                          >
+                            own data
+                          </span>
+                        </>
+                      )}
                     </div>
                     {r.error && (
                       <p

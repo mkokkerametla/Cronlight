@@ -25,6 +25,7 @@ public static class CronlightHistoryExtensions
 
         services.TryAddSingleton<QuartzDataSource>();
         services.TryAddSingleton<JobHistoryQueue>();
+        services.TryAddSingleton<MisfireLinks>();
         services.TryAddSingleton<JobHistoryListener>();
         services.TryAddSingleton<IJobHistoryStore>(CreateStore);
         services.AddSchedulerAttachment<JobHistoryAttachment>();

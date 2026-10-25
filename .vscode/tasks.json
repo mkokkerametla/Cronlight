@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // Also builds the dashboard UI when its sources changed
+      "label": "build sample host",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "${workspaceFolder}/samples/Cronlight.SampleHost", "-nologo"],
+      "problemMatcher": "$msCompile",
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "silent" }
+    },
+    {
+      "label": "run sample host and UI dev server",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/run.sh --ui",
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}

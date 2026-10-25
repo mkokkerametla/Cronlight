@@ -11,6 +11,10 @@ export interface Trigger {
   state: TriggerState
   nextFireTimeUtc: string | null
   previousFireTimeUtc: string | null
+  /** What Quartz does when the trigger misses a fire time, e.g. FireOnceNow or DoNothing */
+  misfireInstruction?: string
+  /** For a waiting retry (kind Retry), the attempt it will be: 2 for the first retry */
+  attempt?: number | null
 }
 
 /** How often, and how long apart, a failed run is retried */
@@ -21,6 +25,8 @@ export interface JobRetryPolicy {
   delaySeconds: number
   /** Double the wait before each further retry */
   exponential: boolean
+  /** Retry only failures with these exception types (full or short names, or base types); null retries all */
+  retryOn?: string[] | null
 }
 
 export interface Job {
@@ -139,6 +145,8 @@ export interface TriggerRequest {
   name: string | null
   cronExpression: string
   timeZone: string | null
+  /** Skip a missed fire time instead of running once as soon as the scheduler can */
+  skipMissed?: boolean
 }
 
 export interface CreateJobRequest {
@@ -198,6 +206,8 @@ export interface ExecutionRecord {
   refireCount: number
   /** 1 for a first attempt, 2 for its first automatic retry, and so on */
   attempt: number
+  /** The run's own data (e.g. from a run with different data), secrets masked; null when it used the saved data */
+  data?: Record<string, string> | null
 }
 
 export interface HistoryPage {

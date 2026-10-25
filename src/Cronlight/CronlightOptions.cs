@@ -14,6 +14,13 @@ public class CronlightOptions
     public bool ReadOnly { get; set; }
 
     /// <summary>
+    /// Access to single schedulers, by scheduler name, on top of <see cref="ViewPolicy"/> and
+    /// <see cref="ManagePolicy"/>: e.g. <c>o.Schedulers["Billing"] = new() { ViewPolicy = "BillingTeam" }</c> shows
+    /// the Billing scheduler only to that policy. Schedulers not listed are open to everyone the dashboard admits.
+    /// </summary>
+    public Dictionary<string, CronlightSchedulerAccess> Schedulers { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Without a policy the dashboard is only reachable in the Development environment.
     /// Set this to opt out of that safety net (e.g. when protected by a reverse proxy).
     /// </summary>
@@ -69,4 +76,14 @@ public class CronlightOptions
     /// <summary>JobDataMap keys containing any of these (case-insensitive) are masked in API responses.</summary>
     public List<string> SensitiveKeyPatterns { get; } =
         new() { "password", "secret", "token", "apikey", "connectionstring" };
+}
+
+/// <summary>Who may see and change one scheduler, in addition to the dashboard-wide policies.</summary>
+public class CronlightSchedulerAccess
+{
+    /// <summary>Required to see the scheduler: it is left out of the scheduler picker, and its API refuses others.</summary>
+    public string? ViewPolicy { get; set; }
+
+    /// <summary>Required to change its jobs. Falls back to <see cref="ViewPolicy"/>.</summary>
+    public string? ManagePolicy { get; set; }
 }

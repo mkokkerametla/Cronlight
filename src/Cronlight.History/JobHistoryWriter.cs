@@ -5,8 +5,11 @@ using Quartz;
 
 namespace Cronlight.History;
 
-internal sealed class JobHistoryAttachment(JobHistoryListener listener, JobHistoryQueue queue, ILogger<JobHistoryAttachment> logger)
-    : ISchedulerAttachment
+internal sealed class JobHistoryAttachment(
+    JobHistoryListener listener,
+    JobHistoryQueue queue,
+    MisfireLinks links,
+    ILogger<JobHistoryAttachment> logger) : ISchedulerAttachment
 {
     public Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
@@ -17,21 +20,26 @@ internal sealed class JobHistoryAttachment(JobHistoryListener listener, JobHisto
 
     // A misfire is not a run, so it is written finished, under its own id: a misfire reported again after a
     // rollback replaces its record rather than adding another
-    private void Record(Misfire misfire) => queue.Enqueue(HistoryEvent.Finished, new JobExecutionRecord
+    private void Record(Misfire misfire)
     {
-        SchedulerName = misfire.SchedulerName,
-        InstanceName = misfire.InstanceName,
-        FireInstanceId = misfire.Id,
-        JobName = misfire.Job.Name,
-        JobGroup = misfire.Job.Group,
-        TriggerName = misfire.Trigger.Name,
-        TriggerGroup = misfire.Trigger.Group,
-        ScheduledFireTimeUtc = misfire.MissedFireTimeUtc,
-        FiredTimeUtc = misfire.DetectedUtc,
-        FinishedTimeUtc = misfire.DetectedUtc,
-        Status = JobExecutionStatus.Misfired,
-        Error = misfire.Description
-    });
+        if (misfire.RunsNow)
+            links.Missed(misfire);
+        queue.Enqueue(HistoryEvent.Finished, new JobExecutionRecord
+        {
+            SchedulerName = misfire.SchedulerName,
+            InstanceName = misfire.InstanceName,
+            FireInstanceId = misfire.Id,
+            JobName = misfire.Job.Name,
+            JobGroup = misfire.Job.Group,
+            TriggerName = misfire.Trigger.Name,
+            TriggerGroup = misfire.Trigger.Group,
+            ScheduledFireTimeUtc = misfire.MissedFireTimeUtc,
+            FiredTimeUtc = misfire.DetectedUtc,
+            FinishedTimeUtc = misfire.DetectedUtc,
+            Status = JobExecutionStatus.Misfired,
+            Error = misfire.Description
+        });
+    }
 }
 
 /// <summary>

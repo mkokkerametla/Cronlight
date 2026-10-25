@@ -15,6 +15,7 @@ import type {
   RunningJobs,
   RunJobRequest,
   SchedulerInfo,
+  Trigger,
   UpdateJobRequest,
 } from '@/types'
 
@@ -145,9 +146,10 @@ export function useDashboard(
         if (ok) setTimeout(refresh, 1000)
         return ok
       },
-      // Runs the job again with its saved data; the failed run's own data is not kept in history
+      // Runs the job again with the failed run's own data, if it had any. Masked secrets are not kept in history,
+      // and the server takes them as the saved values
       retry: async (record: ExecutionRecord) => {
-        const body: RunJobRequest = { data: {}, retryOf: record.fireInstanceId }
+        const body: RunJobRequest = { data: record.data ?? {}, retryOf: record.fireInstanceId }
         const ok = await perform(
           () =>
             api(`${jobPath({ group: record.jobGroup, name: record.jobName })}/trigger`, {
@@ -166,6 +168,15 @@ export function useDashboard(
               method: 'POST',
             }),
           `${run.name}: cancellation requested`
+        ),
+      // A waiting retry is one of the job's triggers, in the Cronlight.Retries group
+      cancelRetry: (job: Job, trigger: Trigger) =>
+        perform(
+          () =>
+            api(`${jobPath(job)}/retries/${encodeURIComponent(trigger.name)}/cancel-retry`, {
+              method: 'POST',
+            }),
+          `${job.name}: retry cancelled`
         ),
       remove: (job: Job) =>
         perform(() => api(jobPath(job), { method: 'DELETE' }), `${job.name} deleted`),

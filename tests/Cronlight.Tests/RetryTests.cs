@@ -159,4 +159,106 @@ public class RetryTests
         Assert.Equal(HttpStatusCode.NoContent, masked.StatusCode);
         Assert.Equal(new[] { "data.customerId" }, audit.Events[^1].Changes.Keys);
     }
+
+    [Fact]
+    public async Task Run_again_repeats_a_failed_run_with_its_own_data_from_history()
+    {
+        await using var host = await TestHost.Start(history: _ => { });
+        var client = host.Client();
+        var key = Guid.NewGuid().ToString("N");
+        // The first attempt and both retries fail
+        RetriedJob.FailuresLeft[key] = 3;
+        await HistoryScenarios.Create(client, typeof(RetriedJob), "regional", new { key, region = "eu" });
+        await client.PostJson("api/jobs/DEFAULT/regional/trigger", new { data = new { region = "us" } });
+
+        var failed = Assert.Single(await HistoryScenarios.WaitForHistory(client, "?name=regional&status=Failed", r => r.Count > 0));
+        var data = failed.GetProperty("data").Deserialize<Dictionary<string, string>>()!;
+        Assert.Equal(new Dictionary<string, string> { ["region"] = "us" }, data);
+
+        // As the dashboard's Run again does: the failed run's data, not the saved data
+        RetriedJob.FailuresLeft[key] = -1;
+        var again = await client.PostJson("api/jobs/DEFAULT/regional/trigger", new { data, retryOf = failed.GetProperty("fireInstanceId").GetString() });
+        Assert.Equal(HttpStatusCode.NoContent, again.StatusCode);
+        await Finished(client, "regional", 4);
+        Assert.Equal(new[] { "us", "us", "us", "us" }, RetriedJob.Seen[key]);
+    }
+
+    [Fact]
+    public async Task A_run_s_own_data_is_kept_in_history_with_secrets_masked()
+    {
+        await using var host = await TestHost.Start(history: _ => { });
+        var client = host.Client();
+        await client.PostJson("api/jobs", new { type = typeof(InvoiceJob).FullName, name = "invoice", data = new { customerId = "7", smtpPassword = "hunter2" } });
+        await client.PostAsync("api/jobs/DEFAULT/invoice/trigger", null);
+        await client.PostJson("api/jobs/DEFAULT/invoice/trigger", new { data = new { customerId = "8", smtpPassword = "s3cret" } });
+
+        var records = await HistoryScenarios.WaitForHistory(client, "?name=invoice&status=Succeeded", r => r.Count == 2);
+        Assert.Equal(new Dictionary<string, string> { ["customerId"] = "8", ["smtpPassword"] = "********" },
+            records[0].GetProperty("data").Deserialize<Dictionary<string, string>>());
+        // A plain run used the saved data only
+        Assert.Equal(JsonValueKind.Null, records[1].GetProperty("data").ValueKind);
+    }
+
+    [Fact]
+    public async Task Retries_can_be_limited_to_some_exception_types()
+    {
+        await using var host = await TestHost.Start(history: _ => { });
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(PickyRetryJob), "picky", new { error = "invalid" });
+
+        await client.PostAsync("api/jobs/DEFAULT/picky/trigger", null);
+        await Finished(client, "picky", 1);
+        await Task.Delay(1500);
+        Assert.Equal(["Failed"], (await HistoryScenarios.History(client, "?name=picky")).Select(r => r.GetProperty("status").GetString()));
+
+        await client.PostJson("api/jobs/DEFAULT/picky/trigger", new { data = new { error = "timeout" } });
+        var records = await Finished(client, "picky", 4);
+        Assert.Equal(["Failed", "Retried", "Retried", "Failed"], records.Select(r => r.GetProperty("status").GetString()));
+
+        Assert.Equal(["System.TimeoutException"], Retry(await Job(client, "picky"))!.RetryOn);
+        var bad = await client.PostJson("api/jobs", new
+        {
+            type = typeof(PlainJob).FullName,
+            name = "bad",
+            retry = new { maxRetries = 1, delaySeconds = 1, retryOn = new[] { "not a type" } }
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        Assert.Contains("'not a type' is not an exception type name", await bad.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task A_retry_that_cannot_be_scheduled_leaves_the_run_failed_and_alerts()
+    {
+        var sink = new AlertTests.RecordingAlertSink();
+        await using var host = await TestHost.Start(history: _ => { }, services: AlertTests.Alerts(sink));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(SelfDeletingJob), "doomed");
+        await client.PostAsync("api/jobs/DEFAULT/doomed/trigger", null);
+
+        var record = Assert.Single(await Finished(client, "doomed", 1));
+        Assert.Equal("Failed", record.GetProperty("status").GetString());
+        Assert.Contains("(its retry could not be scheduled:", record.GetProperty("error").GetString());
+        await sink.WaitFor(1);
+        Assert.Equal(CronlightAlertKind.Failing, Assert.Single(sink.Alerts).Kind);
+    }
+
+    [Fact]
+    public async Task A_waiting_retry_shows_on_the_job_and_can_be_cancelled()
+    {
+        var audit = new AuditTests.RecordingSink();
+        await using var host = await TestHost.Start(history: _ => { }, services: s => s.AddSingleton<ICronlightAuditSink>(audit));
+        var client = host.Client();
+        await client.PostJson("api/jobs", new { type = typeof(FailingJob).FullName, name = "later", retry = new { maxRetries = 1, delaySeconds = 3600 } });
+        await client.PostAsync("api/jobs/DEFAULT/later/trigger", null);
+        await HistoryScenarios.WaitForHistory(client, "?name=later&status=Retried", r => r.Count > 0);
+
+        var retry = (await Job(client, "later")).GetProperty("triggers").EnumerateArray().Single(t => t.GetProperty("kind").GetString() == "Retry");
+        Assert.Equal(2, retry.GetProperty("attempt").GetInt32());
+        var name = retry.GetProperty("name").GetString();
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync($"api/jobs/DEFAULT/later/retries/{name}/cancel-retry", null)).StatusCode);
+        Assert.DoesNotContain((await Job(client, "later")).GetProperty("triggers").EnumerateArray(), t => t.GetProperty("kind").GetString() == "Retry");
+        Assert.Equal("cancel-retry", audit.Events[^1].Action);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync($"api/jobs/DEFAULT/later/retries/{name}/cancel-retry", null)).StatusCode);
+    }
 }

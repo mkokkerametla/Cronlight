@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  describeMisfire,
   describeRetry,
+  startedLate,
   formatSeconds,
   formatDuration,
   formatRelative,
@@ -10,7 +12,7 @@ import {
   shortType,
   typeLabel,
 } from '@/lib/format'
-import { job, trigger } from '@/test/fixtures'
+import { execution, job, trigger } from '@/test/fixtures'
 
 describe('formatDuration', () => {
   it.each([
@@ -115,5 +117,41 @@ describe('job status helpers', () => {
     expect(formatSeconds(90)).toBe('1m 30s')
     expect(formatSeconds(3600)).toBe('1h')
     expect(formatSeconds(5400)).toBe('1h 30m')
+  })
+})
+
+describe('misfires and late starts', () => {
+  it('describes what a misfire instruction does', () => {
+    expect(describeMisfire('SmartPolicy')).toBe('Runs once as soon as it can')
+    expect(describeMisfire('DoNothing')).toBe('Skipped; waits for the next fire time')
+    expect(describeMisfire('IgnoreMisfirePolicy')).toBe('Runs every missed fire time')
+    expect(describeMisfire(undefined)).toBeNull()
+  })
+
+  it('marks a run that started 5 seconds or more after its scheduled time', () => {
+    const at = (s: number) => new Date(Date.UTC(2030, 0, 1, 0, 0, s)).toISOString()
+    expect(
+      startedLate(execution(1, { scheduledFireTimeUtc: at(0), firedTimeUtc: at(4) }))
+    ).toBeNull()
+    expect(startedLate(execution(1, { scheduledFireTimeUtc: at(0), firedTimeUtc: at(30) }))).toBe(
+      '30s'
+    )
+    // A misfire says so itself
+    expect(
+      startedLate(
+        execution(1, { status: 'Misfired', scheduledFireTimeUtc: at(0), firedTimeUtc: at(30) })
+      )
+    ).toBeNull()
+  })
+
+  it('names the exception types a retry is limited to', () => {
+    expect(
+      describeRetry({
+        maxRetries: 1,
+        delaySeconds: 30,
+        exponential: false,
+        retryOn: ['TimeoutException'],
+      })
+    ).toBe('1 retry, after 30s, only on TimeoutException')
   })
 })

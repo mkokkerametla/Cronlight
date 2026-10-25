@@ -175,14 +175,13 @@ internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOpt
 
     public void MarkClustered(string schedulerName) => clustered[schedulerName] = true;
 
-    public Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken cancellationToken = default)
+    public async Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken cancellationToken = default)
     {
         var status = RunOutcome.Status(context, jobException);
         // Someone stopped it on purpose: neither a failure nor a recovery. A failure that will be retried is not
         // the outcome yet; the last attempt's is.
-        if (status != JobExecutionStatus.Cancelled && retries?.WillRetry(context, status) != true)
+        if (status != JobExecutionStatus.Cancelled && !(retries != null && await retries.Retry(context, jobException, cancellationToken)))
             Enqueue(context, status == JobExecutionStatus.Succeeded, RunOutcome.Error(context, jobException));
-        return Task.CompletedTask;
     }
 
     /// <summary>

@@ -46,6 +46,12 @@ public record JobExecutionRecord
 
     /// <summary>1 for a first attempt, 2 for its first automatic retry, and so on.</summary>
     public int Attempt { get; init; } = 1;
+
+    /// <summary>
+    /// The run's own data: its trigger's, such as the values of a run with different data, which its retries carry
+    /// too. Null when the run used only the job's saved data. Sensitive values are masked, except secret references.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Data { get; init; }
 }
 
 public record JobHistoryQuery

@@ -26,6 +26,39 @@ export function formatRelative(iso: string | null | undefined): string {
   return relative.format(Math.round(seconds / 86_400), 'day')
 }
 
+/** What Quartz does when a trigger misses a fire time, from its misfire instruction */
+export function describeMisfire(instruction: string | undefined): string | null {
+  switch (instruction) {
+    case undefined:
+      return null
+    case 'SmartPolicy':
+    case 'FireOnceNow':
+    case 'FireNow':
+      return 'Runs once as soon as it can'
+    case 'DoNothing':
+    case 'RescheduleNextWithRemainingCount':
+    case 'RescheduleNextWithExistingCount':
+      return 'Skipped; waits for the next fire time'
+    case 'RescheduleNowWithExistingRepeatCount':
+    case 'RescheduleNowWithRemainingRepeatCount':
+      return 'Runs as soon as it can, and later fire times move with it'
+    case 'IgnoreMisfirePolicy':
+      return 'Runs every missed fire time'
+    default:
+      return instruction
+  }
+}
+
+/** A run that started this much after its scheduled time is marked as late */
+export const lateAfterMs = 5000
+
+/** How late a run started, when late enough to mention ("2m 5s"), else null. Misfires say so themselves. */
+export function startedLate(r: ExecutionRecord): string | null {
+  if (r.status === 'Misfired' || !r.scheduledFireTimeUtc) return null
+  const ms = new Date(r.firedTimeUtc).getTime() - new Date(r.scheduledFireTimeUtc).getTime()
+  return ms >= lateAfterMs ? formatSeconds(Math.round(ms / 1000)) : null
+}
+
 /** A misfire is shown at the fire time it missed, a run at the time it fired */
 export const recordTime = (r: ExecutionRecord) =>
   r.status === 'Misfired' ? (r.scheduledFireTimeUtc ?? r.firedTimeUtc) : r.firedTimeUtc
@@ -77,8 +110,9 @@ export const retryDelays = (policy: JobRetryPolicy): number[] =>
 /** "Up to 3 retries, 30s apart", or with doubling "Up to 3 retries, after 30s, 1m, 2m" */
 export function describeRetry(policy: JobRetryPolicy | null | undefined): string {
   if (!policy || policy.maxRetries <= 0) return 'None'
-  if (policy.maxRetries === 1) return `1 retry, after ${formatSeconds(policy.delaySeconds)}`
+  const only = policy.retryOn?.length ? `, only on ${policy.retryOn.join(', ')}` : ''
+  if (policy.maxRetries === 1) return `1 retry, after ${formatSeconds(policy.delaySeconds)}${only}`
   const text = `Up to ${policy.maxRetries} retries`
-  if (!policy.exponential) return `${text}, ${formatSeconds(policy.delaySeconds)} apart`
-  return `${text}, after ${retryDelays(policy).map(formatSeconds).join(', ')}`
+  if (!policy.exponential) return `${text}, ${formatSeconds(policy.delaySeconds)} apart${only}`
+  return `${text}, after ${retryDelays(policy).map(formatSeconds).join(', ')}${only}`
 }

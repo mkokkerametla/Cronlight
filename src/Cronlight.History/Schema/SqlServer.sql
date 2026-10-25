@@ -19,7 +19,9 @@ CREATE TABLE {TABLE} (
     ERROR NVARCHAR(4000) NULL,
     REFIRE_COUNT INT NOT NULL,
     -- 1 for a first attempt, 2 for its first automatic retry, and so on; NULL in rows written before retries
-    ATTEMPT INT NULL
+    ATTEMPT INT NULL,
+    -- The run's own data (its trigger's, e.g. from a run with different data) as JSON, secrets masked; NULL when none
+    DATA NVARCHAR(MAX) NULL
 );
 CREATE INDEX IDX_{NAME}_ID ON {TABLE} (SCHED_NAME, ID);
 CREATE INDEX IDX_{NAME}_JOB ON {TABLE} (SCHED_NAME, JOB_GROUP, JOB_NAME, ID);

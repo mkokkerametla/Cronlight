@@ -136,3 +136,24 @@ public class RetriedJob : IJob
         return left >= 0 ? throw new InvalidOperationException($"{key} failed, {left} failures to go") : Task.CompletedTask;
     }
 }
+
+/// <summary>Retried only on timeouts: throws a TimeoutException when its "error" is "timeout", else an InvalidOperationException.</summary>
+[CronlightRetry(2, DelaySeconds = 1, RetryOn = [typeof(TimeoutException)])]
+public class PickyRetryJob : IJob
+{
+    public Task Execute(IJobExecutionContext context) =>
+        context.MergedJobDataMap.GetString("error") == "timeout"
+            ? throw new TimeoutException("Upstream timed out")
+            : throw new InvalidOperationException("Bad input");
+}
+
+/// <summary>Deletes itself, then fails, so its retry cannot be scheduled: the job it would run is gone.</summary>
+[CronlightRetry(1, DelaySeconds = 1)]
+public class SelfDeletingJob : IJob
+{
+    public async Task Execute(IJobExecutionContext context)
+    {
+        await context.Scheduler.DeleteJob(context.JobDetail.Key);
+        throw new InvalidOperationException("Failed after deleting itself");
+    }
+}

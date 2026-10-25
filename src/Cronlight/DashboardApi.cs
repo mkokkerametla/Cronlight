@@ -12,6 +12,8 @@ using Quartz.Impl.Matchers;
 
 namespace Cronlight;
 
+/// <param name="MisfireInstruction">What Quartz does when the trigger misses a fire time, e.g. FireOnceNow or DoNothing.</param>
+/// <param name="Attempt">For a waiting retry, the attempt it will be: 2 for the first retry.</param>
 public record TriggerDto(
     string Name,
     string Group,
@@ -20,7 +22,9 @@ public record TriggerDto(
     string? TimeZone,
     string State,
     DateTimeOffset? NextFireTimeUtc,
-    DateTimeOffset? PreviousFireTimeUtc
+    DateTimeOffset? PreviousFireTimeUtc,
+    string MisfireInstruction,
+    int? Attempt = null
 );
 
 public record JobDto(
@@ -53,7 +57,11 @@ public record JobPageDto(
 /// <summary>Counts over every job, whatever the search and filters.</summary>
 public record JobCountsDto(int All, int Active, int Paused, int Unloadable);
 
-public record TriggerRequest(string? Name, string CronExpression, string? TimeZone);
+/// <param name="SkipMissed">
+/// When the scheduler misses a fire time (it was down, or had no free thread), skip it and wait for the next one,
+/// instead of running once as soon as it can (Quartz's default).
+/// </param>
+public record TriggerRequest(string? Name, string CronExpression, string? TimeZone, bool SkipMissed = false);
 
 public record CreateJobRequest(
     string Type,
@@ -99,6 +107,30 @@ internal static class DashboardApi
     private static async Task<IScheduler> Scheduler(HttpContext http, CancellationToken cancellationToken = default) =>
         await http.RequestServices.GetRequiredService<CronlightSchedulers>().Find(RequestedScheduler(http), cancellationToken)
         ?? throw new UnknownSchedulerException(RequestedScheduler(http));
+
+    /// <summary>
+    /// Refuses requests for a scheduler the user may not see (<see cref="CronlightOptions.Schedulers"/>), or for
+    /// changes to one they may not manage. Reads are checked here; changes on the manage group, after auditing, so
+    /// refusals are audited.
+    /// </summary>
+    public static void RequireSchedulerAccess(this RouteGroupBuilder api, bool manage)
+    {
+        api.AddEndpointFilter(async (context, next) =>
+        {
+            var http = context.HttpContext;
+            var options = http.RequestServices.GetRequiredService<IOptions<CronlightOptions>>().Value;
+            if (options.Schedulers.Count == 0 || !manage && !HttpMethods.IsGet(http.Request.Method))
+                return await next(context);
+            var name = (await Scheduler(http)).SchedulerName;
+            if (!await CanView(http, options, name))
+                return Results.Problem(title: "Access denied.", detail: $"You do not have access to scheduler '{name}'.",
+                    statusCode: StatusCodes.Status403Forbidden);
+            if (manage && !await CanManage(http, options, name))
+                return Results.Problem(title: "Access denied.", detail: $"You cannot change jobs in scheduler '{name}'.",
+                    statusCode: StatusCodes.Status403Forbidden);
+            return await next(context);
+        });
+    }
 
     /// <summary>Refuses requests that change jobs unless they come from the dashboard or another same-site client.</summary>
     public static void RequireDashboardRequests(this RouteGroupBuilder api)
@@ -155,6 +187,10 @@ internal static class DashboardApi
         {
             var scheduler = await Scheduler(http);
             var meta = await scheduler.GetMetaData();
+            var visible = new List<string>();
+            foreach (var s in await schedulers.All())
+                if (await CanView(http, options.Value, s.SchedulerName))
+                    visible.Add(s.SchedulerName);
             return Results.Ok(new
             {
                 meta.SchedulerName,
@@ -169,13 +205,13 @@ internal static class DashboardApi
                 meta.NumberOfJobsExecuted,
                 meta.RunningSince,
                 // Lets the UI hide controls the user cannot use; the server still enforces it
-                CanManage = await CanManage(http, options.Value),
+                CanManage = await CanManage(http, options.Value, scheduler.SchedulerName),
                 HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null,
                 options.Value.ShowScheduleAssistant,
                 SecretReferences = SecretReferences.Enabled(options.Value),
                 RefreshSeconds = Math.Clamp(options.Value.RefreshSeconds, 1, 300),
-                // Every scheduler served, the host's own first, for the dashboard's scheduler picker
-                Schedulers = (await schedulers.All()).Select(s => s.SchedulerName).ToList()
+                // Every scheduler served that the user may see, the host's own first, for the dashboard's scheduler picker
+                Schedulers = visible
             });
         });
 
@@ -439,6 +475,31 @@ internal static class DashboardApi
             OnJob(http, o.Value, group, name, (s, k) => s.DeleteJob(k)));
 
         api.MapPost("/jobs/{group}/{name}/runs/{fireInstanceId}/cancel", CancelRun);
+        api.MapPost("/jobs/{group}/{name}/retries/{trigger}/cancel-retry", CancelRetry);
+    }
+
+    /// <summary>
+    /// Unschedules a waiting retry. The attempt that failed stays in history as Retried, and no alert is sent for it:
+    /// cancelling is a decision someone made.
+    /// </summary>
+    private static async Task<IResult> CancelRetry(string group, string name, string trigger, HttpContext http,
+        IOptions<CronlightOptions> options)
+    {
+        var scheduler = await Scheduler(http);
+        var key = new JobKey(name, group);
+        var (_, problem) = await GetManageableJob(scheduler, key, options.Value);
+        if (problem != null)
+            return problem;
+
+        var triggerKey = new TriggerKey(trigger, Retries.TriggerGroup);
+        if (await scheduler.GetTrigger(triggerKey) is not { } retry || !retry.JobKey.Equals(key))
+            return Results.NotFound($"Job {key} has no waiting retry {trigger}; it may have run already.");
+        // Quartz deletes a non-durable job together with its last trigger
+        if (await scheduler.GetJobDetail(key) is { Durable: false } && (await scheduler.GetTriggersOfJob(key)).Count == 1)
+            return Results.Conflict($"The retry is job {key}'s only trigger, and the job is not durable: cancelling it would delete the job.");
+
+        await scheduler.UnscheduleJob(triggerKey);
+        return Results.NoContent();
     }
 
     /// <summary>
@@ -591,7 +652,8 @@ internal static class DashboardApi
                 await scheduler.ScheduleJob(trigger);
                 continue;
             }
-            if (old.CronExpressionString == trigger.CronExpressionString && old.TimeZone.Id == trigger.TimeZone.Id)
+            if (old.CronExpressionString == trigger.CronExpressionString && old.TimeZone.Id == trigger.TimeZone.Id
+                && old.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing == (trigger.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing))
                 continue;
 
             // Rescheduling replaces the trigger, so carry over a paused state explicitly
@@ -711,7 +773,12 @@ internal static class DashboardApi
             triggers.Add(TriggerBuilder.Create()
                 .WithIdentity(name, group)
                 .ForJob(key)
-                .WithCronSchedule(r.CronExpression.Trim(), c => c.InTimeZone(tz))
+                .WithCronSchedule(r.CronExpression.Trim(), c =>
+                {
+                    c.InTimeZone(tz);
+                    if (r.SkipMissed)
+                        c.WithMisfireHandlingInstructionDoNothing();
+                })
                 .Build());
         }
         return true;
@@ -763,17 +830,28 @@ internal static class DashboardApi
                 cron?.TimeZone.Id,
                 state.ToString(),
                 trigger.GetNextFireTimeUtc(),
-                trigger.GetPreviousFireTimeUtc()
+                trigger.GetPreviousFireTimeUtc(),
+                Misfires.Instruction(trigger),
+                trigger.Key.Group == Retries.TriggerGroup && int.TryParse(trigger.JobDataMap.GetString(Retries.AttemptKey), out var attempt) ? attempt : null
             ));
         }
         return result;
     }
 
-    private static async Task<bool> CanManage(HttpContext http, CronlightOptions options)
+    private static async Task<bool> CanManage(HttpContext http, CronlightOptions options, string schedulerName)
     {
         if (options.ReadOnly)
             return false;
-        var policy = options.ManagePolicy ?? options.ViewPolicy;
+        options.Schedulers.TryGetValue(schedulerName, out var access);
+        return await Authorized(http, options.ManagePolicy ?? options.ViewPolicy)
+            && await Authorized(http, access?.ManagePolicy ?? access?.ViewPolicy);
+    }
+
+    private static async Task<bool> CanView(HttpContext http, CronlightOptions options, string schedulerName) =>
+        !options.Schedulers.TryGetValue(schedulerName, out var access) || await Authorized(http, access.ViewPolicy);
+
+    private static async Task<bool> Authorized(HttpContext http, string? policy)
+    {
         if (policy == null)
             return true;
         // Resolved lazily: hosts without policies need not register authorization at all
@@ -830,7 +908,8 @@ internal static class DashboardApi
 
     private static string? DescribeRetry(JobRetryPolicy? policy) =>
         policy == null ? null
-        : $"{policy.MaxRetries} {(policy.MaxRetries == 1 ? "retry" : "retries")}, {policy.DelaySeconds}s {(policy.Exponential ? "doubling" : "apart")}";
+        : $"{policy.MaxRetries} {(policy.MaxRetries == 1 ? "retry" : "retries")}, {policy.DelaySeconds}s {(policy.Exponential ? "doubling" : "apart")}"
+          + (policy.RetryOn is { Count: > 0 } types ? $", only on {string.Join(", ", types)}" : "");
 
     private static string? ReservedKey(Dictionary<string, string> data) =>
         data.Keys.FirstOrDefault(Retries.IsReserved) is { } key
@@ -838,7 +917,7 @@ internal static class DashboardApi
             : null;
 
     private static string? DescribeTriggers(IEnumerable<ITrigger> triggers) =>
-        string.Join("; ", triggers.OfType<ICronTrigger>().Select(t => $"{t.CronExpressionString} ({t.TimeZone.Id})")) is { Length: > 0 } text
+        string.Join("; ", triggers.OfType<ICronTrigger>().Select(t => $"{t.CronExpressionString} ({t.TimeZone.Id}{(t.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing ? ", skips missed" : "")})")) is { Length: > 0 } text
             ? text
             : null;
 
@@ -850,7 +929,7 @@ internal static class DashboardApi
     /// A job data value as the API and audit log show it: sensitive values are masked, except secret
     /// references, which name a secret without revealing it and are shown so people can see which one is used.
     /// </summary>
-    private static string? Display(string key, string? value, HashSet<string> secretKeys, CronlightOptions options) =>
+    internal static string? Display(string key, string? value, HashSet<string> secretKeys, CronlightOptions options) =>
         value == null || !IsSensitive(key, secretKeys, options) ? value
         : SecretReferences.Enabled(options) && SecretReferences.IsReference(value) ? value
         : Mask;

@@ -31,6 +31,15 @@ These are listed so the roadmap below is read against them:
   `Misfired`, at the fire time missed, with how many were missed and what Quartz did (ran it once now,
   skipped to the next fire time, or no fire times left). It shows in the History tab, its outcome filter and
   the job's recent runs, and raises an alert when `NotifyOnMisfire` is on.
+- Follow-ups to the above:
+  - Retries: Run again repeats a run with its own data (kept in history, secrets masked); waiting retries
+    show on the job's page and can be cancelled; retries can be limited to some exception types; a retry
+    that cannot be scheduled leaves the run failed and alerts.
+  - Misfires: each trigger's misfire behaviour shows on the job's page, and "Skip missed runs" can be chosen
+    for cron triggers; runs that start 5 seconds late or more are marked; the run that catches up after a
+    misfire is recorded at the fire time it makes up for.
+  - Several schedulers: permissions per scheduler (`o.Schedulers[name]`); an added scheduler given its
+    properties is read from its tables, like the host's own.
 
 ## How Cronlight compares
 
@@ -62,7 +71,7 @@ It lags on:
 
 - **Quartz 4 support.** Cronlight is built on Quartz 3.13 and does not run on 4.x, which is now the
   current line. Quartz 4 also brings its own retries and execution history, which overlap Cronlight's.
-- which schedulers each visitor sees, and remote schedulers (HTTP, agent)
+- remote schedulers (HTTP, agent)
 - live updates, job progress and captured log lines
 - adoption
 
@@ -101,42 +110,6 @@ affected. To decide:
   rather than run two of each?
 - Process-global singletons are gone in 4.x, so `UseCronlight`'s reason for being opt-in (the
   process-wide scheduler registry) may not apply there.
-
-### Several schedulers: follow-ups
-
-Left out of the first version:
-
-- **Permissions per scheduler**, for example letting the billing team see only the billing scheduler.
-  Today one view policy and one manage policy cover every scheduler.
-- **The fast database path for added schedulers.** The host could give Cronlight an added scheduler's
-  database settings, so its job list reads two queries instead of loading each job, and its Running tab
-  shows every node.
-
-### Misfire follow-ups
-
-Left out of the first version of misfire visibility:
-
-- **Show and choose each trigger's misfire instruction** in the job's page and editor ("if missed: run once
-  now / skip"). Today it shows only in a misfire's description, and cron triggers made in the editor use
-  Quartz's default (run once now).
-- **Runs that start late but within the misfire threshold** (under 60 seconds by default) are not
-  misfires to Quartz and are not flagged. History has their scheduled and fired times, so a "started late"
-  marker could be added.
-- **Link a misfire to the late run that followed it.** The run is rescheduled to now, so its scheduled time
-  is not the missed one.
-
-### Retry follow-ups
-
-Left out of the first version of retries:
-
-- **Keep each run's data in history**, so Run again repeats a failed run exactly. Today it runs the job
-  with its saved data, which differs when the failed run was started with different data.
-- **Show waiting retries**: when the next attempt is due, on the job's page and in the job list, with a
-  way to cancel it.
-- **Retry only some failures**, for example by exception type, so a validation error is not retried
-  pointlessly.
-- **Alert when a retry cannot be scheduled.** If the job store is unavailable at that moment, the run is
-  already recorded as Retried and no alert is sent; only an error is logged.
 
 ### Log output for each run
 
@@ -188,7 +161,8 @@ events or SignalR, and fall back to the current polling.
 - `RetryTests.A_run_with_different_data_uses_it_for_that_run_and_its_retries_only` failed once on .NET 10
   during a full parallel run: the retry never showed in history. It passes on its own and in later full
   runs. A suspected cause, not confirmed, is a busy SQLite store making the retry fail to schedule, which is
-  only logged (see Alert when a retry cannot be scheduled), and the tests discard logs.
+  only logged at the time, and the tests discard logs. A retry that cannot be scheduled now leaves the run
+  Failed with the reason, so a repeat would show why.
 - Not covered by tests: a history table without the `ATTEMPT` column when `CreateTable` is off, and a
   blocked run counting as a failure in a cluster, where streaks are read from history.
 
@@ -196,7 +170,7 @@ events or SignalR, and fall back to the current polling.
 
 ## Design: several schedulers in one app
 
-Built from the design below, except for permissions per scheduler (a follow-up), with these decisions:
+Built from the design below, with permissions per scheduler added later, and with these decisions:
 
 - **Opt-in, with `UseCronlight`.** Quartz's `GetAllSchedulers` returns every scheduler in the process,
   including other apps' (and, in the test suite, other test hosts'), so attaching to all of them would

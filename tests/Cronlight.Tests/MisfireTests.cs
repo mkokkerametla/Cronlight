@@ -1,4 +1,6 @@
+using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Quartz;
 
 namespace Cronlight.Tests;
@@ -41,7 +43,7 @@ public class MisfireTests
         await using var host = await TestHost.Start(history: _ => { }, ramJobStore: ramJobStore, misfireThreshold: Threshold);
         var scheduler = await host.Scheduler();
         var skippedStart = await ScheduleOverdue(scheduler, "skipped", s => s.WithMisfireHandlingInstructionNextWithRemainingCount());
-        await ScheduleOverdue(scheduler, "caught-up", s => s.WithMisfireHandlingInstructionNowWithExistingCount());
+        var caughtUpStart = await ScheduleOverdue(scheduler, "caught-up", s => s.WithMisfireHandlingInstructionNowWithExistingCount());
         var client = host.Client();
 
         var skipped = Assert.Single(await WaitForMisfire(client, "skipped"));
@@ -58,6 +60,9 @@ public class MisfireTests
             r => r.Any(x => Status(x) == "Misfired") && r.Any(x => Status(x) == "Succeeded"));
         Assert.EndsWith("; Quartz runs it once now (misfire instruction RescheduleNowWithExistingRepeatCount).",
             caughtUp.Last(r => Status(r) == "Misfired").GetProperty("error").GetString());
+        // The run that catches up is recorded with the fire time it makes up for, so it shows how late it started
+        var run = caughtUp.Single(r => Status(r) == "Succeeded");
+        Assert.InRange(run.GetProperty("scheduledFireTimeUtc").GetDateTimeOffset() - caughtUpStart, TimeSpan.FromSeconds(-1), TimeSpan.FromSeconds(1));
 
         // Filtered by outcome, as the dashboard's history filter does
         Assert.All(await HistoryScenarios.History(client, "?status=Misfired"), r => Assert.Equal("Misfired", Status(r)));
@@ -91,5 +96,29 @@ public class MisfireTests
         await Task.Delay(500);
         Assert.Empty(sink.Alerts);
         Assert.DoesNotContain((await host.Scheduler()).ListenerManager.GetTriggerListeners(), l => l.Name == "Cronlight.Alerts.Misfires");
+    }
+
+    [Fact]
+    public async Task A_cron_trigger_made_in_the_dashboard_can_skip_missed_runs()
+    {
+        var audit = new AuditTests.RecordingSink();
+        await using var host = await TestHost.Start(services: s => s.AddSingleton<ICronlightAuditSink>(audit));
+        var client = host.Client();
+        var created = await client.PostJson("api/jobs", new
+        {
+            type = typeof(PlainJob).FullName,
+            name = "nightly",
+            triggers = new object[]
+            {
+                new { name = "skips", cronExpression = "0 0 2 * * ?", skipMissed = true },
+                new { name = "runs", cronExpression = "0 0 3 * * ?" },
+            }
+        });
+        Assert.Equal(System.Net.HttpStatusCode.Created, created.StatusCode);
+
+        var triggers = (await client.GetFromJsonAsync<JsonElement>("api/jobs/DEFAULT/nightly")).GetProperty("triggers").EnumerateArray()
+            .ToDictionary(t => t.GetProperty("name").GetString()!, t => t.GetProperty("misfireInstruction").GetString());
+        Assert.Equal(("DoNothing", "SmartPolicy"), (triggers["skips"], triggers["runs"]));
+        Assert.Contains("skips missed", audit.Events[^1].Changes["triggers"].After);
     }
 }
