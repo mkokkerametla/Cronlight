@@ -160,6 +160,34 @@ The History tab has **Run again** on runs that failed, were vetoed or were cance
 its saved data (history does not keep a run's own data), and the audit log records which run it repeats as
 `retryOf`.
 
+## Several schedulers in one app
+
+Cronlight serves the scheduler from `AddQuartz`. An app that builds more schedulers in code (one per team,
+or per database) adds each one with `UseCronlight`, before starting it:
+
+```csharp
+var reports = await new StdSchedulerFactory(properties).GetScheduler();
+reports.JobFactory = app.Services.GetRequiredService<IJobFactory>(); // jobs with constructor dependencies
+await reports.UseCronlight(app.Services); // dashboard, history, alerts, retries and secret references
+await reports.Start();
+```
+
+The dashboard then shows a scheduler picker in its header, and the API takes `?scheduler=<name>` on every
+endpoint (without it, requests go to the `AddQuartz` scheduler, so existing scripts keep working). The
+choice is kept in the page's URL, so a link opens the same scheduler. Each scheduler has its own jobs,
+history and failure streaks, and audit events and alerts name the scheduler.
+
+- Only schedulers added this way are served. Quartz keeps every scheduler in the process in one registry,
+  which can include other apps' schedulers; Cronlight leaves those alone, and asking for one returns 404.
+- Cronlight reads the database tables of the `AddQuartz` scheduler only. Another scheduler is read through
+  Quartz's API: its job list loads each job, which suits hundreds of jobs rather than thousands, and its
+  Running tab shows this node's runs only.
+- History of every scheduler goes into the one history table (`SCHED_NAME` tells them apart), and
+  `Retention` applies to each.
+- The same permissions apply to every scheduler.
+
+The sample host has a second, in-memory scheduler named Reports (`samples/Cronlight.SampleHost/ReportsScheduler.cs`).
+
 ## Scheduling API calls (HTTP job)
 
 The sample includes [`HttpJob`](samples/Cronlight.SampleHost/HttpJob.cs), a job type for calling HTTP APIs
@@ -234,10 +262,10 @@ Cronlight are logged by ASP.NET Core instead. Secret values are never written: a
 `********`.
 
 ```text
-Audit: alice@contoso.com update billing.invoices: succeeded (204) {"description":{"Before":"Weekly","After":"Daily"},"triggers":{"Before":"0 0 9 ? * MON (UTC)","After":"0 0 9 * * ? (UTC)"}}
+Audit: alice@contoso.com update billing.invoices in Billing: succeeded (204) {"description":{"Before":"Weekly","After":"Daily"},"triggers":{"Before":"0 0 9 ? * MON (UTC)","After":"0 0 9 * * ? (UTC)"}}
 ```
 
-The fields are structured (`User`, `AuditAction`, `JobGroup`, `JobName`, `AuditOutcome`, `StatusCode`),
+The fields are structured (`User`, `AuditAction`, `JobGroup`, `JobName`, `Scheduler`, `AuditOutcome`, `StatusCode`),
 so log tools such as Seq, Application Insights or Elasticsearch can filter on them. To keep events in your
 own store as well, register one or more sinks:
 
@@ -340,7 +368,7 @@ class PagerAlertSink(IPagerClient pager) : ICronlightAlertSink
   type and trigger states in two queries, and loads full details only for the page shown (50 jobs), so
   thousands of jobs cost about as much as fifty. `GET api/jobs` still returns every job with full
   details, for scripts and small schedulers.
-- **Polling** happens every 10 seconds only while the dashboard is visible: a tab in the background asks
+- **Polling** happens every 10 seconds (`RefreshSeconds`) only while the dashboard is visible: a tab in the background asks
   nothing, and refreshes as soon as it is shown again. The 24-hour failure count is refreshed once a minute.
 - **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.

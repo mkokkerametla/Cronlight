@@ -25,6 +25,8 @@ builder.Services.AddQuartz(q =>
     });
 });
 builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
+// A second, in-memory scheduler built in code, to show the dashboard's scheduler picker
+builder.Services.AddHostedService<ReportsScheduler>();
 
 // Execution history, stored next to the Quartz tables (QRTZ_CRONLIGHT_HISTORY)
 builder.Services.AddCronlightHistory(o => o.Retention = TimeSpan.FromDays(7));

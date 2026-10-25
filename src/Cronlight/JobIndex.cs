@@ -21,8 +21,10 @@ internal sealed record JobIndexEntry(string Group, string Name, bool Loadable, s
 /// Reads every job's type and trigger states without loading each job. For ADO stores that is two queries on
 /// the Quartz tables, however many jobs there are, so the dashboard can search, filter, count and page on
 /// the server and load full details only for the page it shows.
+/// The tables are those of the host's own scheduler; another scheduler the host added is read through its API.
 /// </summary>
-internal sealed class JobIndexReader(QuartzDataSource dataSource, JobTypeCatalog catalog, ILogger<JobIndexReader> logger)
+internal sealed class JobIndexReader(QuartzDataSource dataSource, CronlightSchedulers schedulers, JobTypeCatalog catalog,
+    ILogger<JobIndexReader> logger)
 {
     // Quartz stores job types as "Namespace.Type, Assembly"; resolving one is costly, and the answer does not change
     private readonly ConcurrentDictionary<string, Type?> types = new();
@@ -30,7 +32,7 @@ internal sealed class JobIndexReader(QuartzDataSource dataSource, JobTypeCatalog
     public async Task<IReadOnlyList<JobIndexEntry>> Read(IScheduler scheduler, CancellationToken cancellationToken)
     {
         var meta = await scheduler.GetMetaData(cancellationToken);
-        if (meta.JobStoreSupportsPersistence && dataSource.Provider != null)
+        if (meta.JobStoreSupportsPersistence && dataSource.Provider != null && await IsHosts(scheduler, cancellationToken))
         {
             try
             {
@@ -83,7 +85,10 @@ internal sealed class JobIndexReader(QuartzDataSource dataSource, JobTypeCatalog
         return result;
     }
 
-    /// <summary>For the in-memory store, or when the tables cannot be read: the scheduler's own API.</summary>
+    private async Task<bool> IsHosts(IScheduler scheduler, CancellationToken cancellationToken) =>
+        scheduler.SchedulerName == (await schedulers.Default(cancellationToken)).SchedulerName;
+
+    /// <summary>For the in-memory store, another scheduler, or when the tables cannot be read: the scheduler's own API.</summary>
     private async Task<IReadOnlyList<JobIndexEntry>> ReadScheduler(IScheduler scheduler, CancellationToken cancellationToken)
     {
         var result = new List<JobIndexEntry>();

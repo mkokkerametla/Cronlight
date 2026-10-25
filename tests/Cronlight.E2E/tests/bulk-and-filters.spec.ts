@@ -1,5 +1,5 @@
 import { expect, test } from './fixtures'
-import { choose, createJob, jobRow, jobTypes, openDashboard, statCard, uniqueName } from './helpers'
+import { choose, createJob, jobRow, jobTypes, openDashboard, searchJobs, statCard, uniqueName } from './helpers'
 
 const daily = [{ cronExpression: '0 0 6 * * ?' }]
 
@@ -9,7 +9,7 @@ test('pauses and resumes several jobs at once', async ({ page, request }) => {
   await createJob(request, { type: jobTypes.plain, name: first, group, triggers: daily })
   await createJob(request, { type: jobTypes.plain, name: second, group, triggers: daily })
   await openDashboard(page)
-  await page.getByLabel('Search jobs').fill(group)
+  await searchJobs(page, group)
 
   await page.getByRole('checkbox', { name: 'Select all' }).click()
   await expect(page.getByText('2 selected')).toBeVisible()
@@ -36,7 +36,7 @@ test('filters jobs by type and by status', async ({ page, request }) => {
   await createJob(request, { type: jobTypes.plain, name: plain, group, triggers: daily })
   await request.post(`api/jobs/${group}/${plain}/pause`)
   await openDashboard(page)
-  await page.getByLabel('Search jobs').fill(group)
+  await searchJobs(page, group)
 
   await choose(page, page.getByLabel('Filter by type'), 'Send invoices')
   await expect(jobRow(page, invoices)).toBeVisible()
@@ -59,7 +59,7 @@ test('the stat cards open the matching view', async ({ page, request }) => {
   await createJob(request, { type: jobTypes.plain, name: paused, group, triggers: daily })
   await request.post(`api/jobs/${group}/${paused}/pause`)
   await openDashboard(page)
-  await page.getByLabel('Search jobs').fill(group)
+  await searchJobs(page, group)
 
   await statCard(page, 'Paused').click()
   await expect(statCard(page, 'Paused')).toHaveAttribute('aria-pressed', 'true')
@@ -84,7 +84,7 @@ test('pages through a long job list, and a new search starts again from the firs
   const names = Array.from({ length: 51 }, (_, i) => `${group}-${String(i + 1).padStart(2, '0')}`)
   for (const name of names) await createJob(request, { type: jobTypes.plain, name, group })
   await openDashboard(page)
-  await page.getByLabel('Search jobs').fill(group)
+  await searchJobs(page, group)
 
   const pages = page.getByRole('navigation', { name: 'Job list pages' })
   const rows = page.getByRole('row').filter({ hasText: group })
@@ -105,7 +105,7 @@ test('pages through a long job list, and a new search starts again from the firs
   // From the second page, a narrower search shows its first page, and no pages once one is enough
   await pages.getByRole('button', { name: 'Next' }).click()
   await expect(pages).toContainText('51–51 of 51')
-  await page.getByLabel('Search jobs').fill(`${group}-5`)
+  await searchJobs(page, `${group}-5`)
   await expect(rows).toHaveCount(2)
   await expect(jobRow(page, names[49])).toBeVisible()
   await expect(jobRow(page, names[50])).toBeVisible()

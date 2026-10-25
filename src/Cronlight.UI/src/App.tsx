@@ -12,6 +12,7 @@ import { JobSheet } from '@/components/jobs/job-sheet'
 import { JobsTable } from '@/components/jobs/jobs-table'
 import { RunningTable } from '@/components/running-table'
 import { Stats, type StatKey } from '@/components/stats'
+import { currentScheduler, selectScheduler } from '@/api'
 import { emptyQuery, refreshMs, useDashboard } from '@/hooks/use-dashboard'
 import { RefreshInterval } from '@/hooks/use-polling'
 import { jobKey } from '@/lib/format'
@@ -26,6 +27,17 @@ const tabTrigger =
 const tabCount = 'h-4.5 min-w-4.5 px-1 tabular-nums'
 
 export default function App() {
+  const [scheduler, setScheduler] = useState(currentScheduler)
+  const changeScheduler = (name: string | null) => {
+    selectScheduler(name)
+    setScheduler(name)
+  }
+  // Another scheduler starts afresh, so no job, filter or open sheet carries over from the last one
+  return <Dashboard key={scheduler ?? ''} onSchedulerChange={changeScheduler} />
+}
+
+/** The dashboard for one scheduler. Null names the host's own. */
+function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | null) => void }) {
   const [tab, setTab] = useState<Tab>('jobs')
   const [jobQuery, setJobQuery] = useState<JobQuery>(emptyQuery)
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>({ status: 'all', job: null })
@@ -82,7 +94,13 @@ export default function App() {
   return (
     <RefreshInterval.Provider value={refreshMs(scheduler)}>
       <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
-        <Header scheduler={scheduler} />
+        <Header
+          scheduler={scheduler}
+          // The host's own scheduler, first in the list, needs no ?scheduler= in the URL
+          onSchedulerChange={name =>
+            onSchedulerChange(name === scheduler?.schedulers[0] ? null : name)
+          }
+        />
 
         {error && (
           <Alert variant="destructive">
@@ -92,9 +110,17 @@ export default function App() {
             </AlertTitle>
             <AlertDescription>
               <p>{error}</p>
-              <Button variant="outline" size="sm" className="mt-2" onClick={refresh}>
-                <RotateCw /> Try again
-              </Button>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={refresh}>
+                  <RotateCw /> Try again
+                </Button>
+                {/* e.g. a scheduler named in the URL that has since been shut down */}
+                {currentScheduler() && (
+                  <Button variant="outline" size="sm" onClick={() => onSchedulerChange(null)}>
+                    Show the main scheduler
+                  </Button>
+                )}
+              </div>
             </AlertDescription>
           </Alert>
         )}

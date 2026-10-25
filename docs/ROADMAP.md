@@ -24,12 +24,15 @@ These are listed so the roadmap below is read against them:
     last attempt.
   - Run a job once with different data, without changing the saved job.
   - Run a failed, blocked or cancelled run again from the History tab.
+- Several schedulers in one app: schedulers the host builds in code are added with `UseCronlight`, picked in
+  the dashboard's header and with `?scheduler=` in the API. Each has its own jobs, history and failure
+  streaks; audit events and alerts name the scheduler. See the [design notes](#design-several-schedulers-in-one-app).
 
 ## How Cronlight compares
 
 | Product | What it is | Notable for |
 | --- | --- | --- |
-| Quartz.Dashboard (official) | Blazor dashboard, experimental | Several schedulers per app, authorization per scheduler, history, misfire tracking, read-only mode |
+| Quartz.Dashboard (official) | Blazor dashboard, experimental | Several schedulers per app (Cronlight now has them too), authorization per scheduler, history, misfire tracking, read-only mode |
 | SilkierQuartz | Quartz dashboard, v10 | Successor to Quartzmin |
 | CrystalQuartz | Quartz dashboard | Last activity found June 2025 |
 | Hangfire | Full scheduler with its own dashboard | Retries (Cronlight now has them too), wide adoption |
@@ -37,18 +40,24 @@ These are listed so the roadmap below is read against them:
 
 Cronlight leads on security, governance and day-to-day operations. It lags on:
 
-- several schedulers in one app
+- permissions per scheduler
 - misfire visibility
 - live updates pushed to the dashboard instead of polling
 - adoption
 
-Suggested order: several schedulers in one app, and misfire visibility, come first.
+Suggested order: misfire visibility comes first.
 
 ## Next (1.x)
 
-### Several schedulers in one app
+### Several schedulers: follow-ups
 
-See the [design below](#design-several-schedulers-in-one-app).
+Left out of the first version:
+
+- **Permissions per scheduler**, for example letting the billing team see only the billing scheduler.
+  Today one view policy and one manage policy cover every scheduler.
+- **The fast database path for added schedulers.** The host could give Cronlight an added scheduler's
+  database settings, so its job list reads two queries instead of loading each job, and its Running tab
+  shows every node.
 
 ### Misfire visibility
 
@@ -116,12 +125,32 @@ events or SignalR, and fall back to the current polling.
 ## Known gaps
 
 - No end-to-end tests for alerts, which would need a webhook receiver in the sample host.
+- `RetryTests.A_run_with_different_data_uses_it_for_that_run_and_its_retries_only` failed once on .NET 10
+  during a full parallel run: the retry never showed in history. It passes on its own and in later full
+  runs. A suspected cause, not confirmed, is a busy SQLite store making the retry fail to schedule, which is
+  only logged (see Alert when a retry cannot be scheduled), and the tests discard logs.
 - Not covered by tests: a history table without the `ATTEMPT` column when `CreateTable` is off, and a
   blocked run counting as a failure in a cluster, where streaks are read from history.
 
 ---
 
 ## Design: several schedulers in one app
+
+Built from the design below, except for permissions per scheduler (a follow-up), with these decisions:
+
+- **Opt-in, with `UseCronlight`.** Quartz's `GetAllSchedulers` returns every scheduler in the process,
+  including other apps' (and, in the test suite, other test hosts'), so attaching to all of them would
+  record and alert on runs that are not this app's. The host adds each extra scheduler with
+  `scheduler.UseCronlight(services)` before starting it, which attaches history, alerts, retries and secret
+  references at once, so no early run is missed. A scheduler created later is added the same way.
+- **Quartz's API only** for added schedulers, as the open question below suggested. The table reads
+  (`JobIndexReader`, `RunningJobsReader`) apply to the `AddQuartz` scheduler only.
+- **One registry** (`CronlightSchedulers`) runs one attachment per feature (`ISchedulerAttachment`) on each
+  scheduler, in place of the four hosted services that each attached to the default scheduler.
+- **The dashboard starts afresh** when another scheduler is picked, so no open job, filter or page carries
+  over. The choice is kept in the page's URL.
+
+The original design follows.
 
 Some apps run more than one Quartz scheduler, for example one per team or one per database. Today Cronlight
 shows only the default scheduler.

@@ -34,12 +34,8 @@ public static class CronlightExtensions
         services.TryAddSingleton<SecretReferenceListener>();
         services.TryAddSingleton<RetryPlanner>();
         services.TryAddSingleton<RetryListener>();
-        if (!services.Any(d => d.ImplementationType == typeof(RetryRegistration)))
-            services.Insert(0, ServiceDescriptor.Singleton<IHostedService, RetryRegistration>());
-        // First in the collection: hosted services start in registration order, so the listener is
-        // attached before Quartz's hosted service starts running jobs
-        if (!services.Any(d => d.ImplementationType == typeof(SecretReferenceRegistration)))
-            services.Insert(0, ServiceDescriptor.Singleton<IHostedService, SecretReferenceRegistration>());
+        services.AddSchedulerAttachment<RetryAttachment>();
+        services.AddSchedulerAttachment<SecretReferenceAttachment>();
         return services;
     }
 
@@ -61,8 +57,8 @@ public static class CronlightExtensions
         services.AddHttpClient(AlertWorker.HttpClientName);
         services.TryAddSingleton<AlertQueue>();
         services.TryAddSingleton<AlertListener>();
-        // First in the collection: the listener is attached before Quartz starts, and alerts are sent
-        // until Quartz has finished its last job
+        services.AddSchedulerAttachment<AlertAttachment>();
+        // First in the collection: alerts are sent until Quartz has finished its last job
         if (!services.Any(d => d.ImplementationType == typeof(AlertWorker)))
             services.Insert(0, ServiceDescriptor.Singleton<IHostedService, AlertWorker>());
         return services;

@@ -1,6 +1,6 @@
 import { expect, test } from './fixtures'
 import { insertForeignJob } from './foreign-jobs'
-import { createJob, jobRow, jobTypes, openDashboard, statCard, uniqueName } from './helpers'
+import { createJob, jobRow, jobTypes, openDashboard, searchJobs, statCard, uniqueName } from './helpers'
 
 test('a job from another app sharing the scheduler is shown read-only', async ({ page, request, sampleHost }) => {
   const group = uniqueName('shared')
@@ -10,7 +10,7 @@ test('a job from another app sharing the scheduler is shown read-only', async ({
 
   try {
     await openDashboard(page)
-    await page.getByLabel('Search jobs').fill(group)
+    await searchJobs(page, group)
     const foreign = jobRow(page, 'report')
 
     await expect(foreign).toContainText('Unloadable')

@@ -20,15 +20,17 @@ public record RunningJobsDto(string Source, IReadOnlyList<RunningJobDto> Jobs);
 
 /// <summary>
 /// IScheduler.GetCurrentlyExecutingJobs only sees this node. For ADO stores the dashboard reads
-/// QRTZ_FIRED_TRIGGERS instead, which covers every node in a cluster.
+/// QRTZ_FIRED_TRIGGERS instead, which covers every node in a cluster. Only the host's own scheduler's tables are
+/// known, so another scheduler the host added shows this node's running jobs.
 /// </summary>
-internal sealed class RunningJobsReader(QuartzDataSource dataSource, ILogger<RunningJobsReader> logger)
+internal sealed class RunningJobsReader(QuartzDataSource dataSource, CronlightSchedulers schedulers, ILogger<RunningJobsReader> logger)
 {
     public async Task<RunningJobsDto> Read(IScheduler scheduler, CancellationToken cancellationToken)
     {
         var meta = await scheduler.GetMetaData(cancellationToken);
 
-        if (meta.JobStoreSupportsPersistence && dataSource.Provider != null)
+        if (meta.JobStoreSupportsPersistence && dataSource.Provider != null
+            && meta.SchedulerName == (await schedulers.Default(cancellationToken)).SchedulerName)
         {
             try
             {

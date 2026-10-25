@@ -1,6 +1,5 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Quartz;
@@ -113,20 +112,14 @@ internal sealed class SecretReferenceListener(
         CancellationToken cancellationToken = default) => Task.CompletedTask;
 }
 
-/// <summary>Attaches <see cref="SecretReferenceListener"/> before Quartz starts, when secret references are on.</summary>
-internal sealed class SecretReferenceRegistration(
-    ISchedulerFactory schedulerFactory,
-    SecretReferenceListener listener,
-    IOptions<CronlightOptions> options) : IHostedService
+/// <summary>Attaches <see cref="SecretReferenceListener"/>, when secret references are on.</summary>
+internal sealed class SecretReferenceAttachment(SecretReferenceListener listener, IOptions<CronlightOptions> options) : ISchedulerAttachment
 {
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
-        if (!SecretReferences.Enabled(options.Value))
-            return;
-        var scheduler = await schedulerFactory.GetScheduler(cancellationToken);
-        if (scheduler.ListenerManager.GetTriggerListeners().All(l => l.Name != listener.Name))
+        if (SecretReferences.Enabled(options.Value)
+            && scheduler.ListenerManager.GetTriggerListeners().All(l => l.Name != listener.Name))
             scheduler.ListenerManager.AddTriggerListener(listener, GroupMatcher<TriggerKey>.AnyGroup());
+        return Task.CompletedTask;
     }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

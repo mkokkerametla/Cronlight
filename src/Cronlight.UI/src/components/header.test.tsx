@@ -1,15 +1,15 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from 'next-themes'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Header } from '@/components/header'
 import { scheduler } from '@/test/fixtures'
 import type { SchedulerInfo } from '@/types'
 
-const renderHeader = (info: SchedulerInfo | null) =>
+const renderHeader = (info: SchedulerInfo | null, onSchedulerChange?: (name: string) => void) =>
   render(
     <ThemeProvider attribute="class" storageKey="cronlight-theme">
-      <Header scheduler={info} />
+      <Header scheduler={info} onSchedulerChange={onSchedulerChange} />
     </ThemeProvider>
   )
 
@@ -34,6 +34,22 @@ describe('Header', () => {
 
     expect(screen.getByRole('heading', { name: 'SampleHost' })).toBeInTheDocument()
     expect(screen.getByText(state)).toBeInTheDocument()
+  })
+
+  it('offers the other schedulers when the app serves more than one', async () => {
+    const onSchedulerChange = vi.fn()
+    renderHeader(scheduler({ schedulers: ['SampleHost', 'Reports'] }), onSchedulerChange)
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Scheduler' }))
+    await userEvent.click(screen.getByRole('option', { name: 'Reports' }))
+
+    expect(onSchedulerChange).toHaveBeenCalledWith('Reports')
+  })
+
+  it('shows no scheduler picker for a single scheduler', () => {
+    renderHeader(scheduler(), vi.fn())
+
+    expect(screen.queryByRole('combobox', { name: 'Scheduler' })).toBeNull()
   })
 
   it('marks a read-only viewer', () => {

@@ -30,6 +30,19 @@ export async function openDashboard(page: Page) {
   await expect(page.getByRole('tab', { name: /Jobs/ })).toBeVisible()
 }
 
+/**
+ * Searches the job list and waits for the server's answer. The search applies after a short pause in
+ * typing and clears any selection, so acting on the list before it applies would act on the wrong jobs.
+ */
+export async function searchJobs(page: Page, text: string) {
+  const answered = page.waitForResponse(response => {
+    const url = new URL(response.url())
+    return url.pathname.endsWith('/api/jobs/search') && url.searchParams.get('search') === text
+  })
+  await page.getByLabel('Search jobs').fill(text)
+  await answered
+}
+
 /** The jobs table row for a job, found by its name. */
 export const jobRow = (page: Page, name: string) =>
   page.getByRole('row').filter({ has: page.getByText(name, { exact: true }) })

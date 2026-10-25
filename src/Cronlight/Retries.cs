@@ -1,10 +1,8 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Quartz;
-using Quartz.Impl.Matchers;
 
 namespace Cronlight;
 
@@ -174,15 +172,11 @@ internal sealed class RetryListener(RetryPlanner planner, ILogger<RetryListener>
     public Task JobExecutionVetoed(IJobExecutionContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }
 
-/// <summary>Attaches <see cref="RetryListener"/> before Quartz starts running jobs.</summary>
-internal sealed class RetryRegistration(ISchedulerFactory schedulerFactory, RetryListener listener) : IHostedService
+internal sealed class RetryAttachment(RetryListener listener) : ISchedulerAttachment
 {
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
-        var scheduler = await schedulerFactory.GetScheduler(cancellationToken);
-        if (scheduler.ListenerManager.GetJobListeners().All(l => l.Name != listener.Name))
-            scheduler.ListenerManager.AddJobListener(listener, GroupMatcher<JobKey>.AnyGroup());
+        scheduler.AddJobListenerOnce(listener);
+        return Task.CompletedTask;
     }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

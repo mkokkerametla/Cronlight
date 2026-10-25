@@ -9,11 +9,25 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { formatDateTime } from '@/lib/format'
 import type { SchedulerInfo } from '@/types'
 
-export function Header({ scheduler }: { scheduler: SchedulerInfo | null }) {
+export function Header({
+  scheduler,
+  onSchedulerChange,
+}: {
+  scheduler: SchedulerInfo | null
+  /** Shows another scheduler; offered when the app serves more than one */
+  onSchedulerChange?: (name: string) => void
+}) {
   const state = !scheduler
     ? null
     : !scheduler.started
@@ -33,6 +47,20 @@ export function Header({ scheduler }: { scheduler: SchedulerInfo | null }) {
           <p className="text-xs text-muted-foreground">Cronlight · Quartz.NET</p>
         </div>
       </div>
+      {scheduler && scheduler.schedulers.length > 1 && onSchedulerChange && (
+        <Select value={scheduler.schedulerName} onValueChange={onSchedulerChange}>
+          <SelectTrigger size="sm" className="max-w-56" aria-label="Scheduler">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {scheduler.schedulers.map(name => (
+              <SelectItem key={name} value={name}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       <div className="ml-auto flex items-center gap-2">
         {state && (

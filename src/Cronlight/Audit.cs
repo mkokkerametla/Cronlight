@@ -21,6 +21,7 @@ namespace Cronlight;
 /// What a create or update set, by field: description, triggers, retry, or data.&lt;key&gt;. For a run (trigger),
 /// the data changed for that run only, and retryOf when it repeats a failed run.
 /// </param>
+/// <param name="Scheduler">The scheduler the job is in.</param>
 public sealed record CronlightAuditEvent(
     DateTimeOffset TimeUtc,
     string User,
@@ -30,7 +31,8 @@ public sealed record CronlightAuditEvent(
     bool Succeeded,
     int StatusCode,
     string? Error,
-    IReadOnlyDictionary<string, CronlightAuditChange> Changes
+    IReadOnlyDictionary<string, CronlightAuditChange> Changes,
+    string? Scheduler = null
 );
 
 /// <summary>A field's value before and after a change; null where it was not set.</summary>
@@ -84,11 +86,15 @@ internal static class Audit
     private static async Task Write(EndpointFilterInvocationContext context, object? result, Exception? failure, ILogger logger)
     {
         var http = context.HttpContext;
-        var status = failure != null ? StatusCodes.Status500InternalServerError
+        var status = failure is UnknownSchedulerException ? StatusCodes.Status404NotFound
+            : failure != null ? StatusCodes.Status500InternalServerError
             : (result as IStatusCodeHttpResult)?.StatusCode ?? StatusCodes.Status200OK;
         var succeeded = status < 400;
         var (group, name) = Target(context);
         var changes = http.Items[ChangesKey] as IReadOnlyDictionary<string, CronlightAuditChange> ?? NoChanges;
+        var scheduler = DashboardApi.RequestedScheduler(http) is { Length: > 0 } requested
+            ? requested
+            : (await http.RequestServices.GetRequiredService<CronlightSchedulers>().Default()).SchedulerName;
 
         var auditEvent = new CronlightAuditEvent(
             DateTimeOffset.UtcNow,
@@ -99,11 +105,12 @@ internal static class Audit
             succeeded,
             status,
             succeeded ? null : failure?.Message ?? ErrorMessage(result) ?? ReasonPhrases.GetReasonPhrase(status),
-            changes);
+            changes,
+            scheduler);
 
         logger.Log(succeeded ? LogLevel.Information : LogLevel.Warning,
-            "Audit: {User} {AuditAction} {JobGroup}.{JobName}: {AuditOutcome} ({StatusCode}){AuditError} {AuditChanges}",
-            auditEvent.User, auditEvent.Action, group, name, succeeded ? "succeeded" : "refused", status,
+            "Audit: {User} {AuditAction} {JobGroup}.{JobName} in {Scheduler}: {AuditOutcome} ({StatusCode}){AuditError} {AuditChanges}",
+            auditEvent.User, auditEvent.Action, group, name, scheduler, succeeded ? "succeeded" : "refused", status,
             auditEvent.Error is { } error ? $" {error}" : "", changes.Count > 0 ? JsonSerializer.Serialize(changes) : "");
 
         foreach (var sink in http.RequestServices.GetServices<ICronlightAuditSink>())

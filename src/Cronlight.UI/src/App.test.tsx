@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '@/api'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { api, currentScheduler, selectScheduler } from '@/api'
 import App from '@/App'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { execution, job, jobPage, scheduler, trigger } from '@/test/fixtures'
@@ -73,6 +73,38 @@ describe('App', () => {
       if (response instanceof Error) throw response
       return path.startsWith('jobs/search?') ? jobPage(response as Job[], path) : response
     })
+  })
+
+  afterEach(() => {
+    selectScheduler(null)
+  })
+
+  it('switches to another scheduler, starting afresh, and back to the host’s own', async () => {
+    const schedulers = ['SampleHost', 'Reports']
+    responses.scheduler = scheduler({ schedulers })
+    // The server answers for the scheduler a request names, as the real one does with ?scheduler=
+    const hostServer = vi.mocked(api).getMockImplementation()!
+    vi.mocked(api).mockImplementation(async (path, options) => {
+      if (currentScheduler() !== 'Reports') return hostServer(path, options)
+      if (path === 'scheduler') return scheduler({ schedulerName: 'Reports', schedulers })
+      if (path.startsWith('jobs/search?')) return jobPage([job({ name: 'monthly' })], path)
+      return hostServer(path, options)
+    })
+    renderApp()
+    await userEvent.click(within(await screen.findByRole('tabpanel')).getByText('invoices'))
+    await userEvent.keyboard('{Escape}')
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Scheduler' }))
+    await userEvent.click(screen.getByRole('option', { name: 'Reports' }))
+
+    expect(currentScheduler()).toBe('Reports')
+    expect(within(await screen.findByRole('tabpanel')).getByText('monthly')).toBeInTheDocument()
+    expect(screen.queryByText('invoices')).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Reports' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Scheduler' }))
+    await userEvent.click(screen.getByRole('option', { name: 'SampleHost' }))
+    expect(currentScheduler()).toBeNull()
   })
 
   it('shows the scheduler, its counts and its jobs once loaded', async () => {

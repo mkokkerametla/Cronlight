@@ -90,6 +90,16 @@ internal static class DashboardApi
     /// </summary>
     public const string RequestHeader = "X-Cronlight-Request";
 
+    /// <summary>Query parameter that picks a scheduler. Without it, requests go to the host's own scheduler.</summary>
+    public const string SchedulerParameter = "scheduler";
+
+    public static string RequestedScheduler(HttpContext http) => http.Request.Query[SchedulerParameter].ToString();
+
+    /// <summary>The scheduler the request asks for, else the host's own. An unknown name ends the request with 404.</summary>
+    private static async Task<IScheduler> Scheduler(HttpContext http, CancellationToken cancellationToken = default) =>
+        await http.RequestServices.GetRequiredService<CronlightSchedulers>().Find(RequestedScheduler(http), cancellationToken)
+        ?? throw new UnknownSchedulerException(RequestedScheduler(http));
+
     /// <summary>Refuses requests that change jobs unless they come from the dashboard or another same-site client.</summary>
     public static void RequireDashboardRequests(this RouteGroupBuilder api)
     {
@@ -118,6 +128,10 @@ internal static class DashboardApi
             {
                 return await next(context);
             }
+            catch (UnknownSchedulerException ex)
+            {
+                return Results.Problem(title: "Scheduler not found.", detail: ex.Message, statusCode: StatusCodes.Status404NotFound);
+            }
             catch (Exception ex) when (!context.HttpContext.RequestAborted.IsCancellationRequested)
             {
                 logger.LogError(ex, "Cronlight request {Method} {Path} failed",
@@ -137,9 +151,9 @@ internal static class DashboardApi
 
     public static void MapReadEndpoints(this RouteGroupBuilder api)
     {
-        api.MapGet("/scheduler", async (HttpContext http, ISchedulerFactory factory, IOptions<CronlightOptions> options) =>
+        api.MapGet("/scheduler", async (HttpContext http, CronlightSchedulers schedulers, IOptions<CronlightOptions> options) =>
         {
-            var scheduler = await factory.GetScheduler();
+            var scheduler = await Scheduler(http);
             var meta = await scheduler.GetMetaData();
             return Results.Ok(new
             {
@@ -159,16 +173,18 @@ internal static class DashboardApi
                 HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null,
                 options.Value.ShowScheduleAssistant,
                 SecretReferences = SecretReferences.Enabled(options.Value),
-                RefreshSeconds = Math.Clamp(options.Value.RefreshSeconds, 1, 300)
+                RefreshSeconds = Math.Clamp(options.Value.RefreshSeconds, 1, 300),
+                // Every scheduler served, the host's own first, for the dashboard's scheduler picker
+                Schedulers = (await schedulers.All()).Select(s => s.SchedulerName).ToList()
             });
         });
 
         api.MapGet("/job-types", (JobTypeCatalog catalog) =>
             Results.Ok(catalog.All.Where(t => !t.Hidden).OrderBy(t => t.DisplayName)));
 
-        api.MapGet("/jobs", async (ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        api.MapGet("/jobs", async (HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
-            var scheduler = await factory.GetScheduler();
+            var scheduler = await Scheduler(http);
             var keys = await scheduler.GetJobKeys(GroupMatcher<JobKey>.AnyGroup());
             var jobs = new List<JobDto>();
             foreach (var key in keys.OrderBy(k => k.Group).ThenBy(k => k.Name))
@@ -182,12 +198,12 @@ internal static class DashboardApi
         // What the dashboard uses: searches, filters, counts and pages over a cheap index of every job, and
         // loads full details only for the page shown. GET /jobs loads every job and suits small schedulers.
         api.MapGet("/jobs/search", async (string? search, string? type, string? status, int? page, int? pageSize,
-            ISchedulerFactory factory, JobIndexReader index, JobTypeCatalog catalog, IOptions<CronlightOptions> options, CancellationToken ct) =>
+            HttpContext http, JobIndexReader index, JobTypeCatalog catalog, IOptions<CronlightOptions> options, CancellationToken ct) =>
         {
             if (status != null && !JobStatuses.Contains(status, StringComparer.OrdinalIgnoreCase))
                 return Results.BadRequest($"Unknown status '{status}'; expected one of {string.Join(", ", JobStatuses)}");
 
-            var scheduler = await factory.GetScheduler(ct);
+            var scheduler = await Scheduler(http, ct);
             var all = await index.Read(scheduler, ct);
             var text = search?.Trim();
             var matching = all
@@ -215,20 +231,20 @@ internal static class DashboardApi
             return Results.Ok(new JobPageDto(jobs, matching.Count, current, size, counts, types));
         });
 
-        api.MapGet("/jobs/{group}/{name}", async (string group, string name, ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        api.MapGet("/jobs/{group}/{name}", async (string group, string name, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
-            var scheduler = await factory.GetScheduler();
+            var scheduler = await Scheduler(http);
             var key = new JobKey(name, group);
             return await LoadJob(scheduler, key, catalog, options.Value) is { } job
                 ? Results.Ok(job)
                 : Results.NotFound();
         });
 
-        api.MapGet("/running", async (ISchedulerFactory factory, RunningJobsReader reader, CancellationToken ct) =>
-            Results.Ok(await reader.Read(await factory.GetScheduler(ct), ct)));
+        api.MapGet("/running", async (HttpContext http, RunningJobsReader reader, CancellationToken ct) =>
+            Results.Ok(await reader.Read(await Scheduler(http, ct), ct)));
 
         // History is optional: these return 404 unless the Cronlight.History package is registered
-        api.MapGet("/history", async (HttpContext http, ISchedulerFactory factory, string? group, string? name, string? status, long? before, int? limit, CancellationToken ct) =>
+        api.MapGet("/history", async (HttpContext http, string? group, string? name, string? status, long? before, int? limit, CancellationToken ct) =>
         {
             if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
                 return Results.NotFound("Execution history is not enabled.");
@@ -241,7 +257,7 @@ internal static class DashboardApi
                 statusFilter = parsed;
             }
 
-            var scheduler = await factory.GetScheduler(ct);
+            var scheduler = await Scheduler(http, ct);
             var pageSize = Math.Clamp(limit ?? 50, 1, 500);
             var records = await store.Query(scheduler.SchedulerName, new JobHistoryQuery
             {
@@ -259,12 +275,12 @@ internal static class DashboardApi
             });
         });
 
-        api.MapGet("/history/summary", async (HttpContext http, ISchedulerFactory factory, int? hours, CancellationToken ct) =>
+        api.MapGet("/history/summary", async (HttpContext http, int? hours, CancellationToken ct) =>
         {
             if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
                 return Results.NotFound("Execution history is not enabled.");
 
-            var scheduler = await factory.GetScheduler(ct);
+            var scheduler = await Scheduler(http, ct);
             var since = DateTimeOffset.UtcNow.AddHours(-Math.Clamp(hours ?? 24, 1, 24 * 90));
             return Results.Ok(await store.Summarize(scheduler.SchedulerName, since, ct));
         });
@@ -296,7 +312,7 @@ internal static class DashboardApi
 
     public static void MapManageEndpoints(this RouteGroupBuilder api)
     {
-        api.MapPost("/jobs", async (CreateJobRequest request, HttpContext http, ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        api.MapPost("/jobs", async (CreateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             if (!catalog.TryGet(request.Type, out var type, out var info))
                 return Results.BadRequest($"Unknown job type '{request.Type}'");
@@ -319,7 +335,7 @@ internal static class DashboardApi
             if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
                 return Results.BadRequest(error);
 
-            var scheduler = await factory.GetScheduler();
+            var scheduler = await Scheduler(http);
             if (await scheduler.CheckExists(key))
                 return Results.Conflict($"Job {key} already exists");
             if (await FindTriggerConflict(scheduler, triggers, new HashSet<TriggerKey>()) is { } conflict)
@@ -347,9 +363,9 @@ internal static class DashboardApi
             return Results.Created($"jobs/{key.Group}/{key.Name}", new { key.Name, key.Group });
         });
 
-        api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, HttpContext http, ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
-            var scheduler = await factory.GetScheduler();
+            var scheduler = await Scheduler(http);
             var key = new JobKey(name, group);
             var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
             if (problem != null)
@@ -414,13 +430,13 @@ internal static class DashboardApi
             return Results.NoContent();
         });
 
-        api.MapPost("/jobs/{group}/{name}/pause", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
-            OnJob(f, o.Value, group, name, (s, k) => s.PauseJob(k)));
-        api.MapPost("/jobs/{group}/{name}/resume", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
-            OnJob(f, o.Value, group, name, (s, k) => s.ResumeJob(k)));
+        api.MapPost("/jobs/{group}/{name}/pause", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
+            OnJob(http, o.Value, group, name, (s, k) => s.PauseJob(k)));
+        api.MapPost("/jobs/{group}/{name}/resume", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
+            OnJob(http, o.Value, group, name, (s, k) => s.ResumeJob(k)));
         api.MapPost("/jobs/{group}/{name}/trigger", RunJob);
-        api.MapDelete("/jobs/{group}/{name}", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
-            OnJob(f, o.Value, group, name, (s, k) => s.DeleteJob(k)));
+        api.MapDelete("/jobs/{group}/{name}", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
+            OnJob(http, o.Value, group, name, (s, k) => s.DeleteJob(k)));
 
         api.MapPost("/jobs/{group}/{name}/runs/{fireInstanceId}/cancel", CancelRun);
     }
@@ -430,9 +446,9 @@ internal static class DashboardApi
     /// trigger data, so the saved job is unchanged and the job reads them as usual from its merged data.
     /// </summary>
     private static async Task<IResult> RunJob(string group, string name, RunJobRequest? request, HttpContext http,
-        ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options)
+        JobTypeCatalog catalog, IOptions<CronlightOptions> options)
     {
-        var scheduler = await factory.GetScheduler();
+        var scheduler = await Scheduler(http);
         var key = new JobKey(name, group);
         var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
         if (problem != null)
@@ -489,9 +505,9 @@ internal static class DashboardApi
     /// Quartz can only interrupt runs on its own node, so a run on another cluster node is refused.
     /// </summary>
     private static async Task<IResult> CancelRun(string group, string name, string fireInstanceId, HttpContext http,
-        ISchedulerFactory factory, RunningJobsReader reader, IOptions<CronlightOptions> options, CancellationToken ct)
+        RunningJobsReader reader, IOptions<CronlightOptions> options, CancellationToken ct)
     {
-        var scheduler = await factory.GetScheduler(ct);
+        var scheduler = await Scheduler(http, ct);
         var key = new JobKey(name, group);
         var (_, problem) = await GetManageableJob(scheduler, key, options.Value);
         if (problem != null)
@@ -521,9 +537,9 @@ internal static class DashboardApi
                 statusCode: StatusCodes.Status404NotFound);
     }
 
-    private static async Task<IResult> OnJob(ISchedulerFactory factory, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)
+    private static async Task<IResult> OnJob(HttpContext http, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)
     {
-        var scheduler = await factory.GetScheduler();
+        var scheduler = await Scheduler(http);
         var key = new JobKey(name, group);
         var (_, problem) = await GetManageableJob(scheduler, key, options);
         if (problem != null)

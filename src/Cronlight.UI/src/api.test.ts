@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, jobPath } from '@/api'
+import { api, currentScheduler, jobPath, selectScheduler } from '@/api'
 
 const fetchMock = vi.fn<typeof fetch>()
 const respond = (body: BodyInit | null, init: ResponseInit = {}) =>
@@ -8,6 +8,7 @@ const respond = (body: BodyInit | null, init: ResponseInit = {}) =>
 describe('api', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    selectScheduler(null)
   })
 
   const stub = () => vi.stubGlobal('fetch', fetchMock)
@@ -28,6 +29,27 @@ describe('api', () => {
       headers: { 'X-Cronlight-Request': '1' },
       body: undefined,
     })
+  })
+
+  it('sends every request to the chosen scheduler, and keeps the choice in the page URL', async () => {
+    stub()
+    respond(null, { status: 204 })
+    respond(null, { status: 204 })
+
+    selectScheduler('Billing & Co')
+    await api('jobs/search?page=2')
+    await api('running')
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'api/jobs/search?page=2&scheduler=Billing%20%26%20Co',
+      'api/running?scheduler=Billing%20%26%20Co',
+    ])
+    expect(new URLSearchParams(window.location.search).get('scheduler')).toBe('Billing & Co')
+
+    // The host's own scheduler needs no parameter
+    selectScheduler(null)
+    expect(currentScheduler()).toBeNull()
+    expect(window.location.search).toBe('')
   })
 
   it('sends a body as JSON', async () => {

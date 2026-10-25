@@ -131,10 +131,10 @@ public class AuditTests
         var audit = logs.Entries.Where(e => e.Category == "Cronlight.Audit").ToList();
         Assert.Equal(2, audit.Count);
         Assert.Equal(LogLevel.Information, audit[0].Level);
-        Assert.Contains("anonymous create DEFAULT.logged: succeeded (201)", audit[0].Message);
+        Assert.Contains($"anonymous create DEFAULT.logged in {host.SchedulerName}: succeeded (201)", audit[0].Message);
         Assert.Contains("data.password", audit[0].Message);
         Assert.Equal(LogLevel.Warning, audit[1].Level);
-        Assert.Contains("delete DEFAULT.logged: refused (403)", audit[1].Message);
+        Assert.Contains($"delete DEFAULT.logged in {host.SchedulerName}: refused (403)", audit[1].Message);
         Assert.DoesNotContain(logs.Entries, e => e.Message.Contains("hunter2"));
     }
 

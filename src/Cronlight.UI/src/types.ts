@@ -77,6 +77,8 @@ export interface SchedulerInfo {
   secretReferences: boolean
   /** How often the dashboard refreshes, in seconds */
   refreshSeconds: number
+  /** Every scheduler the dashboard serves, the host's own first */
+  schedulers: string[]
 }
 
 /** Counts over every job, whatever the search and filters */
