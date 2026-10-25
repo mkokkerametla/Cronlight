@@ -62,11 +62,11 @@ internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHist
 
     public Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken cancellationToken = default)
     {
-        queue.Enqueue(HistoryEvent.Finished, Record(context, jobException == null ? JobExecutionStatus.Succeeded : JobExecutionStatus.Failed) with
+        queue.Enqueue(HistoryEvent.Finished, Record(context, RunOutcome.Status(context, jobException)) with
         {
             FinishedTimeUtc = context.FireTimeUtc + context.JobRunTime,
             DurationMs = (long)context.JobRunTime.TotalMilliseconds,
-            Error = jobException == null ? null : Describe(jobException)
+            Error = RunOutcome.Error(context, jobException) is { } error ? Truncate(error) : null
         });
         return Task.CompletedTask;
     }
@@ -86,18 +86,6 @@ internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHist
         Status = status,
         RefireCount = context.RefireCount
     };
-
-    // Quartz wraps what the job threw as JobExecutionException -> SchedulerException("Job threw an unhandled
-    // exception") -> the real exception, so unwrap Quartz's layers. A JobExecutionException the job threw
-    // itself has no inner exception and keeps its own message.
-    // Only type and message are kept: stack traces are long and more likely to carry sensitive details.
-    private string Describe(JobExecutionException exception)
-    {
-        Exception cause = exception;
-        while (cause is SchedulerException { InnerException: { } inner })
-            cause = inner;
-        return Truncate($"{cause.GetType().Name}: {cause.Message}");
-    }
 
     private string Truncate(string text)
     {

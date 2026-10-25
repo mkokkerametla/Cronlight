@@ -334,6 +334,45 @@ internal static class DashboardApi
             OnJob(f, o.Value, group, name, (s, k) => s.TriggerJob(k)));
         api.MapDelete("/jobs/{group}/{name}", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
             OnJob(f, o.Value, group, name, (s, k) => s.DeleteJob(k)));
+
+        api.MapPost("/jobs/{group}/{name}/runs/{fireInstanceId}/cancel", CancelRun);
+    }
+
+    /// <summary>
+    /// Asks a running job to stop by cancelling its <see cref="IJobExecutionContext.CancellationToken"/>.
+    /// Quartz can only interrupt runs on its own node, so a run on another cluster node is refused.
+    /// </summary>
+    private static async Task<IResult> CancelRun(string group, string name, string fireInstanceId, HttpContext http,
+        ISchedulerFactory factory, RunningJobsReader reader, IOptions<CronlightOptions> options, CancellationToken ct)
+    {
+        var scheduler = await factory.GetScheduler(ct);
+        var key = new JobKey(name, group);
+        var (_, problem) = await GetManageableJob(scheduler, key, options.Value);
+        if (problem != null)
+            return problem;
+
+        var local = (await scheduler.GetCurrentlyExecutingJobs(ct))
+            .FirstOrDefault(c => c.FireInstanceId == fireInstanceId && c.JobDetail.Key.Equals(key));
+        if (local != null)
+        {
+            if (local.CancellationToken.IsCancellationRequested)
+                return Results.Accepted(value: new { Message = "Cancellation was already requested." });
+            local.Put(CronlightContextKeys.CancelledBy, Audit.UserName(http.User));
+            await scheduler.Interrupt(fireInstanceId, ct);
+            return Results.Accepted(value: new { Message = "Cancellation requested. The job stops when it next checks its cancellation token." });
+        }
+
+        var elsewhere = (await reader.Read(scheduler, ct)).Jobs
+            .FirstOrDefault(j => j.FireInstanceId == fireInstanceId && j.Group == group && j.Name == name);
+        return elsewhere != null
+            ? Results.Problem(
+                title: "This run is on another node.",
+                detail: $"It runs on {elsewhere.InstanceName}. Only the node running a job can cancel it; open the dashboard there.",
+                statusCode: StatusCodes.Status409Conflict)
+            : Results.Problem(
+                title: "This run is not running.",
+                detail: "It has already finished, or was never started.",
+                statusCode: StatusCodes.Status404NotFound);
     }
 
     private static async Task<IResult> OnJob(ISchedulerFactory factory, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)

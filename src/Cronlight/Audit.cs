@@ -14,7 +14,7 @@ namespace Cronlight;
 /// A change made through the dashboard or its API, or an attempt that was refused. Secret values are
 /// never included: a changed secret shows as <c>********</c> on both sides.
 /// </summary>
-/// <param name="Action">create, update, pause, resume, trigger or delete.</param>
+/// <param name="Action">create, update, pause, resume, trigger, cancel or delete.</param>
 /// <param name="User">The user's name, or "anonymous" when the dashboard allows anonymous access.</param>
 /// <param name="Error">Why the request was refused or failed; null when it succeeded.</param>
 /// <param name="Changes">What a create or update set, by field: description, triggers, or data.&lt;key&gt;.</param>
@@ -139,7 +139,7 @@ internal static class Audit
         return last == "jobs" ? "create" : last;
     }
 
-    private static string UserName(ClaimsPrincipal user) =>
+    internal static string UserName(ClaimsPrincipal user) =>
         user.Identity?.IsAuthenticated == true
             ? user.Identity.Name ?? user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unnamed user"
             : "anonymous";

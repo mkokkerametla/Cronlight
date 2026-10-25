@@ -180,7 +180,7 @@ builder.Services.AddCronlightHistory(o =>
 
 ## Audit log
 
-Every change made through the dashboard or its API (create, edit, pause, resume, run now, delete) is
+Every change made through the dashboard or its API (create, edit, pause, resume, run now, cancel, delete) is
 logged under the `Cronlight.Audit` category: who made it, the job, whether it succeeded, and for creates
 and edits what changed. Refused attempts are logged as warnings with the reason, such as a cross-site
 request or read-only mode. Requests turned away by the host's authorization policies before reaching
@@ -207,10 +207,66 @@ class MyAuditSink(AuditDbContext db) : ICronlightAuditSink
 
 A sink that throws is logged as an error; the change itself has already been made and is not undone.
 
+## Failure alerts
+
+```csharp
+builder.Services.AddCronlightAlerts(o =>
+{
+    o.AfterConsecutiveFailures = 3;                    // default 1
+    o.DashboardUrl = "https://ops.contoso.com/ops/jobs/";
+    builder.Configuration.GetSection("CronlightAlerts").Bind(o);
+});
+```
+
+```json
+{
+  "CronlightAlerts": {
+    "Webhooks": [
+      { "Url": "https://hooks.slack.com/services/…", "Format": "Slack" },
+      { "Url": "https://prod-00.westeurope.logic.azure.com/workflows/…", "Format": "Teams" },
+      { "Url": "https://alerts.contoso.com/cronlight", "Format": "Json" }
+    ]
+  }
+}
+```
+
+When a job fails `AfterConsecutiveFailures` times in a row, Cronlight sends one alert: the job, the node, the
+error and a link to the dashboard. When it next succeeds, a recovery alert follows (`NotifyOnRecovery`,
+on by default). Every alert is also logged as a warning under the `Cronlight.Alerts` category.
+
+- **Slack:** an incoming webhook. **Teams:** a Workflows "when a webhook request is received" flow, or
+  an incoming webhook connector; both receive an Adaptive Card. **Json:** the alert as JSON, for your own
+  endpoints.
+- Webhook URLs work as passwords, so keep them in configuration or a key vault rather than code.
+- Network errors, timeouts and 5xx responses are retried twice; other failures are logged.
+- Cancelled runs neither count as failures nor end a streak. Vetoed runs are ignored.
+- `o.Jobs = job => job.Group != "experiments"` limits which jobs raise alerts.
+- With [execution history](#execution-history-optional-package), the streak is read from history, so it
+  counts runs on every cluster node and one alert is sent per streak. Without it, each node counts only the
+  runs it executed.
+- Alerts work without the dashboard: an app that only runs jobs can call `AddCronlightAlerts` alone.
+
+For email, a paging service or anything else, register a sink. Sinks are resolved once, as singletons:
+
+```csharp
+builder.Services.AddSingleton<ICronlightAlertSink, EmailAlertSink>();
+
+class EmailAlertSink(IEmailSender email) : ICronlightAlertSink
+{
+    public Task SendAsync(CronlightAlert alert, CancellationToken ct) =>
+        email.SendAsync("ops@contoso.com", alert.Title, $"{alert.Error}\n{alert.DashboardUrl}", ct);
+}
+```
+
 ## Behaviour worth knowing
 
 - **Secrets** are shown as `********`. Saving a masked value back keeps the stored value. To keep them
   out of the database too, use [secret references](#secret-references).
+- **Cancelling a run** from the Running tab asks the job to stop by cancelling
+  `context.CancellationToken`, using Quartz's interrupt. Jobs that pass the token on (to `Task.Delay`,
+  HttpClient, database calls) stop promptly; a job that never checks it keeps running. History records the
+  run as Cancelled, with who cancelled it. Quartz can only interrupt runs on its own node, so in a cluster
+  a run is cancelled from the dashboard of the node running it.
 - **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.

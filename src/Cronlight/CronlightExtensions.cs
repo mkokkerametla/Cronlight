@@ -38,6 +38,31 @@ public static class CronlightExtensions
         return services;
     }
 
+    /// <summary>
+    /// Sends an alert when a job fails <see cref="CronlightAlertOptions.AfterConsecutiveFailures"/> times in a row,
+    /// and when it recovers, to the configured webhooks (Slack, Teams or JSON) and any registered
+    /// <see cref="ICronlightAlertSink"/>. Works without the dashboard being mapped. With execution history
+    /// registered, failure streaks are counted across every node of a cluster.
+    /// </summary>
+    public static IServiceCollection AddCronlightAlerts(
+        this IServiceCollection services,
+        Action<CronlightAlertOptions>? configure = null
+    )
+    {
+        services.AddOptions<CronlightAlertOptions>();
+        if (configure != null)
+            services.Configure(configure);
+
+        services.AddHttpClient(AlertWorker.HttpClientName);
+        services.TryAddSingleton<AlertQueue>();
+        services.TryAddSingleton<AlertListener>();
+        // First in the collection: the listener is attached before Quartz starts, and alerts are sent
+        // until Quartz has finished its last job
+        if (!services.Any(d => d.ImplementationType == typeof(AlertWorker)))
+            services.Insert(0, ServiceDescriptor.Singleton<IHostedService, AlertWorker>());
+        return services;
+    }
+
     /// <summary>Maps the dashboard UI at {prefix}/ and its API at {prefix}/api.</summary>
     public static RouteGroupBuilder MapCronlight(
         this IEndpointRouteBuilder endpoints,

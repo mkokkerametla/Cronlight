@@ -55,6 +55,7 @@ const executionTone: Record<ExecutionStatus, string> = {
   Failed: 'border-destructive/50 text-destructive',
   Running: 'border-sky-500/40 text-sky-700 dark:text-sky-400',
   Vetoed: 'text-muted-foreground',
+  Cancelled: 'border-amber-500/40 text-amber-700 dark:text-amber-400',
 }
 
 export function ExecutionStatusBadge({ status }: { status: ExecutionStatus }) {

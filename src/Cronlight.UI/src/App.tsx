@@ -148,7 +148,12 @@ export default function App() {
                 />
               </TabsContent>
               <TabsContent value="running" className="pt-2">
-                <RunningTable running={running} />
+                <RunningTable
+                  running={running}
+                  canManage={canManage}
+                  localInstanceId={scheduler?.schedulerInstanceId}
+                  onCancel={actions.cancel}
+                />
               </TabsContent>
               {historyEnabled && (
                 <TabsContent value="history" className="pt-2">

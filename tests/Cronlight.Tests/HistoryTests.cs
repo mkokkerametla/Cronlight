@@ -162,7 +162,7 @@ internal static class HistoryScenarios
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
-    private static async Task<List<JsonElement>> History(HttpClient client, string query) =>
+    public static async Task<List<JsonElement>> History(HttpClient client, string query) =>
         (await client.GetFromJsonAsync<JsonElement>($"api/history{query}")).GetProperty("records").EnumerateArray().ToList();
 
     /// <summary>History is written in the background, so poll until it shows what the test expects.</summary>

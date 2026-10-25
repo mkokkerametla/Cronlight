@@ -8,7 +8,10 @@ public enum JobExecutionStatus
     Running,
     Succeeded,
     Failed,
-    Vetoed
+    Vetoed,
+
+    /// <summary>Cancelled while running: its cancellation token was cancelled, from the dashboard or by the host.</summary>
+    Cancelled
 }
 
 /// <summary>One execution of a job, as recorded by the Cronlight.History listener.</summary>

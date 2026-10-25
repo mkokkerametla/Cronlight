@@ -111,7 +111,7 @@ export interface UpdateJobRequest {
 
 export type JobAction = 'trigger' | 'pause' | 'resume'
 
-export type ExecutionStatus = 'Running' | 'Succeeded' | 'Failed' | 'Vetoed'
+export type ExecutionStatus = 'Running' | 'Succeeded' | 'Failed' | 'Vetoed' | 'Cancelled'
 
 export interface ExecutionRecord {
   id: number

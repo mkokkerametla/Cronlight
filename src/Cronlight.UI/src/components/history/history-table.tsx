@@ -47,6 +47,7 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
             <SelectItem value="Failed">Failed</SelectItem>
             <SelectItem value="Succeeded">Succeeded</SelectItem>
             <SelectItem value="Running">Running</SelectItem>
+            <SelectItem value="Cancelled">Cancelled</SelectItem>
             <SelectItem value="Vetoed">Vetoed</SelectItem>
           </SelectContent>
         </Select>

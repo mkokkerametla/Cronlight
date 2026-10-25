@@ -94,3 +94,25 @@ public class SecretEchoJob : IJob
         return Task.CompletedTask;
     }
 }
+
+/// <summary>Runs until cancelled. Signals BlockingJob.Gate("gate").Started once running.</summary>
+public class CancellableJob : IJob
+{
+    public async Task Execute(IJobExecutionContext context)
+    {
+        BlockingJob.Gate(context.MergedJobDataMap.GetString("gate")!).Started.Release();
+        await Task.Delay(Timeout.Infinite, context.CancellationToken);
+    }
+}
+
+/// <summary>Fails while <see cref="Failing"/> holds its "key" job data value, and succeeds otherwise.</summary>
+public class FlipJob : IJob
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> Failing = new();
+
+    public Task Execute(IJobExecutionContext context)
+    {
+        var key = context.MergedJobDataMap.GetString("key")!;
+        return Failing.GetValueOrDefault(key) ? throw new InvalidOperationException($"{key} is broken") : Task.CompletedTask;
+    }
+}

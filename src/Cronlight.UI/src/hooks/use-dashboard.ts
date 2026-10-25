@@ -7,6 +7,7 @@ import type {
   Job,
   JobAction,
   JobType,
+  RunningJob,
   RunningJobs,
   SchedulerInfo,
   UpdateJobRequest,
@@ -81,6 +82,14 @@ export function useDashboard() {
         if (ok && action === 'trigger') setTimeout(refresh, 1000)
         return ok
       },
+      cancel: (run: RunningJob) =>
+        perform(
+          () =>
+            api(`${jobPath(run)}/runs/${encodeURIComponent(run.fireInstanceId)}/cancel`, {
+              method: 'POST',
+            }),
+          `${run.name}: cancellation requested`
+        ),
       remove: (job: Job) =>
         perform(() => api(jobPath(job), { method: 'DELETE' }), `${job.name} deleted`),
       create: (request: CreateJobRequest) =>
