@@ -201,6 +201,19 @@ dotnet test
 
 The tests recreate the Quartz tables in these databases, so point them at throwaway instances only.
 
+### UI tests
+
+Unit and component tests for the UI use [Vitest](https://vitest.dev) and
+[React Testing Library](https://testing-library.com/docs/react-testing-library/intro), with jsdom. They
+sit next to the code they test (`*.test.ts`, `*.test.tsx`) and mock the API, so no server is needed.
+
+```bash
+cd src/Cronlight.UI
+npm test                # once
+npm run test:watch      # re-runs on save
+npm run test:coverage   # report in coverage/
+```
+
 ### End-to-end tests
 
 [Playwright](https://playwright.dev) tests in `tests/Cronlight.E2E` start the sample host on a fresh
@@ -229,7 +242,7 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
 
 **CI** ([`ci.yml`](.github/workflows/ci.yml)) runs on pushes to `main` and on pull requests:
 
-1. UI: ESLint, TypeScript and Prettier checks.
+1. UI: ESLint, TypeScript and Prettier checks, and the Vitest unit and component tests.
 2. Build in Release (which builds and embeds the UI).
 3. Tests against SQLite, in-memory, and PostgreSQL, MySQL and SQL Server service containers.
    `CRONLIGHT_REQUIRE_DATABASES=true` makes a missing database fail the run rather than skip its tests.

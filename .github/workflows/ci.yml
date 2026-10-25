@@ -28,7 +28,7 @@ env:
 
 jobs:
   ui:
-    name: UI lint and type-check
+    name: UI lint, type-check and tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -47,6 +47,8 @@ jobs:
         run: npm run lint
       - name: Prettier
         run: npx prettier --check "src/**/*.{ts,tsx,css}"
+      - name: Unit and component tests
+        run: npm test
 
   build:
     name: Build, test and pack
