@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@/api'
+import { usePolling } from '@/hooks/use-polling'
 import type { ExecutionRecord, HistoryFilter, HistoryPage } from '@/types'
 
 const PAGE_SIZE = 50
@@ -60,13 +61,13 @@ export function useHistory(filter: HistoryFilter, limit = PAGE_SIZE) {
   }, [loadFirstPage])
 
   // Only auto-refresh while just the first page is shown, so "load more" results don't jump around
-  useEffect(() => {
-    if (pages > 1) return
-    const interval = setInterval(() => {
+  usePolling(
+    () => {
       if (!loadingMore.current) void loadFirstPage()
-    }, POLL_MS)
-    return () => clearInterval(interval)
-  }, [loadFirstPage, pages])
+    },
+    POLL_MS,
+    pages === 1
+  )
 
   const loadMore = useCallback(async () => {
     if (nextBefore === null || loadingMore.current) return

@@ -1,4 +1,5 @@
-import type { ExecutionRecord, Job, SchedulerInfo, Trigger } from '@/types'
+import { jobStatus, typeLabel } from '@/lib/format'
+import type { ExecutionRecord, Job, JobPage, SchedulerInfo, Trigger } from '@/types'
 
 export const trigger = (overrides: Partial<Trigger> = {}): Trigger => ({
   name: 't1',
@@ -67,3 +68,35 @@ export const execution = (
   refireCount: 0,
   ...overrides,
 })
+
+/** Answers a jobs/search path the way the server does, over the given jobs. */
+export function jobPage(jobs: Job[], path = 'jobs/search?'): JobPage {
+  const params = new URLSearchParams(path.split('?')[1])
+  const search = (params.get('search') ?? '').toLowerCase()
+  const type = params.get('type')
+  const status = params.get('status')
+  const page = Number(params.get('page') ?? 1)
+  const pageSize = Number(params.get('pageSize') ?? 50)
+  const matching = jobs.filter(
+    j =>
+      (!search ||
+        j.name.toLowerCase().includes(search) ||
+        j.group.toLowerCase().includes(search)) &&
+      (!type || typeLabel(j) === type) &&
+      (!status || jobStatus(j) === status)
+  )
+  const count = (s: string) => jobs.filter(j => jobStatus(j) === s).length
+  return {
+    jobs: matching.slice((page - 1) * pageSize, page * pageSize),
+    total: matching.length,
+    page,
+    pageSize,
+    counts: {
+      all: jobs.length,
+      active: count('Active'),
+      paused: count('Paused'),
+      unloadable: count('Unloadable'),
+    },
+    types: [...new Set(jobs.map(typeLabel))].sort(),
+  }
+}

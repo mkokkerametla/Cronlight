@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import App from '@/App'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { execution, job, scheduler, trigger } from '@/test/fixtures'
-import type { HistorySummary, JobType } from '@/types'
+import { execution, job, jobPage, scheduler, trigger } from '@/test/fixtures'
+import type { HistorySummary, Job, JobType } from '@/types'
 
 vi.mock('@/api', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api')>()),
@@ -68,9 +68,9 @@ describe('App', () => {
           records: [execution(1, { jobGroup: 'billing', jobName: 'invoices', status: 'Failed' })],
           nextBefore: null,
         }
-      const response = responses[path]
+      const response = responses[path.startsWith('jobs/search?') ? 'jobs' : path]
       if (response instanceof Error) throw response
-      return response
+      return path.startsWith('jobs/search?') ? jobPage(response as Job[], path) : response
     })
   })
 
@@ -86,13 +86,34 @@ describe('App', () => {
     expect(card('Total jobs')).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('filters the jobs from the Paused card', async () => {
+  it('filters the jobs from the Paused card, on the server', async () => {
     renderApp()
     await userEvent.click(await screen.findByRole('button', { name: /Paused/ }))
 
     expect(card('Paused')).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.queryByText('invoices', { selector: 'div' })).toBeNull()
+    await waitFor(() => expect(screen.queryByText('invoices', { selector: 'div' })).toBeNull())
     expect(jobRow('cleanup')).toBeInTheDocument()
+    expect(requested('jobs/search?').at(-1)).toContain('status=Paused')
+    // The cards count every job, not just the filtered page
+    expect(card('Total jobs')).toHaveTextContent('2')
+  })
+
+  it('opens a job from history even when it is not on the current page', async () => {
+    responses['jobs/DEFAULT/elsewhere'] = job({ name: 'elsewhere' })
+    vi.mocked(api).mockImplementation(async (path, options) => {
+      if (options?.method) return undefined
+      if (path.startsWith('history?'))
+        return { records: [execution(1, { jobName: 'elsewhere' })], nextBefore: null }
+      if (path.startsWith('jobs/search?')) return jobPage(responses.jobs as Job[], path)
+      return responses[path]
+    })
+    renderApp()
+    await userEvent.click(await screen.findByRole('tab', { name: /History/ }))
+
+    await userEvent.click(await screen.findByRole('button', { name: 'elsewhere' }))
+
+    expect(await screen.findByRole('dialog', { name: 'elsewhere' })).toBeInTheDocument()
+    expect(requested('jobs/DEFAULT/elsewhere')).not.toHaveLength(0)
   })
 
   it('opens the running tab from its card and loads it straight away', async () => {

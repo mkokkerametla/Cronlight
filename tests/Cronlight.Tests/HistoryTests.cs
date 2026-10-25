@@ -45,6 +45,35 @@ internal static class HistoryScenarios
         Assert.True(scheduler.GetProperty("historyEnabled").GetBoolean());
     }
 
+    /// <summary>A history table from before the outcome index gets it at startup.</summary>
+    public static async Task AddsTheOutcomeIndexToAnOlderTable(TestHost host)
+    {
+        var store = host.Services.GetRequiredService<IJobHistoryStore>();
+        var drop = host.Database.Name is "SQLite" or "PostgreSQL"
+            ? "DROP INDEX IDX_QRTZ_CRONLIGHT_HISTORY_STATUS"
+            : "DROP INDEX IDX_QRTZ_CRONLIGHT_HISTORY_STATUS ON QRTZ_CRONLIGHT_HISTORY";
+        // The writer creates the table and its indexes in the background at startup: wait for them rather than race it
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(100))
+        {
+            try
+            {
+                await host.Database.Execute(drop);
+                break;
+            }
+            catch (Exception) when (DateTime.UtcNow < deadline)
+            {
+            }
+        }
+
+        await store.Initialize(CancellationToken.None);
+
+        // Dropping it again works only because startup added it back
+        await host.Database.Execute(drop);
+        await store.Initialize(CancellationToken.None);
+        // And a start with the index in place leaves it alone
+        await store.Initialize(CancellationToken.None);
+    }
+
     public static async Task RecordsEachRefireAttempt(TestHost host)
     {
         var client = host.Client();
@@ -206,6 +235,13 @@ public class HistoryTests
     private static readonly Action<JobHistoryOptions> InMemory = o => o.Storage = JobHistoryStorage.InMemory;
 
     [Fact]
+    public async Task A_history_table_from_an_older_version_gets_the_outcome_index()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        await HistoryScenarios.AddsTheOutcomeIndexToAnOlderTable(host);
+    }
+
+    [Fact]
     public async Task History_is_off_unless_registered()
     {
         await using var host = await TestHost.Start();
@@ -328,7 +364,7 @@ public class HistoryTests
             o.TableName = "main.QUALIFIED_HISTORY";
         });
         await HistoryScenarios.RecordsSuccessAndFailure(host);
-        Assert.Equal(4L, await host.Database.Scalar(
+        Assert.Equal(5L, await host.Database.Scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'QUALIFIED_HISTORY' AND name LIKE 'IDX%'"));
     }
 
@@ -427,6 +463,33 @@ public class DatabaseTests
 
     [SkippableTheory]
     [MemberData(nameof(Databases))]
+    public async Task History_tables_from_older_versions_get_the_outcome_index(string name)
+    {
+        await using var host = await Start(name);
+        await HistoryScenarios.AddsTheOutcomeIndexToAnOlderTable(host);
+    }
+
+    // Only a cluster reads failure streaks from history, and SQLite cannot be clustered
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Alerts_read_failure_streaks_from_history_in_a_cluster(string name)
+    {
+        var sink = new AlertTests.RecordingAlertSink();
+        await using var host = await TestHost.Start(database: Require(name), clustered: true,
+            history: o => o.Storage = JobHistoryStorage.Database, services: AlertTests.Alerts(sink, AlertTests.StreakOptions));
+        await AlertTests.AlertsOnceAfterFailuresInARow(host, sink);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Job_search_reads_the_Quartz_tables(string name)
+    {
+        await using var host = await Start(name);
+        await JobSearchScenarios.SearchesFiltersAndPages(host);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
     public async Task History_records_success_and_failure(string name)
     {
         await using var host = await Start(name);
@@ -511,7 +574,7 @@ public class DatabaseTests
                 "SQL Server" => $"SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID('{table}') AND name LIKE 'IDX%'",
                 _ => $"SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{tableName}' AND INDEX_NAME LIKE 'IDX%'"
             });
-            Assert.Equal(4, Convert.ToInt32(indexes));
+            Assert.Equal(5, Convert.ToInt32(indexes));
         }
         finally
         {

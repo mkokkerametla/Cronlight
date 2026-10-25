@@ -160,6 +160,8 @@ builder.Services.AddCronlightHistory(o =>
   history is kept in memory on each node instead, and a warning is logged.
 - **Table creation.** The table is created on startup if missing. Where the app has no DDL rights, set
   `CreateTable = false` and run the script for your database from `src/Cronlight.History/Schema`.
+  Indexes added in later versions are added to an existing table at startup; with `CreateTable = false`
+  a missing one is logged as a warning with the statement to run.
 - **Jobs are never slowed down.** Listeners only queue records; a background writer stores them. If the
   database is unavailable, records beyond `QueueCapacity` are dropped and jobs carry on.
 - **Errors** are stored as exception type and message (truncated to `MaxErrorLength`), never stack traces.
@@ -257,9 +259,10 @@ on by default). Every alert is also logged as a warning under the `Cronlight.Ale
   are logged. One channel failing does not stop the others.
 - Cancelled runs neither count as failures nor end a streak. Vetoed runs are ignored.
 - `o.Jobs = job => job.Group != "experiments"` limits which jobs raise alerts.
-- With [execution history](#execution-history-optional-package), the streak is read from history, so it
-  counts runs on every cluster node and one alert is sent per streak. Without it, each node counts only the
-  runs it executed.
+- A single scheduler counts every run itself. In a cluster with
+  [execution history](#execution-history-optional-package), the streak is read from history, so it counts
+  runs on every node and normally one alert is sent per streak. In a cluster without history, each node
+  counts only the runs it executed. Streaks start again from zero when the app restarts.
 - Alerts work without the dashboard: an app that only runs jobs can call `AddCronlightAlerts` alone.
 
 For a paging service or anything else, register a sink. Sinks are resolved once, as singletons:
@@ -283,6 +286,13 @@ class PagerAlertSink(IPagerClient pager) : ICronlightAlertSink
   HttpClient, database calls) stop promptly; a job that never checks it keeps running. History records the
   run as Cancelled, with who cancelled it. Quartz can only interrupt runs on its own node, so in a cluster
   a run is cancelled from the dashboard of the node running it.
+- **Large schedulers.** The job list is searched, filtered, counted and paged on the server
+  (`GET api/jobs/search?search=&type=&status=&page=&pageSize=`). For database stores it reads every job's
+  type and trigger states in two queries, and loads full details only for the page shown (50 jobs), so
+  thousands of jobs cost about as much as fifty. `GET api/jobs` still returns every job with full
+  details, for scripts and small schedulers.
+- **Polling** happens every 10 seconds only while the dashboard is visible: a tab in the background asks
+  nothing, and refreshes as soon as it is shown again. The 24-hour failure count is refreshed once a minute.
 - **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.

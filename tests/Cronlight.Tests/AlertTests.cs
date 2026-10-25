@@ -7,7 +7,7 @@ namespace Cronlight.Tests;
 
 public class AlertTests
 {
-    private static Action<IServiceCollection> Alerts(RecordingAlertSink sink, Action<CronlightAlertOptions>? configure = null) => s =>
+    internal static Action<IServiceCollection> Alerts(RecordingAlertSink sink, Action<CronlightAlertOptions>? configure = null) => s =>
     {
         s.AddSingleton<ICronlightAlertSink>(sink);
         s.AddCronlightAlerts(configure);
@@ -20,11 +20,19 @@ public class AlertTests
     public async Task Alerts_once_after_N_failures_in_a_row_and_again_when_the_job_recovers()
     {
         var sink = new RecordingAlertSink();
-        await using var host = await TestHost.Start(history: _ => { }, services: Alerts(sink, o =>
-        {
-            o.AfterConsecutiveFailures = 2;
-            o.DashboardUrl = "https://ops.example/jobs/";
-        }));
+        await using var host = await TestHost.Start(history: _ => { }, services: Alerts(sink, StreakOptions));
+        await AlertsOnceAfterFailuresInARow(host, sink);
+    }
+
+    internal static void StreakOptions(CronlightAlertOptions o)
+    {
+        o.AfterConsecutiveFailures = 2;
+        o.DashboardUrl = "https://ops.example/jobs/";
+    }
+
+    /// <summary>Fail 3, succeed 2, fail 2 with a threshold of 2: alert, recover, alert again.</summary>
+    internal static async Task AlertsOnceAfterFailuresInARow(TestHost host, RecordingAlertSink sink)
+    {
         var client = host.Client();
         var key = Guid.NewGuid().ToString("N");
         await HistoryScenarios.Create(client, typeof(FlipJob), "flaky", new { key });

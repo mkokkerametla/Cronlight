@@ -12,9 +12,9 @@ import { JobSheet } from '@/components/jobs/job-sheet'
 import { JobsTable } from '@/components/jobs/jobs-table'
 import { RunningTable } from '@/components/running-table'
 import { Stats, type StatKey } from '@/components/stats'
-import { useDashboard } from '@/hooks/use-dashboard'
-import { isPaused, jobKey, type JobStatus } from '@/lib/format'
-import type { HistoryFilter } from '@/types'
+import { emptyQuery, useDashboard } from '@/hooks/use-dashboard'
+import { jobKey } from '@/lib/format'
+import type { HistoryFilter, Job, JobQuery } from '@/types'
 
 type Tab = 'jobs' | 'running' | 'history'
 
@@ -25,16 +25,21 @@ const tabTrigger =
 const tabCount = 'h-4.5 min-w-4.5 px-1 tabular-nums'
 
 export default function App() {
-  const { jobs, jobTypes, scheduler, running, summary, error, loading, refresh, actions } =
-    useDashboard()
   const [tab, setTab] = useState<Tab>('jobs')
-  const [statusFilter, setStatusFilter] = useState<JobStatus | 'all'>('all')
+  const [jobQuery, setJobQuery] = useState<JobQuery>(emptyQuery)
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>({ status: 'all', job: null })
-  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [selection, setSelection] = useState<Pick<Job, 'group' | 'name'> | null>(null)
   const [creating, setCreating] = useState(false)
+  const dashboard = useDashboard(jobQuery, selection)
+  const { jobs, page, jobTypes, scheduler, running, summary, error, loading, refresh, actions } =
+    dashboard
 
-  // Resolve the selection against the live list so the sheet refreshes with polling
-  const selected = jobs.find(j => jobKey(j) === selectedKey) ?? null
+  // From the live page when it is there, so the sheet opens at once and refreshes with polling; otherwise
+  // the dashboard loads it on its own (e.g. opened from history)
+  const selectedKey = selection && jobKey(selection)
+  const selected =
+    (selection && jobs.find(j => jobKey(j) === selectedKey)) ??
+    (dashboard.selected && jobKey(dashboard.selected) === selectedKey ? dashboard.selected : null)
   const canManage = scheduler?.canManage ?? false
   const historyEnabled = scheduler?.historyEnabled ?? false
   const showScheduleAssistant = scheduler?.showScheduleAssistant ?? false
@@ -51,12 +56,12 @@ export default function App() {
       setHistoryFilter({ status: 'Failed', job: null })
       return changeTab('history')
     }
-    setStatusFilter(key === 'all' ? 'all' : key)
+    setJobQuery(q => ({ ...q, status: key === 'all' ? null : key, page: 1 }))
     changeTab('jobs')
   }
 
   const showJobHistory = (group: string, name: string) => {
-    setSelectedKey(null)
+    setSelection(null)
     setHistoryFilter({ status: 'all', job: { group, name } })
     changeTab('history')
   }
@@ -69,9 +74,9 @@ export default function App() {
         ? historyFilter.status === 'Failed' && !historyFilter.job
           ? 'failed'
           : null
-        : statusFilter === 'all' || statusFilter === 'Active'
+        : jobQuery.status === null || jobQuery.status === 'Active'
           ? 'all'
-          : statusFilter
+          : jobQuery.status
 
   return (
     <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
@@ -105,10 +110,10 @@ export default function App() {
         scheduler && (
           <>
             <Stats
-              total={jobs.length}
+              total={page?.counts.all ?? 0}
               running={running.jobs.length}
-              paused={jobs.filter(isPaused).length}
-              unloadable={jobs.filter(j => !j.loadable).length}
+              paused={page?.counts.paused ?? 0}
+              unloadable={page?.counts.unloadable ?? 0}
               failed={summary?.failed ?? null}
               active={activeStat}
               onSelect={selectStat}
@@ -119,7 +124,7 @@ export default function App() {
                 <TabsTrigger value="jobs" className={tabTrigger}>
                   Jobs
                   <Badge variant="secondary" className={tabCount}>
-                    {jobs.length}
+                    {page?.counts.all ?? 0}
                   </Badge>
                 </TabsTrigger>
                 <TabsTrigger value="running" className={tabTrigger}>
@@ -139,10 +144,11 @@ export default function App() {
                   jobs={jobs}
                   canManage={canManage}
                   canCreate={jobTypes.length > 0}
-                  statusFilter={statusFilter}
-                  onStatusFilterChange={setStatusFilter}
+                  page={page}
+                  query={jobQuery}
+                  onQueryChange={setJobQuery}
                   selectedKey={selectedKey}
-                  onSelect={job => setSelectedKey(jobKey(job))}
+                  onSelect={job => setSelection({ group: job.group, name: job.name })}
                   onNewJob={() => setCreating(true)}
                   actions={actions}
                 />
@@ -160,7 +166,7 @@ export default function App() {
                   <HistoryTable
                     filter={historyFilter}
                     onFilterChange={setHistoryFilter}
-                    onOpenJob={(group, name) => setSelectedKey(`${group}.${name}`)}
+                    onOpenJob={(group, name) => setSelection({ group, name })}
                   />
                 </TabsContent>
               )}
@@ -177,7 +183,7 @@ export default function App() {
         showScheduleAssistant={showScheduleAssistant}
         secretReferences={secretReferences}
         actions={actions}
-        onClose={() => setSelectedKey(null)}
+        onClose={() => setSelection(null)}
         onViewHistory={showJobHistory}
       />
       <CreateJobSheet

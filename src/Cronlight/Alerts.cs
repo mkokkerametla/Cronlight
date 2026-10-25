@@ -159,9 +159,9 @@ internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOpt
 }
 
 /// <summary>
-/// Attaches the listener, tracks each job's failure streak and sends alerts. With execution history the streak
-/// is read from history, so it covers every node of a cluster and one alert is sent per streak; without it,
-/// each node counts the runs it executed itself.
+/// Attaches the listener, tracks each job's failure streak and sends alerts. A single scheduler counts the runs
+/// it sees, which are all of them. In a cluster with execution history the streak is read from history, so it
+/// covers every node; without history, each node counts the runs it executed itself.
 /// </summary>
 internal sealed class AlertWorker(
     ISchedulerFactory schedulerFactory,
@@ -178,7 +178,11 @@ internal sealed class AlertWorker(
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    // Failures in a row per job, as this node saw them; exact unless runs of a job spread over several nodes
     private readonly Dictionary<JobKey, int> streaks = new();
+    // Jobs this node sent a Failing alert for, until they recover: history written behind the runs cannot repeat an alert
+    private readonly HashSet<JobKey> alerted = new();
+    private IJobHistoryStore? clusterHistory;
     private CronlightEmailAlertOptions? email;
     private readonly CancellationTokenSource stopping = new();
     private Task? sending;
@@ -194,6 +198,9 @@ internal sealed class AlertWorker(
         var scheduler = await schedulerFactory.GetScheduler(cancellationToken);
         if (scheduler.ListenerManager.GetJobListeners().All(l => l.Name != listener.Name))
             scheduler.ListenerManager.AddJobListener(listener, GroupMatcher<JobKey>.AnyGroup());
+        // A single node sees every run, so its own count is exact. Only a cluster needs history, which every node writes.
+        if ((await scheduler.GetMetaData(cancellationToken)).JobStoreClustered)
+            clusterHistory = services.GetService<IJobHistoryStore>();
         sending = Task.Run(() => Send(stopping.Token), CancellationToken.None);
     }
 
@@ -247,17 +254,28 @@ internal sealed class AlertWorker(
         var before = await FailuresBefore(run, threshold, cancellationToken);
         streaks[run.Job] = run.Succeeded ? 0 : before + 1;
 
-        if (!run.Succeeded && before + 1 == threshold)
+        if (!run.Succeeded)
+        {
+            // Exactly at the threshold: in a cluster, only the node whose run crossed it sends the alert
+            if (before + 1 != threshold || !alerted.Add(run.Job))
+                return null;
             return Alert(run, CronlightAlertKind.Failing, threshold, Truncate(run.Error));
-        if (run.Succeeded && before >= threshold && options.Value.NotifyOnRecovery)
-            return Alert(run, CronlightAlertKind.Recovered, before, null);
+        }
+
+        var wasAlerted = alerted.Remove(run.Job);
+        if ((before >= threshold || wasAlerted) && options.Value.NotifyOnRecovery)
+            return Alert(run, CronlightAlertKind.Recovered, Math.Max(before, threshold), null);
         return null;
     }
 
-    /// <summary>How many times the job failed in a row before this run.</summary>
+    /// <summary>
+    /// How many times the job failed in a row before this run. In a cluster with history, read from history so
+    /// runs on every node count; history is written in the background, so a run that just finished may not be
+    /// there yet.
+    /// </summary>
     private async Task<int> FailuresBefore(AlertRun run, int threshold, CancellationToken cancellationToken)
     {
-        if (services.GetService<IJobHistoryStore>() is not { } history)
+        if (clusterHistory is not { } history)
             return streaks.GetValueOrDefault(run.Job);
 
         // Newest first. Some slack beyond the threshold for runs still going, cancelled or vetoed, which do not count.

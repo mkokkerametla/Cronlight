@@ -1,9 +1,9 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { JobsTable } from '@/components/jobs/jobs-table'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type { DashboardActions } from '@/hooks/use-dashboard'
+import { emptyQuery, type DashboardActions } from '@/hooks/use-dashboard'
 import { job, trigger } from '@/test/fixtures'
 import type { Job } from '@/types'
 
@@ -22,14 +22,16 @@ const jobs: Job[] = [
 function renderTable(overrides: Partial<Parameters<typeof JobsTable>[0]> = {}) {
   const actions = { run: vi.fn(), bulk: vi.fn(async () => {}) } as unknown as DashboardActions
   const onSelect = vi.fn()
+  const onQueryChange = vi.fn()
   render(
     <TooltipProvider>
       <JobsTable
         jobs={jobs}
+        page={{ total: jobs.length, page: 1, pageSize: 50, types: ['Send invoices', 'NightlyJob'] }}
+        query={emptyQuery}
+        onQueryChange={onQueryChange}
         canManage
         canCreate
-        statusFilter="all"
-        onStatusFilterChange={vi.fn()}
         selectedKey={null}
         onSelect={onSelect}
         onNewJob={vi.fn()}
@@ -38,7 +40,7 @@ function renderTable(overrides: Partial<Parameters<typeof JobsTable>[0]> = {}) {
       />
     </TooltipProvider>
   )
-  return { actions, onSelect }
+  return { actions, onSelect, onQueryChange }
 }
 
 const row = (name: string) =>
@@ -58,21 +60,62 @@ describe('JobsTable', () => {
     expect(within(row('foreign')).getByText('Unloadable')).toBeInTheDocument()
   })
 
-  it('searches by name or group', async () => {
-    renderTable()
+  it('searches on the server once typing pauses, from the first page', async () => {
+    const { onQueryChange } = renderTable({ query: { ...emptyQuery, page: 3 } })
 
     await userEvent.type(screen.getByLabelText('Search jobs'), 'billing')
-    expect(names()).toEqual(['send-invoices'])
 
-    await userEvent.clear(screen.getByLabelText('Search jobs'))
-    await userEvent.type(screen.getByLabelText('Search jobs'), 'nothing-matches')
-    expect(screen.getByText('No jobs match these filters.')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(onQueryChange).toHaveBeenCalledWith({ ...emptyQuery, search: 'billing', page: 1 })
+    )
+    expect(onQueryChange).toHaveBeenCalledTimes(1)
   })
 
-  it('applies the status filter it is given', () => {
-    renderTable({ statusFilter: 'Paused' })
+  it('filters by type and status on the server, offering every type in the scheduler', async () => {
+    const { onQueryChange } = renderTable()
 
-    expect(names()).toEqual(['cleanup'])
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by type' }))
+    expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual([
+      'All types',
+      'Send invoices',
+      'NightlyJob',
+    ])
+    await userEvent.click(screen.getByRole('option', { name: 'Send invoices' }))
+    expect(onQueryChange).toHaveBeenLastCalledWith({ ...emptyQuery, type: 'Send invoices' })
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by status' }))
+    await userEvent.click(screen.getByRole('option', { name: 'Paused' }))
+    expect(onQueryChange).toHaveBeenLastCalledWith({ ...emptyQuery, status: 'Paused' })
+  })
+
+  it('says when no jobs match, and clears the filters', async () => {
+    const { onQueryChange } = renderTable({
+      jobs: [],
+      query: { ...emptyQuery, search: 'nothing', status: 'Paused' },
+    })
+
+    expect(screen.getByText('No jobs match these filters.')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Clear/ }))
+    expect(onQueryChange).toHaveBeenCalledWith(emptyQuery)
+  })
+
+  it('pages through more jobs than fit on one page', async () => {
+    const { onQueryChange } = renderTable({
+      page: { total: 120, page: 2, pageSize: 50, types: [] },
+      query: { ...emptyQuery, page: 2 },
+    })
+
+    expect(screen.getByText('51–100 of 120')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Next/ }))
+    expect(onQueryChange).toHaveBeenLastCalledWith({ ...emptyQuery, page: 3 })
+    await userEvent.click(screen.getByRole('button', { name: /Previous/ }))
+    expect(onQueryChange).toHaveBeenLastCalledWith({ ...emptyQuery, page: 1 })
+  })
+
+  it('shows no pages when every job fits on one', () => {
+    renderTable()
+
+    expect(screen.queryByRole('navigation', { name: 'Job list pages' })).toBeNull()
   })
 
   it('runs, pauses and resumes a job from its row', async () => {

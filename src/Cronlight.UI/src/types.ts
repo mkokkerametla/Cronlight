@@ -63,6 +63,35 @@ export interface SchedulerInfo {
   secretReferences: boolean
 }
 
+/** Counts over every job, whatever the search and filters */
+export interface JobCounts {
+  all: number
+  active: number
+  paused: number
+  unloadable: number
+}
+
+/** One page of the job list, from jobs/search */
+export interface JobPage {
+  jobs: Job[]
+  /** Jobs matching the search and filters, on every page */
+  total: number
+  page: number
+  pageSize: number
+  counts: JobCounts
+  /** Every job type label in the scheduler, for the type filter */
+  types: string[]
+}
+
+export type JobStatus = 'Active' | 'Paused' | 'Unloadable'
+
+export interface JobQuery {
+  search: string
+  type: string | null
+  status: JobStatus | null
+  page: number
+}
+
 export interface RunningJob {
   name: string
   group: string

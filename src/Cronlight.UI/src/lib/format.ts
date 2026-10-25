@@ -1,4 +1,6 @@
-import type { Job } from '@/types'
+import type { Job, JobStatus } from '@/types'
+
+export type { JobStatus }
 
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return '-'
@@ -31,8 +33,6 @@ export const jobKey = (job: Pick<Job, 'group' | 'name'>) => `${job.group}.${job.
 /** A job is paused when it has triggers and every one of them is paused. */
 export const isPaused = (job: Job) =>
   job.triggers.length > 0 && job.triggers.every(t => t.state === 'Paused')
-
-export type JobStatus = 'Active' | 'Paused' | 'Unloadable'
 
 export const jobStatus = (job: Job): JobStatus =>
   !job.loadable ? 'Unloadable' : isPaused(job) ? 'Paused' : 'Active'

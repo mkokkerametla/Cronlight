@@ -43,7 +43,8 @@ public sealed class TestHost : IAsyncDisposable
         bool useProperties = true,
         Action<IServiceCollection>? services = null,
         bool ramJobStore = false,
-        Dictionary<string, string?>? settings = null)
+        Dictionary<string, string?>? settings = null,
+        bool clustered = false)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
         var schedulerName = $"test-{id}";
@@ -71,6 +72,8 @@ public sealed class TestHost : IAsyncDisposable
                 store.UseProperties = useProperties;
                 database.UseFor(store, $"ds-{id}");
                 store.UseNewtonsoftJsonSerializer();
+                if (clustered)
+                    store.UseClustering();
             });
         });
         builder.Services.AddQuartzHostedService();

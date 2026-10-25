@@ -1,5 +1,6 @@
 using System.Data.Common;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace Cronlight.History;
@@ -49,7 +50,10 @@ internal sealed class AdoJobHistoryStore(
     {
         await using var connection = await dataSource.OpenConnection(cancellationToken);
         if (await TableExists(connection, cancellationToken))
+        {
+            await AddMissingIndexes(connection, cancellationToken);
             return;
+        }
 
         if (!createTable)
             throw new InvalidOperationException(
@@ -165,6 +169,49 @@ internal sealed class AdoJobHistoryStore(
         Add(command, "sched", schedulerName);
         Add(command, "cutoff", cutoffUtc.UtcTicks);
         return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Indexes added after the first release, which tables created by an earlier version lack. With CreateTable
+    /// off the host owns the schema, so a missing index is only reported, with the statement to add it.
+    /// </summary>
+    private async Task AddMissingIndexes(DbConnection connection, CancellationToken cancellationToken)
+    {
+        // Keeps filtering every job's runs by outcome (e.g. all failures) from scanning the whole table
+        foreach (var statement in dialect.SchemaStatements(tableName).Where(s => s.Contains("_STATUS ON", StringComparison.Ordinal)))
+        {
+            var index = Regex.Match(statement, @"CREATE INDEX (?:\S+\.)?(\S+) ON").Groups[1].Value;
+            if (await IndexExists(connection, index, cancellationToken))
+                continue;
+            if (!createTable)
+            {
+                logger.LogWarning("History table {Table} has no index {Index}, so filtering runs by outcome is slow on large tables. Add it with: {Statement}",
+                    tableName, index, statement);
+                continue;
+            }
+            logger.LogInformation("Adding index {Index} to history table {Table}", index, tableName);
+            await using var command = connection.CreateCommand();
+            command.CommandText = statement;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private async Task<bool> IndexExists(DbConnection connection, string index, CancellationToken cancellationToken)
+    {
+        var dot = tableName.LastIndexOf('.');
+        var table = tableName[(dot + 1)..];
+        await using var command = connection.CreateCommand();
+        command.CommandText = dialect switch
+        {
+            _ when dialect == SqlDialect.SqlServer => $"SELECT COUNT(*) FROM sys.indexes WHERE name = {P("index")} AND object_id = OBJECT_ID({P("table")})",
+            // Unquoted names are stored in lower case
+            _ when dialect == SqlDialect.PostgreSql => $"SELECT COUNT(*) FROM pg_indexes WHERE indexname = lower({P("index")}) AND tablename = lower({P("table")})",
+            _ when dialect == SqlDialect.MySql => $"SELECT COUNT(*) FROM information_schema.STATISTICS WHERE INDEX_NAME = {P("index")} AND TABLE_NAME = {P("table")} AND TABLE_SCHEMA = DATABASE()",
+            _ => $"SELECT COUNT(*) FROM {tableName[..(dot + 1)]}sqlite_master WHERE type = 'index' AND name = {P("index")}",
+        };
+        Add(command, "index", index);
+        Add(command, "table", dialect == SqlDialect.SqlServer ? tableName : table);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)) > 0;
     }
 
     private async Task<bool> TableExists(DbConnection connection, CancellationToken cancellationToken)

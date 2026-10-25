@@ -36,6 +36,21 @@ public record JobDto(
     IReadOnlyList<TriggerDto> Triggers
 );
 
+/// <summary>One page of the job list, with counts over every job for the dashboard's stat cards.</summary>
+/// <param name="Total">Jobs matching the search and filters, on every page.</param>
+/// <param name="Types">Every job type label in the scheduler, for the type filter.</param>
+public record JobPageDto(
+    IReadOnlyList<JobDto> Jobs,
+    int Total,
+    int Page,
+    int PageSize,
+    JobCountsDto Counts,
+    IReadOnlyList<string> Types
+);
+
+/// <summary>Counts over every job, whatever the search and filters.</summary>
+public record JobCountsDto(int All, int Active, int Paused, int Unloadable);
+
 public record TriggerRequest(string? Name, string CronExpression, string? TimeZone);
 
 public record CreateJobRequest(
@@ -144,16 +159,55 @@ internal static class DashboardApi
             var keys = await scheduler.GetJobKeys(GroupMatcher<JobKey>.AnyGroup());
             var jobs = new List<JobDto>();
             foreach (var key in keys.OrderBy(k => k.Group).ThenBy(k => k.Name))
-                jobs.Add(await LoadJob(scheduler, key, catalog, options.Value));
+            {
+                if (await LoadJob(scheduler, key, catalog, options.Value) is { } job)
+                    jobs.Add(job);
+            }
             return Results.Ok(jobs);
+        });
+
+        // What the dashboard uses: searches, filters, counts and pages over a cheap index of every job, and
+        // loads full details only for the page shown. GET /jobs loads every job and suits small schedulers.
+        api.MapGet("/jobs/search", async (string? search, string? type, string? status, int? page, int? pageSize,
+            ISchedulerFactory factory, JobIndexReader index, JobTypeCatalog catalog, IOptions<CronlightOptions> options, CancellationToken ct) =>
+        {
+            if (status != null && !JobStatuses.Contains(status, StringComparer.OrdinalIgnoreCase))
+                return Results.BadRequest($"Unknown status '{status}'; expected one of {string.Join(", ", JobStatuses)}");
+
+            var scheduler = await factory.GetScheduler(ct);
+            var all = await index.Read(scheduler, ct);
+            var text = search?.Trim();
+            var matching = all
+                .Where(j => string.IsNullOrEmpty(text)
+                    || j.Name.Contains(text, StringComparison.OrdinalIgnoreCase)
+                    || j.Group.Contains(text, StringComparison.OrdinalIgnoreCase))
+                .Where(j => string.IsNullOrEmpty(type) || j.TypeLabel == type)
+                .Where(j => string.IsNullOrEmpty(status) || string.Equals(j.Status, status, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(j => j.Group).ThenBy(j => j.Name)
+                .ToList();
+
+            var size = Math.Clamp(pageSize ?? 50, 1, 200);
+            var pages = Math.Max(1, (matching.Count + size - 1) / size);
+            var current = Math.Clamp(page ?? 1, 1, pages);
+            var jobs = new List<JobDto>();
+            foreach (var entry in matching.Skip((current - 1) * size).Take(size))
+            {
+                if (await LoadJob(scheduler, entry.Key, catalog, options.Value) is { } job)
+                    jobs.Add(job);
+            }
+
+            var counts = new JobCountsDto(all.Count, all.Count(j => j.Status == "Active"), all.Count(j => j.Status == "Paused"),
+                all.Count(j => j.Status == "Unloadable"));
+            var types = all.Select(j => j.TypeLabel).Distinct().Order().ToList();
+            return Results.Ok(new JobPageDto(jobs, matching.Count, current, size, counts, types));
         });
 
         api.MapGet("/jobs/{group}/{name}", async (string group, string name, ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             var scheduler = await factory.GetScheduler();
             var key = new JobKey(name, group);
-            return await scheduler.CheckExists(key)
-                ? Results.Ok(await LoadJob(scheduler, key, catalog, options.Value))
+            return await LoadJob(scheduler, key, catalog, options.Value) is { } job
+                ? Results.Ok(job)
                 : Results.NotFound();
         });
 
@@ -552,7 +606,10 @@ internal static class DashboardApi
         return true;
     }
 
-    private static async Task<JobDto> LoadJob(IScheduler scheduler, JobKey key, JobTypeCatalog catalog, CronlightOptions options)
+    private static readonly string[] JobStatuses = ["Active", "Paused", "Unloadable"];
+
+    /// <summary>The job as the dashboard shows it, or null when it does not exist (e.g. deleted meanwhile).</summary>
+    private static async Task<JobDto?> LoadJob(IScheduler scheduler, JobKey key, JobTypeCatalog catalog, CronlightOptions options)
     {
         IJobDetail? detail;
         try
@@ -566,7 +623,9 @@ internal static class DashboardApi
                 ex.InnerException?.Message ?? ex.Message, new Dictionary<string, string?>(), await LoadTriggers(scheduler, key));
         }
 
-        var info = catalog.Describe(detail!.JobType);
+        if (detail == null)
+            return null;
+        var info = catalog.Describe(detail.JobType);
         var secretKeys = SecretKeys(info);
 
         var data = detail.JobDataMap.ToDictionary(

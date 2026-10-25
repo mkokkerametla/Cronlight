@@ -30,6 +30,7 @@ public static class CronlightExtensions
         services.AddSingleton<JobTypeCatalog>();
         services.TryAddSingleton<QuartzDataSource>();
         services.AddSingleton<RunningJobsReader>();
+        services.AddSingleton<JobIndexReader>();
         services.TryAddSingleton<SecretReferenceListener>();
         // First in the collection: hosted services start in registration order, so the listener is
         // attached before Quartz's hosted service starts running jobs
@@ -41,8 +42,8 @@ public static class CronlightExtensions
     /// <summary>
     /// Sends an alert when a job fails <see cref="CronlightAlertOptions.AfterConsecutiveFailures"/> times in a row,
     /// and when it recovers, to the configured webhooks (Slack, Teams or JSON), email and any registered
-    /// <see cref="ICronlightAlertSink"/>. Works without the dashboard being mapped. With execution history
-    /// registered, failure streaks are counted across every node of a cluster.
+    /// <see cref="ICronlightAlertSink"/>. Works without the dashboard being mapped. In a cluster with execution
+    /// history registered, failure streaks are counted across every node.
     /// </summary>
     public static IServiceCollection AddCronlightAlerts(
         this IServiceCollection services,

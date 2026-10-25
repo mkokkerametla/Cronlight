@@ -3,8 +3,8 @@ import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { useDashboard } from '@/hooks/use-dashboard'
-import { job, scheduler } from '@/test/fixtures'
-import type { HistorySummary } from '@/types'
+import { job, jobPage, scheduler } from '@/test/fixtures'
+import type { HistorySummary, Job } from '@/types'
 
 vi.mock('@/api', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api')>()),
@@ -27,6 +27,14 @@ const calls = (method = 'GET') =>
   mockApi.mock.calls
     .filter(([, options]) => (options?.method ?? 'GET') === method)
     .map(([path]) => path)
+const jobLoads = () => calls().filter(p => p.startsWith('jobs/search?')).length
+
+let hidden = false
+Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+function setHidden(value: boolean) {
+  hidden = value
+  document.dispatchEvent(new Event('visibilitychange'))
+}
 
 describe('useDashboard', () => {
   beforeEach(() => {
@@ -39,13 +47,15 @@ describe('useDashboard', () => {
     }
     mockApi.mockImplementation(async (path, options) => {
       if (options?.method) return undefined
-      const response = responses[path]
+      const search = path.startsWith('jobs/search?')
+      const response = responses[search ? 'jobs' : path]
       if (response instanceof Error) throw response
-      return response
+      return search ? jobPage(response as Job[], path) : response
     })
   })
   afterEach(() => {
     vi.useRealTimers()
+    setHidden(false)
   })
 
   it('loads jobs, scheduler, running jobs, job types and the history summary', async () => {
@@ -92,11 +102,61 @@ describe('useDashboard', () => {
     expect(toast.error).toHaveBeenCalledWith('Could not load job types', { description: 'boom' })
   })
 
+  it('asks the server for one page of jobs matching the query, with counts over all of them', async () => {
+    responses.jobs = [job({ name: 'a' }), job({ name: 'b', group: 'billing' })]
+
+    const { result } = renderHook(() =>
+      useDashboard({ search: ' bill ', type: null, status: 'Active', page: 2 })
+    )
+
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(calls()).toContain('jobs/search?page=2&pageSize=50&search=bill&status=Active')
+    expect(result.current.page?.counts.all).toBe(2)
+  })
+
+  it('loads the selected job on its own when it is not on the page', async () => {
+    responses['jobs/billing/elsewhere'] = job({ group: 'billing', name: 'elsewhere' })
+
+    const { result } = renderHook(() =>
+      useDashboard(undefined, { group: 'billing', name: 'elsewhere' })
+    )
+
+    await waitFor(() => expect(result.current.selected?.name).toBe('elsewhere'))
+    expect(calls()).toContain('jobs/billing/elsewhere')
+  })
+
+  it('does not poll while the page is hidden, and refreshes as soon as it is shown', async () => {
+    vi.useFakeTimers()
+    renderHook(() => useDashboard())
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    expect(jobLoads()).toBe(1)
+
+    setHidden(true)
+    await act(() => vi.advanceTimersByTimeAsync(60_000))
+    expect(jobLoads()).toBe(1)
+
+    await act(async () => setHidden(false))
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    expect(jobLoads()).toBe(2)
+  })
+
+  it('asks for the 24-hour summary at most once a minute', async () => {
+    vi.useFakeTimers()
+    renderHook(() => useDashboard())
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    const summaries = () => calls().filter(p => p.startsWith('history/summary')).length
+    expect(summaries()).toBe(1)
+
+    await act(() => vi.advanceTimersByTimeAsync(50_000))
+    expect(summaries()).toBe(1)
+    await act(() => vi.advanceTimersByTimeAsync(10_000))
+    expect(summaries()).toBe(2)
+  })
+
   it('refreshes every 10 seconds and stops when unmounted', async () => {
     vi.useFakeTimers()
     const { unmount } = renderHook(() => useDashboard())
     await act(() => vi.advanceTimersByTimeAsync(0))
-    const jobLoads = () => calls().filter(p => p === 'jobs').length
     expect(jobLoads()).toBe(1)
 
     await act(() => vi.advanceTimersByTimeAsync(20_000))
@@ -119,7 +179,7 @@ describe('useDashboard', () => {
     expect(ok).toBe(true)
     expect(mockApi).toHaveBeenCalledWith('jobs/a%2Fb/x%20y/pause', { method: 'POST' })
     expect(toast.success).toHaveBeenCalledWith('x y: paused')
-    expect(calls()).toContain('jobs')
+    expect(jobLoads()).toBe(1)
   })
 
   it('looks again a second after triggering a job, once the scheduler has picked it up', async () => {
@@ -129,10 +189,10 @@ describe('useDashboard', () => {
     mockApi.mockClear()
 
     await act(() => result.current.actions.run(job(), 'trigger'))
-    expect(calls().filter(p => p === 'jobs')).toHaveLength(1)
+    expect(jobLoads()).toBe(1)
 
     await act(() => vi.advanceTimersByTimeAsync(1000))
-    expect(calls().filter(p => p === 'jobs')).toHaveLength(2)
+    expect(jobLoads()).toBe(2)
   })
 
   it('reports a failed action and resolves to false', async () => {
@@ -186,7 +246,10 @@ describe('useDashboard', () => {
 
     mockApi.mockImplementation(async (path, options) => {
       if (path === 'jobs/DEFAULT/b/pause') throw new Error('Trigger is locked')
-      return options?.method ? undefined : responses[path]
+      if (options?.method) return undefined
+      return path.startsWith('jobs/search?')
+        ? jobPage(responses.jobs as Job[], path)
+        : responses[path]
     })
     await act(() => result.current.actions.bulk('pause', targets))
 
