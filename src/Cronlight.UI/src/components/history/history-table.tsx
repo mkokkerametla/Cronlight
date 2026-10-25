@@ -1,4 +1,4 @@
-import { History, X } from 'lucide-react'
+import { History, RotateCcw, X } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -21,16 +21,28 @@ import {
 import { ExecutionStatusBadge } from '@/components/jobs/status-badge'
 import { useHistory } from '@/hooks/use-history'
 import { formatDateTime, formatDuration, formatRelative, shortType } from '@/lib/format'
-import type { ExecutionStatus, HistoryFilter } from '@/types'
+import type { ExecutionRecord, ExecutionStatus, HistoryFilter } from '@/types'
 
 interface Props {
   filter: HistoryFilter
   onFilterChange: (filter: HistoryFilter) => void
   onOpenJob: (group: string, name: string) => void
+  canManage?: boolean
+  /** Runs the job again; resolves to true when it was started */
+  onRetry?: (record: ExecutionRecord) => Promise<boolean>
 }
 
-export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
-  const { records, hasMore, loadMore, error, loaded } = useHistory(filter)
+// Runs that ended without succeeding and will not be retried automatically
+const retryable: ExecutionStatus[] = ['Failed', 'Vetoed', 'Cancelled']
+
+export function HistoryTable({
+  filter,
+  onFilterChange,
+  onOpenJob,
+  canManage = false,
+  onRetry,
+}: Props) {
+  const { records, hasMore, loadMore, error, loaded, refresh } = useHistory(filter)
 
   return (
     <div className="space-y-3">
@@ -45,6 +57,7 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
           <SelectContent>
             <SelectItem value="all">All outcomes</SelectItem>
             <SelectItem value="Failed">Failed</SelectItem>
+            <SelectItem value="Retried">Retried</SelectItem>
             <SelectItem value="Succeeded">Succeeded</SelectItem>
             <SelectItem value="Running">Running</SelectItem>
             <SelectItem value="Cancelled">Cancelled</SelectItem>
@@ -101,6 +114,11 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
                 <TableHead>Fired</TableHead>
                 <TableHead className="text-right">Duration</TableHead>
                 <TableHead>Node</TableHead>
+                {canManage && onRetry && (
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -117,6 +135,7 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
                     <div className="text-xs text-muted-foreground">
                       {r.jobGroup} · {shortType(r.jobType)}
                       {r.refireCount > 0 && ` · refire ${r.refireCount}`}
+                      {r.attempt > 1 && ` · attempt ${r.attempt}`}
                     </div>
                     {r.error && (
                       <p
@@ -139,6 +158,22 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
                   <TableCell className="font-mono text-xs text-muted-foreground">
                     {r.instanceName}
                   </TableCell>
+                  {canManage && onRetry && (
+                    <TableCell className="text-right">
+                      {retryable.includes(r.status) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Run ${r.jobName} again`}
+                          onClick={async () => {
+                            if (await onRetry(r)) setTimeout(refresh, 1000)
+                          }}
+                        >
+                          <RotateCcw /> Run again
+                        </Button>
+                      )}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>

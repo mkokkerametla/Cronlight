@@ -217,8 +217,14 @@ describe('useDashboard', () => {
       description: null,
       data: {},
       triggers: [],
+      retry: { maxRetries: 0, delaySeconds: 60, exponential: false },
     }
-    const update = { description: 'new', data: {}, triggers: [] }
+    const update = {
+      description: 'new',
+      data: {},
+      triggers: [],
+      retry: { maxRetries: 2, delaySeconds: 10, exponential: false },
+    }
 
     await act(async () => {
       await result.current.actions.create(request)

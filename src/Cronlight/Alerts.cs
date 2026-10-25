@@ -89,6 +89,7 @@ public class CronlightAlertOptions
     /// <summary>The dashboard's address, e.g. https://ops.contoso.com/ops/jobs/, linked from alerts.</summary>
     public string? DashboardUrl { get; set; }
 
+    /// <summary>Where to post alerts. A webhook without an absolute http(s) URL is skipped with a warning.</summary>
     public List<CronlightWebhook> Webhooks { get; } = new();
 
     /// <summary>
@@ -132,30 +133,49 @@ internal sealed class AlertQueue(ILogger<AlertQueue> logger)
 }
 
 /// <summary>Hands each finished run to the alert worker, so the job thread never waits on a webhook.</summary>
-internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOptions> options) : IJobListener
+internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOptions> options, IServiceProvider services) : IJobListener
 {
+    // Registered by AddCronlight; without it, nothing is retried
+    private readonly RetryPlanner? retries = services.GetService<RetryPlanner>();
+
     public string Name => "Cronlight.Alerts";
 
     public Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken cancellationToken = default)
     {
         var status = RunOutcome.Status(context, jobException);
-        // Someone stopped it on purpose: neither a failure nor a recovery
-        if (status == JobExecutionStatus.Cancelled || options.Value.Jobs?.Invoke(context.JobDetail.Key) == false)
-            return Task.CompletedTask;
+        // Someone stopped it on purpose: neither a failure nor a recovery. A failure that will be retried is not
+        // the outcome yet; the last attempt's is.
+        if (status != JobExecutionStatus.Cancelled && retries?.WillRetry(context, status) != true)
+            Enqueue(context, status == JobExecutionStatus.Succeeded, RunOutcome.Error(context, jobException));
+        return Task.CompletedTask;
+    }
 
+    /// <summary>
+    /// A veto with a reason (a secret reference that cannot be resolved) means the job is misconfigured and will
+    /// not run until someone fixes it, so it counts as a failure. A veto without one is a deliberate skip.
+    /// </summary>
+    public Task JobExecutionVetoed(IJobExecutionContext context, CancellationToken cancellationToken = default)
+    {
+        if (context.Get(CronlightContextKeys.VetoReason) is string reason)
+            Enqueue(context, succeeded: false, $"Not run: {reason}");
+        return Task.CompletedTask;
+    }
+
+    public Task JobToBeExecuted(IJobExecutionContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    private void Enqueue(IJobExecutionContext context, bool succeeded, string? error)
+    {
+        if (options.Value.Jobs?.Invoke(context.JobDetail.Key) == false)
+            return;
         queue.Enqueue(new AlertRun(
             context.Scheduler.SchedulerName,
             context.Scheduler.SchedulerInstanceId,
             context.JobDetail.Key,
             context.JobDetail.JobType.FullName,
             context.FireInstanceId,
-            status == JobExecutionStatus.Succeeded,
-            RunOutcome.Error(context, jobException)));
-        return Task.CompletedTask;
+            succeeded,
+            error));
     }
-
-    public Task JobToBeExecuted(IJobExecutionContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public Task JobExecutionVetoed(IJobExecutionContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }
 
 /// <summary>
@@ -183,13 +203,25 @@ internal sealed class AlertWorker(
     // Jobs this node sent a Failing alert for, until they recover: history written behind the runs cannot repeat an alert
     private readonly HashSet<JobKey> alerted = new();
     private IJobHistoryStore? clusterHistory;
+    private List<CronlightWebhook> webhooks = new();
     private CronlightEmailAlertOptions? email;
     private readonly CancellationTokenSource stopping = new();
     private Task? sending;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        Validate(options.Value);
+        if (options.Value.AfterConsecutiveFailures < 1)
+            throw new InvalidOperationException("CronlightAlertOptions.AfterConsecutiveFailures must be at least 1.");
+        // Like email below, a webhook that cannot be used is skipped with a warning rather than stopping the app
+        webhooks = options.Value.Webhooks.Where((webhook, index) =>
+        {
+            if (Uri.TryCreate(webhook.Url, UriKind.Absolute, out var url) && url.Scheme is "https" or "http")
+                return true;
+            // The URL may carry the webhook's secret, so it is not logged
+            logger.LogWarning("Cronlight alerts will not be sent to webhook {Index} ({Format}): it needs an absolute http(s) URL",
+                index, webhook.Format);
+            return false;
+        }).ToList();
         // Email is optional: incomplete settings (e.g. a template section not filled in yet) turn it off rather than stop the app
         if (options.Value.Email is { } settings && EmailAlerts.Problem(settings) is { } problem)
             logger.LogWarning("Cronlight alerts will not be emailed: {Problem} under Email", problem);
@@ -211,17 +243,6 @@ internal sealed class AlertWorker(
         await using var _ = cancellationToken.Register(stopping.Cancel);
         if (sending != null)
             await sending;
-    }
-
-    private static void Validate(CronlightAlertOptions options)
-    {
-        if (options.AfterConsecutiveFailures < 1)
-            throw new InvalidOperationException("CronlightAlertOptions.AfterConsecutiveFailures must be at least 1.");
-        foreach (var webhook in options.Webhooks)
-        {
-            if (!Uri.TryCreate(webhook.Url, UriKind.Absolute, out var url) || url.Scheme is not ("https" or "http"))
-                throw new InvalidOperationException("Every Cronlight alert webhook needs an absolute http(s) URL.");
-        }
     }
 
     private async Task Send(CancellationToken cancellationToken)
@@ -278,7 +299,7 @@ internal sealed class AlertWorker(
         if (clusterHistory is not { } history)
             return streaks.GetValueOrDefault(run.Job);
 
-        // Newest first. Some slack beyond the threshold for runs still going, cancelled or vetoed, which do not count.
+        // Newest first. Some slack beyond the threshold for runs still going, cancelled, retried or skipped, which do not count.
         var records = await history.Query(run.SchedulerName, new JobHistoryQuery
         {
             JobGroup = run.Job.Group,
@@ -289,7 +310,8 @@ internal sealed class AlertWorker(
         var failures = 0;
         foreach (var record in records.Where(r => r.FireInstanceId != run.FireInstanceId))
         {
-            if (record.Status == JobExecutionStatus.Failed)
+            // A vetoed run with a reason counts as a failure, as AlertListener counts it
+            if (record.Status == JobExecutionStatus.Failed || record is { Status: JobExecutionStatus.Vetoed, Error: not null })
                 failures++;
             else if (record.Status == JobExecutionStatus.Succeeded)
                 break;
@@ -308,7 +330,7 @@ internal sealed class AlertWorker(
     {
         logger.LogWarning("Alert: {AlertTitle}{AlertError}", alert.Title, alert.Error is { } error ? $": {error}" : "");
 
-        foreach (var webhook in options.Value.Webhooks)
+        foreach (var webhook in webhooks)
         {
             try
             {

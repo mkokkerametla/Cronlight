@@ -4,6 +4,7 @@ import { api, jobPath } from '@/api'
 import { usePolling } from '@/hooks/use-polling'
 import type {
   CreateJobRequest,
+  ExecutionRecord,
   HistorySummary,
   Job,
   JobAction,
@@ -12,6 +13,7 @@ import type {
   JobType,
   RunningJob,
   RunningJobs,
+  RunJobRequest,
   SchedulerInfo,
   UpdateJobRequest,
 } from '@/types'
@@ -129,6 +131,29 @@ export function useDashboard(
         )
         // The scheduler starts a triggered job asynchronously; look again once it has picked it up
         if (ok && action === 'trigger') setTimeout(refresh, 1000)
+        return ok
+      },
+      runWithData: async (job: Job, data: Record<string, string>) => {
+        const body: RunJobRequest = { data }
+        const ok = await perform(
+          () => api(`${jobPath(job)}/trigger`, { method: 'POST', body }),
+          `${job.name}: triggered with different data`
+        )
+        if (ok) setTimeout(refresh, 1000)
+        return ok
+      },
+      // Runs the job again with its saved data; the failed run's own data is not kept in history
+      retry: async (record: ExecutionRecord) => {
+        const body: RunJobRequest = { data: {}, retryOf: record.fireInstanceId }
+        const ok = await perform(
+          () =>
+            api(`${jobPath({ group: record.jobGroup, name: record.jobName })}/trigger`, {
+              method: 'POST',
+              body,
+            }),
+          `${record.jobName}: triggered again`
+        )
+        if (ok) setTimeout(refresh, 1000)
         return ok
       },
       cancel: (run: RunningJob) =>

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  describeRetry,
+  formatSeconds,
   formatDuration,
   formatRelative,
   isPaused,
@@ -91,5 +93,27 @@ describe('job status helpers', () => {
     })
     expect(nextFire(j)).toBe('2030-02-01T00:00:00Z')
     expect(nextFire(job({ triggers: [] }))).toBeNull()
+  })
+
+  it('describes retry policies', () => {
+    expect(describeRetry(null)).toBe('None')
+    expect(describeRetry({ maxRetries: 0, delaySeconds: 60, exponential: true })).toBe('None')
+    expect(describeRetry({ maxRetries: 1, delaySeconds: 45, exponential: true })).toBe(
+      '1 retry, after 45s'
+    )
+    expect(describeRetry({ maxRetries: 3, delaySeconds: 600, exponential: false })).toBe(
+      'Up to 3 retries, 10m apart'
+    )
+    // Doubling stops at a day, as on the server
+    expect(describeRetry({ maxRetries: 3, delaySeconds: 30_000, exponential: true })).toBe(
+      'Up to 3 retries, after 8h 20m, 16h 40m, 24h'
+    )
+  })
+
+  it('formats waits in seconds', () => {
+    expect(formatSeconds(59)).toBe('59s')
+    expect(formatSeconds(90)).toBe('1m 30s')
+    expect(formatSeconds(3600)).toBe('1h')
+    expect(formatSeconds(5400)).toBe('1h 30m')
   })
 })

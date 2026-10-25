@@ -11,7 +11,10 @@ public enum JobExecutionStatus
     Vetoed,
 
     /// <summary>Cancelled while running: its cancellation token was cancelled, from the dashboard or by the host.</summary>
-    Cancelled
+    Cancelled,
+
+    /// <summary>Failed, and another attempt is scheduled by the job's retry policy.</summary>
+    Retried
 }
 
 /// <summary>One execution of a job, as recorded by the Cronlight.History listener.</summary>
@@ -33,6 +36,9 @@ public record JobExecutionRecord
     public required JobExecutionStatus Status { get; init; }
     public string? Error { get; init; }
     public int RefireCount { get; init; }
+
+    /// <summary>1 for a first attempt, 2 for its first automatic retry, and so on.</summary>
+    public int Attempt { get; init; } = 1;
 }
 
 public record JobHistoryQuery

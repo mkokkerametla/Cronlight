@@ -33,7 +33,9 @@ public record JobDto(
     bool Loadable,
     string? LoadError,
     IDictionary<string, string?> Data,
-    IReadOnlyList<TriggerDto> Triggers
+    IReadOnlyList<TriggerDto> Triggers,
+    // The policy the job runs with, its own or its type's; null when failed runs are not retried
+    JobRetryPolicy? Retry = null
 );
 
 /// <summary>One page of the job list, with counts over every job for the dashboard's stat cards.</summary>
@@ -59,11 +61,21 @@ public record CreateJobRequest(
     string? Group,
     string? Description,
     Dictionary<string, string>? Data,
-    List<TriggerRequest>? Triggers
+    List<TriggerRequest>? Triggers,
+    // Null follows the job type's [CronlightRetry], if any
+    JobRetryPolicy? Retry = null
 );
 
-/// <summary>Null properties are left unchanged. Triggers replaces the job's cron triggers only.</summary>
-public record UpdateJobRequest(string? Description, Dictionary<string, string>? Data, List<TriggerRequest>? Triggers);
+/// <summary>
+/// Null properties are left unchanged. Triggers replaces the job's cron triggers only. Retry with MaxRetries 0 turns
+/// retries off, even when the job type has a [CronlightRetry] policy.
+/// </summary>
+public record UpdateJobRequest(string? Description, Dictionary<string, string>? Data, List<TriggerRequest>? Triggers,
+    JobRetryPolicy? Retry = null);
+
+/// <summary>Runs a job now. Data overrides the saved job data for this run (and its retries) only.</summary>
+/// <param name="RetryOf">The fire instance id of the failed run this one retries, for the audit log.</param>
+public record RunJobRequest(Dictionary<string, string>? Data, string? RetryOf = null);
 
 public record CronPreviewDto(bool IsValid, string Expression, string? Description, IReadOnlyList<DateTimeOffset> NextFireTimes, string? ErrorMessage);
 
@@ -292,8 +304,12 @@ internal static class DashboardApi
             foreach (var p in info.Parameters.Where(p => p.DefaultValue != null && !data.ContainsKey(p.Key)))
                 data[p.Key] = p.DefaultValue!;
 
+            if (ReservedKey(data) is { } reserved)
+                return Results.BadRequest(reserved);
             if (ValidateParameters(info, data) is { } invalid)
                 return Results.BadRequest(invalid);
+            if (request.Retry?.Problem() is { } badRetry)
+                return Results.BadRequest(badRetry);
             var secretKeys = SecretKeys(info);
             if (CheckSecretReferences(http, data, secretKeys, options.Value) is { } unresolved)
                 return Results.BadRequest(unresolved);
@@ -308,16 +324,20 @@ internal static class DashboardApi
             if (await FindTriggerConflict(scheduler, triggers, new HashSet<TriggerKey>()) is { } conflict)
                 return Results.Conflict(conflict);
 
+            var jobData = ToJobDataMap(data);
+            if (request.Retry != null && Retries.Store(request.Retry, type) is { } policy)
+                jobData[Retries.PolicyKey] = policy;
             var job = JobBuilder.Create(type)
                 .WithIdentity(key)
                 .WithDescription(request.Description)
-                .SetJobData(ToJobDataMap(data))
+                .SetJobData(jobData)
                 .StoreDurably()
                 .Build();
 
             var changes = DataChanges(new Dictionary<string, object>(), job.JobDataMap, secretKeys, options.Value);
             AddChange(changes, "description", null, request.Description);
             AddChange(changes, "triggers", null, DescribeTriggers(triggers));
+            AddChange(changes, "retry", null, DescribeRetry(Retries.For(job)));
             Audit.RecordChanges(http, changes);
 
             // One call stores the job and its triggers together, so a failure leaves nothing behind
@@ -339,8 +359,12 @@ internal static class DashboardApi
             // Validate everything before mutating anything
             var info = catalog.Describe(existing.JobType);
             var secretKeys = SecretKeys(info);
+            if (request.Data != null && ReservedKey(request.Data) is { } reserved)
+                return Results.BadRequest(reserved);
             if (request.Data != null && info != null && ValidateParameters(info, request.Data) is { } invalid)
                 return Results.BadRequest(invalid);
+            if (request.Retry?.Problem() is { } badRetry)
+                return Results.BadRequest(badRetry);
             if (request.Data != null && CheckSecretReferences(http, request.Data, secretKeys, options.Value) is { } unresolved)
                 return Results.BadRequest(unresolved);
 
@@ -356,17 +380,26 @@ internal static class DashboardApi
                     return Results.Conflict(conflict);
             }
 
-            var data = request.Data == null ? existing.JobDataMap : MergeJobData(existing.JobDataMap, request.Data);
+            var data = request.Data == null ? new JobDataMap((IDictionary<string, object>)existing.JobDataMap) : MergeJobData(existing.JobDataMap, request.Data);
+            if (request.Retry != null)
+            {
+                data.Remove(Retries.PolicyKey);
+                if (Retries.Store(request.Retry, existing.JobType) is { } policy)
+                    data[Retries.PolicyKey] = policy;
+            }
             var changes = DataChanges(existing.JobDataMap, data, secretKeys, options.Value);
             if (request.Description != null)
                 AddChange(changes, "description", existing.Description, request.Description);
             if (request.Triggers != null)
                 AddChange(changes, "triggers", DescribeTriggers(current), DescribeTriggers(requested));
+            var retryBefore = Retries.For(existing);
+            var retryAfter = Retries.For(existing.GetJobBuilder().SetJobData(data).Build());
+            if (retryBefore != retryAfter)
+                AddChange(changes, "retry", DescribeRetry(retryBefore), DescribeRetry(retryAfter));
             Audit.RecordChanges(http, changes);
 
-            if (request.Data != null || request.Description != null)
+            if (request.Data != null || request.Description != null || request.Retry != null)
             {
-
                 var updated = existing.GetJobBuilder()
                     .WithDescription(request.Description ?? existing.Description)
                     .SetJobData(data)
@@ -384,12 +417,70 @@ internal static class DashboardApi
             OnJob(f, o.Value, group, name, (s, k) => s.PauseJob(k)));
         api.MapPost("/jobs/{group}/{name}/resume", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
             OnJob(f, o.Value, group, name, (s, k) => s.ResumeJob(k)));
-        api.MapPost("/jobs/{group}/{name}/trigger", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
-            OnJob(f, o.Value, group, name, (s, k) => s.TriggerJob(k)));
+        api.MapPost("/jobs/{group}/{name}/trigger", RunJob);
         api.MapDelete("/jobs/{group}/{name}", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
             OnJob(f, o.Value, group, name, (s, k) => s.DeleteJob(k)));
 
         api.MapPost("/jobs/{group}/{name}/runs/{fireInstanceId}/cancel", CancelRun);
+    }
+
+    /// <summary>
+    /// Runs the job now, optionally with some of its data replaced for this run. The replacements go in the run's
+    /// trigger data, so the saved job is unchanged and the job reads them as usual from its merged data.
+    /// </summary>
+    private static async Task<IResult> RunJob(string group, string name, RunJobRequest? request, HttpContext http,
+        ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options)
+    {
+        var scheduler = await factory.GetScheduler();
+        var key = new JobKey(name, group);
+        var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
+        if (problem != null)
+            return problem;
+
+        var changes = new Dictionary<string, CronlightAuditChange>();
+        if (request?.RetryOf is { Length: > 0 } retryOf)
+            changes["retryOf"] = new(null, retryOf.Length <= 200 ? retryOf : retryOf[..200]);
+
+        var data = new JobDataMap();
+        var requested = request?.Data ?? new();
+        if (requested.Count > 0)
+        {
+            if (existing == null)
+                return Results.Conflict($"Job {key} has a type that cannot be loaded here and cannot be run with different data.");
+            if (ReservedKey(requested) is { } reserved)
+                return Results.BadRequest(reserved);
+
+            var saved = existing.JobDataMap;
+            // A masked or unchanged value is the saved one: nothing to replace
+            var overrides = requested
+                .Where(kv => kv.Value != Mask && (!saved.TryGetValue(kv.Key, out var old) || old?.ToString() != kv.Value))
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+            var info = catalog.Describe(existing.JobType);
+            var secretKeys = SecretKeys(info);
+            if (info != null)
+            {
+                var merged = saved.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? "");
+                foreach (var (k, v) in overrides)
+                    merged[k] = v;
+                if (ValidateParameters(info, merged) is { } invalid)
+                    return Results.BadRequest(invalid);
+            }
+            if (CheckSecretReferences(http, overrides, secretKeys, options.Value) is { } unresolved)
+                return Results.BadRequest(unresolved);
+
+            foreach (var (k, v) in overrides)
+            {
+                var old = saved.TryGetValue(k, out var o) ? o : null;
+                // Keeps the saved value's type, as editing the job does
+                data[k] = old is not (null or string) ? TryConvert(v, old.GetType()) ?? v : v;
+                changes[$"data.{k}"] = new(Display(k, old?.ToString(), secretKeys, options.Value), Display(k, v, secretKeys, options.Value));
+            }
+        }
+        Audit.RecordChanges(http, changes);
+
+        await scheduler.TriggerJob(key, data);
+        return Results.NoContent();
     }
 
     /// <summary>
@@ -519,6 +610,9 @@ internal static class DashboardApi
     private static JobDataMap MergeJobData(JobDataMap existing, Dictionary<string, string> requested)
     {
         var data = new JobDataMap();
+        // The form never shows Cronlight's own keys, so they are kept rather than read as removed
+        foreach (var (k, v) in existing.Where(kv => Retries.IsReserved(kv.Key)))
+            data[k] = v;
         foreach (var (k, v) in requested)
         {
             var known = existing.TryGetValue(k, out var old);
@@ -628,13 +722,13 @@ internal static class DashboardApi
         var info = catalog.Describe(detail.JobType);
         var secretKeys = SecretKeys(info);
 
-        var data = detail.JobDataMap.ToDictionary(
+        var data = detail.JobDataMap.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(
             kv => kv.Key,
             kv => Display(kv.Key, kv.Value?.ToString(), secretKeys, options)
         );
 
         return new JobDto(key.Name, key.Group, detail.Description, detail.JobType.FullName, info?.DisplayName,
-            detail.Durable, true, null, data, await LoadTriggers(scheduler, key));
+            detail.Durable, true, null, data, await LoadTriggers(scheduler, key), Retries.For(detail));
     }
 
     private static async Task<IReadOnlyList<TriggerDto>> LoadTriggers(IScheduler scheduler, JobKey key)
@@ -647,7 +741,7 @@ internal static class DashboardApi
             result.Add(new TriggerDto(
                 trigger.Key.Name,
                 trigger.Key.Group,
-                cron != null ? "Cron" : trigger is ISimpleTrigger ? "Simple" : trigger.GetType().Name,
+                cron != null ? "Cron" : trigger.Key.Group == Retries.TriggerGroup ? "Retry" : trigger is ISimpleTrigger ? "Simple" : trigger.GetType().Name,
                 cron?.CronExpressionString,
                 cron?.TimeZone.Id,
                 state.ToString(),
@@ -699,7 +793,8 @@ internal static class DashboardApi
         IDictionary<string, object> before, IDictionary<string, object> after, HashSet<string> secretKeys, CronlightOptions options)
     {
         var changes = new Dictionary<string, CronlightAuditChange>();
-        foreach (var key in before.Keys.Union(after.Keys))
+        // Cronlight's own keys are audited as what they mean, e.g. "retry"
+        foreach (var key in before.Keys.Union(after.Keys).Where(k => !Retries.IsReserved(k)))
         {
             var old = before.TryGetValue(key, out var o) ? o?.ToString() : null;
             var @new = after.TryGetValue(key, out var n) ? n?.ToString() : null;
@@ -715,6 +810,15 @@ internal static class DashboardApi
         if (before != after)
             changes[field] = new(before, after);
     }
+
+    private static string? DescribeRetry(JobRetryPolicy? policy) =>
+        policy == null ? null
+        : $"{policy.MaxRetries} {(policy.MaxRetries == 1 ? "retry" : "retries")}, {policy.DelaySeconds}s {(policy.Exponential ? "doubling" : "apart")}";
+
+    private static string? ReservedKey(Dictionary<string, string> data) =>
+        data.Keys.FirstOrDefault(Retries.IsReserved) is { } key
+            ? $"'{key}' is reserved: job data keys starting with '{Retries.ReservedPrefix}' are Cronlight's own"
+            : null;
 
     private static string? DescribeTriggers(IEnumerable<ITrigger> triggers) =>
         string.Join("; ", triggers.OfType<ICronTrigger>().Select(t => $"{t.CronExpressionString} ({t.TimeZone.Id})")) is { Length: > 0 } text

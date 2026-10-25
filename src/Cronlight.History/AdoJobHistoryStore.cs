@@ -16,11 +16,16 @@ internal sealed class AdoJobHistoryStore(
     bool createTable,
     ILogger<AdoJobHistoryStore> logger) : IJobHistoryStore
 {
-    private const string InsertColumns =
+    private const string BaseColumns =
         "SCHED_NAME, ENTRY_ID, INSTANCE_NAME, JOB_NAME, JOB_GROUP, JOB_TYPE, TRIGGER_NAME, TRIGGER_GROUP, " +
         "SCHEDULED_TIME, FIRED_TIME, FINISHED_TIME, DURATION_MS, STATUS, ERROR, REFIRE_COUNT";
 
-    private const string Columns = "ID, " + InsertColumns;
+    // Added with retries. A table created by an earlier version gets it at startup, unless CreateTable is off.
+    private const string AttemptColumn = "ATTEMPT";
+    private volatile bool hasAttempt = true;
+
+    private string InsertColumns => hasAttempt ? $"{BaseColumns}, {AttemptColumn}" : BaseColumns;
+    private string Columns => "ID, " + InsertColumns;
 
     // The writer initializes the store in the background at startup. Until then the table may not exist yet,
     // so reads return no history instead of failing; once initialization has failed, reads fail again so the
@@ -51,6 +56,7 @@ internal sealed class AdoJobHistoryStore(
         await using var connection = await dataSource.OpenConnection(cancellationToken);
         if (await TableExists(connection, cancellationToken))
         {
+            await AddMissingColumns(connection, cancellationToken);
             await AddMissingIndexes(connection, cancellationToken);
             return;
         }
@@ -172,6 +178,37 @@ internal sealed class AdoJobHistoryStore(
     }
 
     /// <summary>
+    /// Columns added after the first release. With CreateTable off a missing column is reported, and history is
+    /// written without it.
+    /// </summary>
+    private async Task AddMissingColumns(DbConnection connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var probe = connection.CreateCommand();
+            probe.CommandText = $"SELECT {AttemptColumn} FROM {tableName} WHERE 1 = 0";
+            await probe.ExecuteScalarAsync(cancellationToken);
+            return;
+        }
+        catch (DbException)
+        {
+        }
+
+        var statement = $"ALTER TABLE {tableName} ADD {AttemptColumn} {(dialect == SqlDialect.PostgreSql || dialect == SqlDialect.Sqlite ? "INTEGER" : "INT")} NULL";
+        if (!createTable)
+        {
+            hasAttempt = false;
+            logger.LogWarning("History table {Table} has no {Column} column, so retry attempts are not recorded. Add it with: {Statement}",
+                tableName, AttemptColumn, statement);
+            return;
+        }
+        logger.LogInformation("Adding column {Column} to history table {Table}", AttemptColumn, tableName);
+        await using var command = connection.CreateCommand();
+        command.CommandText = statement;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
     /// Indexes added after the first release, which tables created by an earlier version lack. With CreateTable
     /// off the host owns the schema, so a missing index is only reported, with the statement to add it.
     /// </summary>
@@ -236,7 +273,7 @@ internal sealed class AdoJobHistoryStore(
         command.CommandText =
             $"INSERT INTO {tableName} ({InsertColumns}) VALUES ({P("sched")}, {P("entry")}, {P("instance")}, " +
             $"{P("job")}, {P("group")}, {P("type")}, {P("trigger")}, {P("triggerGroup")}, {P("scheduled")}, {P("fired")}, " +
-            $"{P("finished")}, {P("duration")}, {P("status")}, {P("error")}, {P("refire")})";
+            $"{P("finished")}, {P("duration")}, {P("status")}, {P("error")}, {P("refire")}{(hasAttempt ? $", {P("attempt")}" : "")})";
         Add(command, "sched", r.SchedulerName);
         Add(command, "entry", r.FireInstanceId);
         Add(command, "instance", r.InstanceName);
@@ -252,10 +289,12 @@ internal sealed class AdoJobHistoryStore(
         Add(command, "status", r.Status.ToString());
         Add(command, "error", r.Error);
         Add(command, "refire", r.RefireCount);
+        if (hasAttempt)
+            Add(command, "attempt", r.Attempt);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static JobExecutionRecord Read(DbDataReader reader)
+    private JobExecutionRecord Read(DbDataReader reader)
     {
         string? Text(int i) => reader.IsDBNull(i) ? null : reader.GetString(i);
         long? Long(int i) => reader.IsDBNull(i) ? null : Convert.ToInt64(reader.GetValue(i));
@@ -278,7 +317,8 @@ internal sealed class AdoJobHistoryStore(
             DurationMs = Long(12),
             Status = Enum.Parse<JobExecutionStatus>(reader.GetString(13)),
             Error = Text(14),
-            RefireCount = Convert.ToInt32(reader.GetValue(15))
+            RefireCount = Convert.ToInt32(reader.GetValue(15)),
+            Attempt = hasAttempt && Long(16) is { } attempt ? (int)attempt : 1
         };
     }
 

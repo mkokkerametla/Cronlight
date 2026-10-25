@@ -74,6 +74,51 @@ internal static class HistoryScenarios
         await store.Initialize(CancellationToken.None);
     }
 
+    /// <summary>A history table from before retries gets the ATTEMPT column at startup.</summary>
+    public static async Task AddsTheAttemptColumnToAnOlderTable(TestHost host)
+    {
+        var store = host.Services.GetRequiredService<IJobHistoryStore>();
+        const string drop = "ALTER TABLE QRTZ_CRONLIGHT_HISTORY DROP COLUMN ATTEMPT";
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(100))
+        {
+            try
+            {
+                await host.Database.Execute(drop);
+                break;
+            }
+            catch (Exception) when (DateTime.UtcNow < deadline)
+            {
+            }
+        }
+
+        await store.Initialize(CancellationToken.None);
+        await store.RecordFinished(Record(host.SchedulerName, "upgraded", DateTimeOffset.UtcNow) with { Attempt = 2 }, CancellationToken.None);
+        var record = Assert.Single(await store.Query(host.SchedulerName, new JobHistoryQuery { JobName = "upgraded" }, CancellationToken.None));
+        Assert.Equal(2, record.Attempt);
+        // A start with the column in place leaves it alone
+        await store.Initialize(CancellationToken.None);
+    }
+
+    /// <summary>Fails twice and succeeds on its second retry: each failure that is retried shows as Retried.</summary>
+    public static async Task RecordsRetryAttempts(TestHost host)
+    {
+        var client = host.Client();
+        var key = Guid.NewGuid().ToString("N");
+        RetriedJob.FailuresLeft[key] = 2;
+        await Create(client, typeof(RetriedJob), "flaky", new { key });
+        await client.PostAsync("api/jobs/DEFAULT/flaky/trigger", null);
+
+        var records = await WaitForHistory(client, "?name=flaky", r => r.Count(x => x.GetProperty("status").GetString() != "Running") >= 3);
+
+        Assert.Equal(new[] { ("Succeeded", 3), ("Retried", 2), ("Retried", 1) },
+            records.Select(r => (r.GetProperty("status").GetString()!, r.GetProperty("attempt").GetInt32())));
+        Assert.Equal(new[] { "Cronlight.Retries", "Cronlight.Retries" }, records.Take(2).Select(r => r.GetProperty("triggerGroup").GetString()));
+        Assert.StartsWith("InvalidOperationException:", records[1].GetProperty("error").GetString());
+        // Retried attempts are not failures: the job ended up succeeding
+        var summary = await client.GetFromJsonAsync<JsonElement>("api/history/summary?hours=1");
+        Assert.Equal((1, 0), (summary.GetProperty("succeeded").GetInt32(), summary.GetProperty("failed").GetInt32()));
+    }
+
     public static async Task RecordsEachRefireAttempt(TestHost host)
     {
         var client = host.Client();
@@ -239,6 +284,20 @@ public class HistoryTests
     {
         await using var host = await TestHost.Start(history: Database);
         await HistoryScenarios.AddsTheOutcomeIndexToAnOlderTable(host);
+    }
+
+    [Fact]
+    public async Task A_history_table_from_an_older_version_gets_the_attempt_column()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        await HistoryScenarios.AddsTheAttemptColumnToAnOlderTable(host);
+    }
+
+    [Fact]
+    public async Task Records_each_retry_attempt()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        await HistoryScenarios.RecordsRetryAttempts(host);
     }
 
     [Fact]
@@ -467,6 +526,23 @@ public class DatabaseTests
     {
         await using var host = await Start(name);
         await HistoryScenarios.AddsTheOutcomeIndexToAnOlderTable(host);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task History_tables_from_older_versions_get_the_attempt_column(string name)
+    {
+        await using var host = await Start(name);
+        await HistoryScenarios.AddsTheAttemptColumnToAnOlderTable(host);
+    }
+
+    // Retries are triggers in the job store, written from the job's thread
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Each_retry_attempt_is_recorded(string name)
+    {
+        await using var host = await Start(name);
+        await HistoryScenarios.RecordsRetryAttempts(host);
     }
 
     // Only a cluster reads failure streaks from history, and SQLite cannot be clustered

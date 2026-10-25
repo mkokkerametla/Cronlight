@@ -24,6 +24,7 @@ export const job = (overrides: Partial<Job> = {}): Job => ({
   loadError: null,
   data: {},
   triggers: [trigger()],
+  retry: null,
   ...overrides,
 })
 
@@ -66,6 +67,7 @@ export const execution = (
   status: 'Succeeded',
   error: null,
   refireCount: 0,
+  attempt: 1,
   ...overrides,
 })
 

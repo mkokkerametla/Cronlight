@@ -19,8 +19,16 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { DataEditor } from '@/components/jobs/data-editor'
+import { RetryEditor } from '@/components/jobs/retry-editor'
 import { TriggersEditor } from '@/components/jobs/triggers-editor'
-import { dataRows, draftsToRequest, emptyTrigger, rowsToData } from '@/lib/job-form'
+import {
+  dataRows,
+  draftsToRequest,
+  draftToRetry,
+  emptyTrigger,
+  retryDraft,
+  rowsToData,
+} from '@/lib/job-form'
 import type { CreateJobRequest, JobType } from '@/types'
 
 interface Props {
@@ -77,17 +85,15 @@ function CreateJobForm({
   const [description, setDescription] = useState('')
   const [data, setData] = useState(() => dataRows(jobTypes[0], {}))
   const [triggers, setTriggers] = useState([emptyTrigger()])
+  const [retry, setRetry] = useState(() => retryDraft(jobTypes[0]?.retry))
   const [submitting, setSubmitting] = useState(false)
   const jobType = jobTypes.find(t => t.typeName === typeName)
 
   const changeType = (value: string) => {
+    const type = jobTypes.find(t => t.typeName === value)
     setTypeName(value)
-    setData(
-      dataRows(
-        jobTypes.find(t => t.typeName === value),
-        {}
-      )
-    )
+    setData(dataRows(type, {}))
+    setRetry(retryDraft(type?.retry))
   }
 
   const submit = async (e: FormEvent) => {
@@ -100,6 +106,7 @@ function CreateJobForm({
       description: description.trim() || null,
       data: rowsToData(data),
       triggers: draftsToRequest(triggers),
+      retry: draftToRetry(retry),
     })
     setSubmitting(false)
     if (created) onDone()
@@ -167,6 +174,12 @@ function CreateJobForm({
             onChange={setTriggers}
             showScheduleAssistant={showScheduleAssistant}
           />
+        </section>
+
+        <Separator />
+        <section className="space-y-2">
+          <h3 className="text-sm font-medium">Retries</h3>
+          <RetryEditor value={retry} onChange={setRetry} />
         </section>
 
         <Separator />

@@ -1,4 +1,4 @@
-import type { JobParameter, JobType, Trigger, TriggerRequest } from '@/types'
+import type { JobParameter, JobRetryPolicy, JobType, Trigger, TriggerRequest } from '@/types'
 
 // Form state <-> API request conversion shared by the create and edit forms
 
@@ -73,3 +73,33 @@ export const draftsToRequest = (drafts: TriggerDraft[]): TriggerRequest[] =>
       cronExpression: t.cronExpression.trim(),
       timeZone: t.timeZone.trim() || null,
     }))
+
+/** Retry fields as typed, so a field can be empty while it is edited */
+export interface RetryDraft {
+  maxRetries: string
+  delaySeconds: string
+  exponential: boolean
+}
+
+export const retryDraft = (policy: JobRetryPolicy | null | undefined): RetryDraft => ({
+  maxRetries: String(policy?.maxRetries ?? 0),
+  delaySeconds: String(policy?.delaySeconds ?? 60),
+  exponential: policy?.exponential ?? false,
+})
+
+export const draftToRetry = (draft: RetryDraft): JobRetryPolicy => ({
+  maxRetries: Number(draft.maxRetries) || 0,
+  delaySeconds: Number(draft.delaySeconds) || 0,
+  exponential: draft.exponential,
+})
+
+/** Values that differ from the saved job data, for a run with different data. Masked secrets are unchanged. */
+export const changedData = (
+  rows: DataRow[],
+  saved: Record<string, string | null>
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(rowsToData(rows)).filter(
+      ([key, value]) => value !== MASK && value !== saved[key]
+    )
+  )

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { HistoryTable } from '@/components/history/history-table'
 import { execution } from '@/test/fixtures'
-import type { HistoryFilter, HistoryPage } from '@/types'
+import type { ExecutionRecord, HistoryFilter, HistoryPage } from '@/types'
 
 vi.mock('@/api', () => ({ api: vi.fn() }))
 
@@ -13,9 +13,23 @@ let pages: Record<string, HistoryPage>
 const onOpenJob = vi.fn()
 
 /** The table with real filter state, as App uses it. */
-function Harness({ initial }: { initial: HistoryFilter }) {
+function Harness({
+  initial,
+  onRetry,
+}: {
+  initial: HistoryFilter
+  onRetry?: (record: ExecutionRecord) => Promise<boolean>
+}) {
   const [filter, setFilter] = useState(initial)
-  return <HistoryTable filter={filter} onFilterChange={setFilter} onOpenJob={onOpenJob} />
+  return (
+    <HistoryTable
+      filter={filter}
+      onFilterChange={setFilter}
+      onOpenJob={onOpenJob}
+      canManage={onRetry !== undefined}
+      onRetry={onRetry}
+    />
+  )
 }
 
 const all: HistoryFilter = { status: 'all', job: null }
@@ -64,6 +78,35 @@ describe('HistoryTable', () => {
     expect(row.getByText('2.5s')).toBeInTheDocument()
     expect(row.getByText('node-2')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Load older runs' })).toBeNull()
+  })
+
+  it('shows retry attempts, and runs a failed job again from its run', async () => {
+    pages.all = {
+      records: [
+        execution(3, { status: 'Failed', attempt: 3, fireInstanceId: 'fire-3' }),
+        execution(2, { status: 'Retried', attempt: 2 }),
+        execution(1, { status: 'Succeeded', jobName: 'other' }),
+      ],
+      nextBefore: null,
+    }
+    const onRetry = vi.fn(async () => true)
+    render(<Harness initial={all} onRetry={onRetry} />)
+
+    expect(await screen.findByText('DEFAULT · - · attempt 3')).toBeInTheDocument()
+    expect(screen.getByText('Retried', { selector: '[data-slot=badge]' })).toBeInTheDocument()
+    // Only the last attempt can be run again: a retried run already has its next attempt scheduled
+    const buttons = screen.getAllByRole('button', { name: /Run .* again/ })
+    expect(buttons).toHaveLength(1)
+    await userEvent.click(buttons[0])
+    expect(onRetry).toHaveBeenCalledWith(expect.objectContaining({ fireInstanceId: 'fire-3' }))
+  })
+
+  it('has no Run again button without permission to manage jobs', async () => {
+    pages.all = { records: [execution(1, { status: 'Failed' })], nextBefore: null }
+    render(<Harness initial={all} />)
+
+    expect(await screen.findByText('Failed')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /again/ })).toBeNull()
   })
 
   it('opens the job from its name', async () => {

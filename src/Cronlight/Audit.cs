@@ -17,7 +17,10 @@ namespace Cronlight;
 /// <param name="Action">create, update, pause, resume, trigger, cancel or delete.</param>
 /// <param name="User">The user's name, or "anonymous" when the dashboard allows anonymous access.</param>
 /// <param name="Error">Why the request was refused or failed; null when it succeeded.</param>
-/// <param name="Changes">What a create or update set, by field: description, triggers, or data.&lt;key&gt;.</param>
+/// <param name="Changes">
+/// What a create or update set, by field: description, triggers, retry, or data.&lt;key&gt;. For a run (trigger),
+/// the data changed for that run only, and retryOf when it repeats a failed run.
+/// </param>
 public sealed record CronlightAuditEvent(
     DateTimeOffset TimeUtc,
     string User,

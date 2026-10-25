@@ -26,6 +26,7 @@ const jobTypes: JobType[] = [
     description: null,
     hidden: false,
     parameters: [],
+    retry: null,
   },
 ]
 

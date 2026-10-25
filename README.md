@@ -117,6 +117,48 @@ Azure Key Vault through its configuration provider (a vault secret named `JobSec
 - Every app that runs these jobs (each cluster node) needs `AddCronlight` with the same `SecretsSection`
   and the secrets in its configuration.
 
+## Retries and re-running
+
+A failed run can be retried automatically. Give the job type a default:
+
+```csharp
+// Waits 30 s, 60 s, then 120 s; without Exponential, 30 s each time
+[CronlightRetry(3, DelaySeconds = 30, Exponential = true)]
+public class InvoiceJob : IJob { ... }
+```
+
+and change it for a single job in the dashboard's create and edit forms (Retries 0 turns them off, even
+when the type has a default). A job that has not been given its own policy follows its type's, so changing
+the attribute later applies to it.
+
+- **Each retry is a one-off trigger** of the same job, in the trigger group `Cronlight.Retries`. It is
+  stored like any trigger, so in a cluster any node may run it and it survives a restart. It carries the
+  failed run's trigger data, so a run started with different data is retried with that data.
+- **Only failures are retried**, not cancelled or vetoed runs. Waits are capped at a day.
+- **Pausing** the job pauses a waiting retry too. A job paused while its run was failing keeps the
+  retry paused; a manual run of a paused job is retried as usual.
+- **History** shows an attempt that will be retried as `Retried`, with its attempt number, and only the last
+  attempt as `Failed` or `Succeeded`. **Alerts** look at the last attempt only, so a run that succeeds on a
+  retry raises none.
+- The policy is kept in the job's data under `Cronlight.Retry`. Job data keys starting with `Cronlight.`
+  are Cronlight's own: the dashboard hides them and the API refuses to set them.
+- Every app that runs these jobs (each cluster node) needs `AddCronlight`, which attaches the retry
+  listener.
+
+To run a job once with different data, open it and choose **Run with different data**. The changes apply
+to that run and its retries only; the saved job keeps its data, and the audit log records what was changed.
+From the API, send the changed values with the run (validated like an edit; a masked secret keeps the
+saved value):
+
+```bash
+curl -X POST -H "X-Cronlight-Request: 1" -H "Content-Type: application/json" \
+  -d '{"data":{"region":"us"}}' …/api/jobs/DEFAULT/nightly/trigger
+```
+
+The History tab has **Run again** on runs that failed, were vetoed or were cancelled. It runs the job with
+its saved data (history does not keep a run's own data), and the audit log records which run it repeats as
+`retryOf`.
+
 ## Scheduling API calls (HTTP job)
 
 The sample includes [`HttpJob`](samples/Cronlight.SampleHost/HttpJob.cs), a job type for calling HTTP APIs
@@ -160,8 +202,9 @@ builder.Services.AddCronlightHistory(o =>
   history is kept in memory on each node instead, and a warning is logged.
 - **Table creation.** The table is created on startup if missing. Where the app has no DDL rights, set
   `CreateTable = false` and run the script for your database from `src/Cronlight.History/Schema`.
-  Indexes added in later versions are added to an existing table at startup; with `CreateTable = false`
-  a missing one is logged as a warning with the statement to run.
+  Indexes and columns added in later versions (such as `ATTEMPT`, for retries) are added to an existing
+  table at startup; with `CreateTable = false` a missing one is logged as a warning with the statement to
+  run, and history is written without it.
 - **Jobs are never slowed down.** Listeners only queue records; a background writer stores them. If the
   database is unavailable, records beyond `QueueCapacity` are dropped and jobs carry on.
 - **Errors** are stored as exception type and message (truncated to `MaxErrorLength`), never stack traces.
@@ -183,8 +226,8 @@ builder.Services.AddCronlightHistory(o =>
 ## Audit log
 
 Every change made through the dashboard or its API (create, edit, pause, resume, run now, cancel, delete) is
-logged under the `Cronlight.Audit` category: who made it, the job, whether it succeeded, and for creates
-and edits what changed. Refused attempts are logged as warnings with the reason, such as a cross-site
+logged under the `Cronlight.Audit` category: who made it, the job, whether it succeeded, for creates
+and edits what changed, and for runs with different data what was changed for that run. Refused attempts are logged as warnings with the reason, such as a cross-site
 request or read-only mode. Requests turned away by the host's authorization policies before reaching
 Cronlight are logged by ASP.NET Core instead. Secret values are never written: a changed secret shows as
 `********`.
@@ -257,7 +300,12 @@ on by default). Every alert is also logged as a warning under the `Cronlight.Ale
   rather than code.
 - Network errors, timeouts, 5xx responses and unavailable mail servers are retried twice; other failures
   are logged. One channel failing does not stop the others.
-- Cancelled runs neither count as failures nor end a streak. Vetoed runs are ignored.
+- A webhook without an absolute http(s) URL is skipped with a warning; the app still starts and the other
+  channels still send.
+- Cancelled runs neither count as failures nor end a streak. A run vetoed because a
+  [secret reference](#secret-references) cannot be resolved counts as a failure: the job is misconfigured
+  and will not run until it is fixed. The alert's error starts with "Not run:". Other vetoed runs are
+  ignored, unless the host's trigger listener sets `CronlightContextKeys.VetoReason`.
 - `o.Jobs = job => job.Group != "experiments"` limits which jobs raise alerts.
 - A single scheduler counts every run itself. In a cluster with
   [execution history](#execution-history-optional-package), the streak is read from history, so it counts

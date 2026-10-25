@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Quartz;
+using Quartz.Impl.Matchers;
 
 namespace Cronlight.Tests;
 
@@ -227,15 +229,56 @@ public class AlertTests
     }
 
     [Fact]
-    public async Task Invalid_settings_stop_the_app_from_starting()
+    public async Task A_run_vetoed_for_a_missing_secret_is_a_failure_and_a_veto_without_a_reason_is_ignored()
+    {
+        var sink = new RecordingAlertSink();
+        await using var host = await TestHost.Start(configure: o => o.SecretsSection = "JobSecrets", services: Alerts(sink));
+        var scheduler = await host.Scheduler();
+        scheduler.ListenerManager.AddTriggerListener(new VetoGroupListener(), GroupMatcher<TriggerKey>.AnyGroup());
+        var client = host.Client();
+        await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "skipped", group = VetoGroupListener.Group });
+        await scheduler.AddJob(JobBuilder.Create<SecretEchoJob>().WithIdentity("mail").StoreDurably()
+            .UsingJobData("smtpPassword", "secret:Smtp:Gone").Build(), replace: false);
+
+        await client.PostAsync($"api/jobs/{VetoGroupListener.Group}/skipped/trigger", null);
+        await Task.Delay(500);
+        await Run(client, "mail");
+
+        await sink.WaitFor(1);
+        var alert = Assert.Single(sink.Alerts);
+        Assert.Equal(("mail", CronlightAlertKind.Failing), (alert.JobName, alert.Kind));
+        Assert.Equal("Not run: smtpPassword: No secret named 'Smtp:Gone' is configured (configuration key JobSecrets:Smtp:Gone).",
+            alert.Error);
+    }
+
+    [Fact]
+    public async Task An_invalid_threshold_stops_the_app_from_starting()
     {
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             TestHost.Start(services: s => s.AddCronlightAlerts(o => o.AfterConsecutiveFailures = 0)));
         Assert.Contains("AfterConsecutiveFailures", error.Message);
+    }
 
-        error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            TestHost.Start(services: s => s.AddCronlightAlerts(o => o.Webhooks.Add(new CronlightWebhook { Url = "hooks.example/x" }))));
-        Assert.Contains("absolute http(s) URL", error.Message);
+    [Fact]
+    public async Task A_webhook_without_a_valid_URL_is_skipped_without_stopping_the_app_or_other_webhooks()
+    {
+        var handler = new RecordingHandler();
+        var sink = new RecordingAlertSink();
+        await using var host = await TestHost.Start(services: s =>
+        {
+            Alerts(sink, o =>
+            {
+                o.Webhooks.Add(new CronlightWebhook { Url = "hooks.example/x" });
+                o.Webhooks.Add(new CronlightWebhook { Url = "https://hooks.example/json" });
+            })(s);
+            s.AddHttpClient("Cronlight.Alerts").ConfigurePrimaryHttpMessageHandler(() => handler);
+        });
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(FailingJob), "broken");
+        await Run(client, "broken");
+
+        await sink.WaitFor(1);
+        Assert.Equal("/json", Assert.Single(handler.Requests).Url.AbsolutePath);
     }
 
     [Fact]

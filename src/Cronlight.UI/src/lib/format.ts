@@ -1,4 +1,4 @@
-import type { Job, JobStatus } from '@/types'
+import type { Job, JobRetryPolicy, JobStatus } from '@/types'
 
 export type { JobStatus }
 
@@ -45,3 +45,28 @@ export const nextFire = (job: Job) =>
     .map(t => t.nextFireTimeUtc)
     .filter((t): t is string => t !== null)
     .sort()[0] ?? null
+
+/** A wait in whole seconds: 45s, 2m, 1h 30m */
+export function formatSeconds(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = seconds % 60
+  if (h) return m ? `${h}h ${m}m` : `${h}h`
+  return s ? `${m}m ${s}s` : `${m}m`
+}
+
+/** The waits before each retry, in seconds, never longer than a day (as the server caps them) */
+export const retryDelays = (policy: JobRetryPolicy): number[] =>
+  Array.from({ length: Math.max(0, policy.maxRetries) }, (_, i) =>
+    policy.exponential ? Math.min(policy.delaySeconds * 2 ** i, 86_400) : policy.delaySeconds
+  )
+
+/** "Up to 3 retries, 30s apart", or with doubling "Up to 3 retries, after 30s, 1m, 2m" */
+export function describeRetry(policy: JobRetryPolicy | null | undefined): string {
+  if (!policy || policy.maxRetries <= 0) return 'None'
+  if (policy.maxRetries === 1) return `1 retry, after ${formatSeconds(policy.delaySeconds)}`
+  const text = `Up to ${policy.maxRetries} retries`
+  if (!policy.exponential) return `${text}, ${formatSeconds(policy.delaySeconds)} apart`
+  return `${text}, after ${retryDelays(policy).map(formatSeconds).join(', ')}`
+}

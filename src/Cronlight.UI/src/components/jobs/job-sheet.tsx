@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { History, Lock, Pause, Pencil, Play, PlayCircle, Trash2 } from 'lucide-react'
+import { History, ListRestart, Lock, Pause, Pencil, Play, PlayCircle, Trash2 } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -31,12 +31,28 @@ import {
   StatusBadge,
   TriggerStateBadge,
 } from '@/components/jobs/status-badge'
+import { RetryEditor } from '@/components/jobs/retry-editor'
 import { TriggersEditor } from '@/components/jobs/triggers-editor'
-import { dataRows, draftsFromTriggers, draftsToRequest, rowsToData } from '@/lib/job-form'
+import {
+  changedData,
+  dataRows,
+  draftsFromTriggers,
+  draftsToRequest,
+  draftToRetry,
+  retryDraft,
+  rowsToData,
+} from '@/lib/job-form'
 import type { DashboardActions } from '@/hooks/use-dashboard'
 import { useHistory } from '@/hooks/use-history'
-import { formatDateTime, formatDuration, formatRelative, isPaused, shortType } from '@/lib/format'
-import type { Job, JobType } from '@/types'
+import {
+  describeRetry,
+  formatDateTime,
+  formatDuration,
+  formatRelative,
+  isPaused,
+  shortType,
+} from '@/lib/format'
+import type { Job, JobType, UpdateJobRequest } from '@/types'
 
 interface Props {
   job: Job | null
@@ -61,14 +77,15 @@ export function JobSheet({
   onClose,
   onViewHistory,
 }: Props) {
-  const [editing, setEditing] = useState(false)
+  // Editing the job, or choosing the data for one run
+  const [mode, setMode] = useState<'view' | 'edit' | 'run'>('view')
 
   return (
     <Sheet
       open={job !== null}
       onOpenChange={open => {
         if (!open) {
-          setEditing(false)
+          setMode('view')
           onClose()
         }
       }}
@@ -85,25 +102,37 @@ export function JobSheet({
                 {job.group} ·{' '}
                 {job.loadable ? (job.displayName ?? shortType(job.jobType)) : 'type not loaded'}
               </SheetDescription>
-              {canManage && job.loadable && !editing && (
+              {canManage && job.loadable && mode === 'view' && (
                 <JobActions
                   job={job}
                   actions={actions}
-                  onEdit={() => setEditing(true)}
+                  onEdit={() => setMode('edit')}
+                  onRunWithData={() => setMode('run')}
                   onDeleted={onClose}
                 />
               )}
             </SheetHeader>
-            {editing ? (
+            {mode === 'edit' ? (
               <EditJobForm
                 key={`${job.group}.${job.name}`}
                 job={job}
                 showScheduleAssistant={showScheduleAssistant}
                 secretReferences={secretReferences}
                 jobType={jobType}
-                onCancel={() => setEditing(false)}
+                onCancel={() => setMode('view')}
                 onSave={async request => {
-                  if (await actions.update(job, request)) setEditing(false)
+                  if (await actions.update(job, request)) setMode('view')
+                }}
+              />
+            ) : mode === 'run' ? (
+              <RunWithDataForm
+                key={`${job.group}.${job.name}`}
+                job={job}
+                jobType={jobType}
+                secretReferences={secretReferences}
+                onCancel={() => setMode('view')}
+                onRun={async data => {
+                  if (await actions.runWithData(job, data)) setMode('view')
                 }}
               />
             ) : (
@@ -129,11 +158,13 @@ function JobActions({
   job,
   actions,
   onEdit,
+  onRunWithData,
   onDeleted,
 }: {
   job: Job
   actions: DashboardActions
   onEdit: () => void
+  onRunWithData: () => void
   onDeleted: () => void
 }) {
   const paused = isPaused(job)
@@ -141,6 +172,9 @@ function JobActions({
     <div className="flex flex-wrap gap-2 pt-2">
       <Button size="sm" onClick={() => actions.run(job, 'trigger')}>
         <Play /> Run now
+      </Button>
+      <Button size="sm" variant="outline" onClick={onRunWithData}>
+        <ListRestart /> Run with different data
       </Button>
       {paused ? (
         <Button size="sm" variant="outline" onClick={() => actions.run(job, 'resume')}>
@@ -214,6 +248,11 @@ function JobDetails({ job, children }: { job: Job; children?: ReactNode }) {
           <span title={job.jobType ?? undefined}>{job.displayName ?? shortType(job.jobType)}</span>
         </Field>
         <Field label="Durable">{job.durable ? 'Yes' : 'No'}</Field>
+        {job.loadable && (
+          <div className="col-span-2">
+            <Field label="Retries">{describeRetry(job.retry)}</Field>
+          </div>
+        )}
         {job.description && (
           <div className="col-span-2">
             <Field label="Description">{job.description}</Field>
@@ -298,23 +337,25 @@ function EditJobForm({
   jobType: JobType | undefined
   showScheduleAssistant: boolean
   secretReferences: boolean
-  onSave: (request: {
-    description: string | null
-    data: Record<string, string>
-    triggers: ReturnType<typeof draftsToRequest>
-  }) => Promise<void>
+  onSave: (request: UpdateJobRequest) => Promise<void>
   onCancel: () => void
 }) {
   const [description, setDescription] = useState(job.description ?? '')
   const [data, setData] = useState(() => dataRows(jobType, job.data))
   const [triggers, setTriggers] = useState(() => draftsFromTriggers(job.triggers))
+  const [retry, setRetry] = useState(() => retryDraft(job.retry))
   const [saving, setSaving] = useState(false)
   const otherTriggers = job.triggers.filter(t => t.kind !== 'Cron').length
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setSaving(true)
-    await onSave({ description, data: rowsToData(data), triggers: draftsToRequest(triggers) })
+    await onSave({
+      description,
+      data: rowsToData(data),
+      triggers: draftsToRequest(triggers),
+      retry: draftToRetry(retry),
+    })
     setSaving(false)
   }
 
@@ -347,6 +388,12 @@ function EditJobForm({
 
         <Separator />
         <section className="space-y-2">
+          <h3 className="text-sm font-medium">Retries</h3>
+          <RetryEditor value={retry} onChange={setRetry} />
+        </section>
+
+        <Separator />
+        <section className="space-y-2">
           <h3 className="text-sm font-medium">Job data</h3>
           <DataEditor rows={data} onChange={setData} secretReferences={secretReferences} />
         </section>
@@ -358,6 +405,57 @@ function EditJobForm({
         </Button>
         <Button type="submit" disabled={saving}>
           {saving ? 'Saving…' : 'Save changes'}
+        </Button>
+      </SheetFooter>
+    </form>
+  )
+}
+
+/** Runs the job once with some of its data changed. The saved job is not changed. */
+function RunWithDataForm({
+  job,
+  jobType,
+  secretReferences,
+  onRun,
+  onCancel,
+}: {
+  job: Job
+  jobType: JobType | undefined
+  secretReferences: boolean
+  onRun: (data: Record<string, string>) => Promise<void>
+  onCancel: () => void
+}) {
+  const [data, setData] = useState(() => dataRows(jobType, job.data))
+  const [running, setRunning] = useState(false)
+  const changed = Object.keys(changedData(data, job.data)).length
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setRunning(true)
+    await onRun(changedData(data, job.data))
+    setRunning(false)
+  }
+
+  return (
+    <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+      <div className="flex-1 space-y-3 overflow-y-auto p-4">
+        <h3 className="text-sm font-medium">Data for this run</h3>
+        <p className="text-sm text-muted-foreground">
+          Changes apply to this run and its retries only. The saved job keeps its data, and the
+          audit log records what was changed.
+        </p>
+        <DataEditor rows={data} onChange={setData} secretReferences={secretReferences} />
+      </div>
+
+      <SheetFooter className="flex-row items-center justify-end border-t">
+        <span className="mr-auto text-xs text-muted-foreground">
+          {changed === 0 ? 'Nothing changed' : `${changed} changed`}
+        </span>
+        <Button type="button" variant="outline" onClick={onCancel} disabled={running}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={running}>
+          <Play /> {running ? 'Starting…' : 'Run now'}
         </Button>
       </SheetFooter>
     </form>
@@ -400,6 +498,9 @@ function RecentRuns({
                   <span title={formatDateTime(r.firedTimeUtc)}>
                     {formatRelative(r.firedTimeUtc)}
                   </span>
+                  {r.attempt > 1 && (
+                    <span className="text-xs text-muted-foreground">attempt {r.attempt}</span>
+                  )}
                   <span className="ml-auto text-muted-foreground tabular-nums">
                     {formatDuration(r.durationMs)}
                   </span>

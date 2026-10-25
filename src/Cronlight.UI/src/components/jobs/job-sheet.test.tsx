@@ -16,6 +16,7 @@ let history: HistoryPage
 function renderSheet(subject: Job, overrides: Partial<Parameters<typeof JobSheet>[0]> = {}) {
   const actions = {
     run: vi.fn(async () => true),
+    runWithData: vi.fn(async () => true),
     remove: vi.fn(async () => true),
     update: vi.fn(async () => true),
   } as unknown as DashboardActions
@@ -127,6 +128,39 @@ describe('JobSheet', () => {
     expect(actions.run).toHaveBeenCalledWith(expect.anything(), 'resume')
   })
 
+  it('shows the retry policy and changes it when editing', async () => {
+    const { actions } = renderSheet(
+      job({ retry: { maxRetries: 2, delaySeconds: 90, exponential: false } })
+    )
+    expect(sheet().getByText('Up to 2 retries, 1m 30s apart')).toBeInTheDocument()
+
+    await userEvent.click(sheet().getByRole('button', { name: /Edit/ }))
+    await userEvent.click(sheet().getByLabelText('Double the wait after each retry'))
+    await userEvent.click(sheet().getByRole('button', { name: 'Save changes' }))
+
+    expect(actions.update).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ retry: { maxRetries: 2, delaySeconds: 90, exponential: true } })
+    )
+  })
+
+  it('runs once with changed data, sending only what changed', async () => {
+    const { actions } = renderSheet(job({ data: { region: 'eu', apiToken: '********' } }))
+
+    await userEvent.click(sheet().getByRole('button', { name: /Run with different data/ }))
+    expect(sheet().getByText('Nothing changed')).toBeInTheDocument()
+    await userEvent.clear(sheet().getByLabelText('Value for region'))
+    await userEvent.type(sheet().getByLabelText('Value for region'), 'us')
+    expect(sheet().getByText('1 changed')).toBeInTheDocument()
+    await userEvent.click(sheet().getByRole('button', { name: /Run now/ }))
+
+    // The masked secret is left out, so the saved one is used
+    expect(actions.runWithData).toHaveBeenCalledWith(expect.objectContaining({ name: 'nightly' }), {
+      region: 'us',
+    })
+    expect(sheet().getByRole('button', { name: /Run with different data/ })).toBeInTheDocument()
+  })
+
   it('has no controls without permission to manage jobs', () => {
     renderSheet(job(), { canManage: false })
 
@@ -169,6 +203,7 @@ describe('JobSheet', () => {
       data: { region: 'us-east' },
       // A UTC trigger is edited with an empty zone, which the server reads as UTC
       triggers: [{ name: 'daily', cronExpression: '0 30 7 * * ?', timeZone: null }],
+      retry: { maxRetries: 0, delaySeconds: 60, exponential: false },
     })
     expect(sheet().queryByRole('button', { name: 'Save changes' })).toBeNull()
     expect(sheet().getByRole('button', { name: /Edit/ })).toBeInTheDocument()

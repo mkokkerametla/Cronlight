@@ -32,6 +32,10 @@ public static class CronlightExtensions
         services.AddSingleton<RunningJobsReader>();
         services.AddSingleton<JobIndexReader>();
         services.TryAddSingleton<SecretReferenceListener>();
+        services.TryAddSingleton<RetryPlanner>();
+        services.TryAddSingleton<RetryListener>();
+        if (!services.Any(d => d.ImplementationType == typeof(RetryRegistration)))
+            services.Insert(0, ServiceDescriptor.Singleton<IHostedService, RetryRegistration>());
         // First in the collection: hosted services start in registration order, so the listener is
         // attached before Quartz's hosted service starts running jobs
         if (!services.Any(d => d.ImplementationType == typeof(SecretReferenceRegistration)))

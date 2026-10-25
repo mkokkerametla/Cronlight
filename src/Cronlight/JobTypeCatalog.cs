@@ -18,7 +18,9 @@ public record JobTypeInfo(
     string DisplayName,
     string? Description,
     bool Hidden,
-    IReadOnlyList<JobParameterInfo> Parameters
+    IReadOnlyList<JobParameterInfo> Parameters,
+    // From [CronlightRetry]: what new jobs of this type start with, and what a job follows unless changed
+    JobRetryPolicy? Retry = null
 );
 
 /// <summary>
@@ -93,7 +95,8 @@ public class JobTypeCatalog
             meta?.DisplayName ?? type.Name,
             meta?.Description,
             meta?.Hidden ?? false,
-            parameters
+            parameters,
+            Retries.ForType(type)
         );
     }
 }

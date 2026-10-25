@@ -116,3 +116,23 @@ public class FlipJob : IJob
         return Failing.GetValueOrDefault(key) ? throw new InvalidOperationException($"{key} is broken") : Task.CompletedTask;
     }
 }
+
+/// <summary>
+/// Retried twice, a second apart. Fails while <see cref="FailuresLeft"/> for its "key" is above zero, and records
+/// the "region" each attempt saw.
+/// </summary>
+[CronlightRetry(2, DelaySeconds = 1)]
+public class RetriedJob : IJob
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> FailuresLeft = new();
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentQueue<string?>> Seen = new();
+
+    public Task Execute(IJobExecutionContext context)
+    {
+        var data = context.MergedJobDataMap;
+        var key = data.GetString("key")!;
+        Seen.GetOrAdd(key, _ => new()).Enqueue(data.TryGetValue("region", out var region) ? region?.ToString() : null);
+        var left = FailuresLeft.AddOrUpdate(key, -1, (_, n) => n - 1);
+        return left >= 0 ? throw new InvalidOperationException($"{key} failed, {left} failures to go") : Task.CompletedTask;
+    }
+}

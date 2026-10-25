@@ -13,6 +13,16 @@ export interface Trigger {
   previousFireTimeUtc: string | null
 }
 
+/** How often, and how long apart, a failed run is retried */
+export interface JobRetryPolicy {
+  /** Retries after the first attempt; 0 means none */
+  maxRetries: number
+  /** Wait before the first retry */
+  delaySeconds: number
+  /** Double the wait before each further retry */
+  exponential: boolean
+}
+
 export interface Job {
   name: string
   group: string
@@ -24,6 +34,8 @@ export interface Job {
   loadError: string | null
   data: Record<string, string | null>
   triggers: Trigger[]
+  /** The policy the job runs with, its own or its type's; null when failed runs are not retried */
+  retry: JobRetryPolicy | null
 }
 
 export type JobParameterType = 'String' | 'Int' | 'Bool' | 'Url' | 'Text' | 'Secret'
@@ -43,6 +55,8 @@ export interface JobType {
   description: string | null
   hidden: boolean
   parameters: JobParameter[]
+  /** From [CronlightRetry]: what new jobs of this type start with */
+  retry: JobRetryPolicy | null
 }
 
 export interface SchedulerInfo {
@@ -130,17 +144,34 @@ export interface CreateJobRequest {
   description: string | null
   data: Record<string, string>
   triggers: TriggerRequest[]
+  retry: JobRetryPolicy
 }
 
 export interface UpdateJobRequest {
   description: string | null
   data: Record<string, string>
   triggers: TriggerRequest[]
+  /** maxRetries 0 turns retries off, even when the job type has a policy */
+  retry: JobRetryPolicy
+}
+
+/** Runs a job now; data replaces saved values for this run and its retries only */
+export interface RunJobRequest {
+  data: Record<string, string>
+  /** The failed run this one retries, for the audit log */
+  retryOf?: string
 }
 
 export type JobAction = 'trigger' | 'pause' | 'resume'
 
-export type ExecutionStatus = 'Running' | 'Succeeded' | 'Failed' | 'Vetoed' | 'Cancelled'
+export type ExecutionStatus =
+  | 'Running'
+  | 'Succeeded'
+  | 'Failed'
+  | 'Vetoed'
+  | 'Cancelled'
+  /** Failed, and another attempt is scheduled */
+  | 'Retried'
 
 export interface ExecutionRecord {
   id: number
@@ -159,6 +190,8 @@ export interface ExecutionRecord {
   status: ExecutionStatus
   error: string | null
   refireCount: number
+  /** 1 for a first attempt, 2 for its first automatic retry, and so on */
+  attempt: number
 }
 
 export interface HistoryPage {

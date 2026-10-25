@@ -167,6 +167,8 @@ export default function App() {
                     filter={historyFilter}
                     onFilterChange={setHistoryFilter}
                     onOpenJob={(group, name) => setSelection({ group, name })}
+                    canManage={canManage}
+                    onRetry={actions.retry}
                   />
                 </TabsContent>
               )}

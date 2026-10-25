@@ -29,6 +29,7 @@ const jobTypes: JobType[] = [
       param('customerId', { type: 'Int', required: true }),
       param('currency', { defaultValue: 'EUR' }),
     ],
+    retry: { maxRetries: 3, delaySeconds: 30, exponential: true },
   },
   {
     typeName: 'Acme.Jobs.ReportJob',
@@ -36,6 +37,7 @@ const jobTypes: JobType[] = [
     description: null,
     hidden: false,
     parameters: [param('format', { defaultValue: 'pdf' })],
+    retry: null,
   },
 ]
 
@@ -96,8 +98,24 @@ describe('CreateJobSheet', () => {
       description: null,
       data: { customerId: '42', currency: 'EUR' },
       triggers: [{ name: null, cronExpression: '0 0 9 ? * MON-FRI', timeZone: null }],
+      // The type's [CronlightRetry] policy, which the form starts with
+      retry: { maxRetries: 3, delaySeconds: 30, exponential: true },
     })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it("starts with the job type's retry policy and describes it", async () => {
+    const onCreate = vi.fn(async () => true)
+    render(<Harness onCreate={onCreate} />)
+    const form = within(sheet())
+
+    expect(form.getByLabelText('Retries')).toHaveValue(3)
+    expect(form.getByText(/Up to 3 retries, after 30s, 1m, 2m/)).toBeInTheDocument()
+
+    await userEvent.clear(form.getByLabelText('Retries'))
+    await userEvent.type(form.getByLabelText('Retries'), '0')
+    expect(form.getByText('A failed run is not retried.')).toBeInTheDocument()
+    expect(form.getByLabelText(/Wait before retrying/)).toBeDisabled()
   })
 
   it('swaps the parameters when another job type is chosen', async () => {
@@ -117,6 +135,7 @@ describe('CreateJobSheet', () => {
         type: 'Acme.Jobs.ReportJob',
         data: { format: 'pdf' },
         triggers: [],
+        retry: { maxRetries: 0, delaySeconds: 60, exponential: false },
       })
     )
   })

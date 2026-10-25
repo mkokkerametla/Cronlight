@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Quartz;
@@ -39,8 +40,11 @@ internal sealed class JobHistoryQueue(IOptions<JobHistoryOptions> options, ILogg
     public void Complete() => channel.Writer.TryComplete();
 }
 
-internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHistoryOptions> options) : IJobListener
+internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHistoryOptions> options, IServiceProvider services) : IJobListener
 {
+    // Registered by AddCronlight; without it, nothing is retried
+    private readonly RetryPlanner? retries = services.GetService<RetryPlanner>();
+
     public string Name => "Cronlight.History";
 
     public Task JobToBeExecuted(IJobExecutionContext context, CancellationToken cancellationToken = default)
@@ -62,7 +66,10 @@ internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHist
 
     public Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken cancellationToken = default)
     {
-        queue.Enqueue(HistoryEvent.Finished, Record(context, RunOutcome.Status(context, jobException)) with
+        var status = RunOutcome.Status(context, jobException);
+        if (retries?.WillRetry(context, status) == true)
+            status = JobExecutionStatus.Retried;
+        queue.Enqueue(HistoryEvent.Finished, Record(context, status) with
         {
             FinishedTimeUtc = context.FireTimeUtc + context.JobRunTime,
             DurationMs = (long)context.JobRunTime.TotalMilliseconds,
@@ -84,7 +91,8 @@ internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHist
         ScheduledFireTimeUtc = context.ScheduledFireTimeUtc,
         FiredTimeUtc = context.FireTimeUtc,
         Status = status,
-        RefireCount = context.RefireCount
+        RefireCount = context.RefireCount,
+        Attempt = Retries.Attempt(context)
     };
 
     private string Truncate(string text)
