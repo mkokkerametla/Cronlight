@@ -29,9 +29,15 @@ builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
 // Execution history, stored next to the Quartz tables (QRTZ_CRONLIGHT_HISTORY)
 builder.Services.AddCronlightHistory(o => o.Retention = TimeSpan.FromDays(7));
 
-// HTTP request job: lets people schedule API calls from the UI. Restrict AllowedHosts in real apps.
-builder.Services.AddHttpClient(HttpJob.ClientName);
-builder.Services.Configure<HttpJobOptions>(builder.Configuration.GetSection("HttpJob"));
+// HTTP request job: lets people schedule API calls from the UI, to the hosts listed here only
+builder.Services.AddHttpJob(o =>
+{
+    // The demo calls its own /demo endpoints on this machine. Real apps list their APIs' hosts
+    // instead and leave AllowPrivateNetworks off.
+    o.AllowedHosts.AddRange(["127.0.0.1", "localhost"]);
+    o.AllowPrivateNetworks = true;
+    builder.Configuration.GetSection("HttpJob").Bind(o);
+});
 
 // Demo auth: the "X-Demo-Role" header becomes a role claim. Real hosts use their own scheme.
 builder.Services.AddAuthentication("Demo").AddScheme<AuthenticationSchemeOptions, DemoAuthHandler>("Demo", null);
@@ -43,6 +49,8 @@ builder.Services.AddAuthorization(o =>
 
 builder.Services.AddCronlight(o =>
 {
+    // Off by default, since what users type goes to ChatGPT or Google; the demo shows it
+    o.ShowScheduleAssistant = true;
     // Bound from config so the spike can flip modes without recompiling
     builder.Configuration.GetSection("Cronlight").Bind(o);
 });

@@ -12,7 +12,7 @@ describe('api', () => {
 
   const stub = () => vi.stubGlobal('fetch', fetchMock)
 
-  it('requests paths relative to the page, with same-origin cookies', async () => {
+  it('requests paths relative to the page, with same-origin cookies and the dashboard header', async () => {
     stub()
     respond(JSON.stringify([{ name: 'nightly' }]), {
       headers: { 'Content-Type': 'application/json' },
@@ -25,7 +25,7 @@ describe('api', () => {
       method: 'GET',
       signal: undefined,
       credentials: 'same-origin',
-      headers: undefined,
+      headers: { 'X-Cronlight-Request': '1' },
       body: undefined,
     })
   })
@@ -40,7 +40,7 @@ describe('api', () => {
       'api/jobs',
       expect.objectContaining({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'X-Cronlight-Request': '1', 'Content-Type': 'application/json' },
         body: '{"name":"nightly"}',
       })
     )

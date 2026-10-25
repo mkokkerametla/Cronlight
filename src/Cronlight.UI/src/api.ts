@@ -10,7 +10,11 @@ export async function api<T = void>(
     method,
     signal,
     credentials: 'same-origin',
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    // The server refuses changes without this header, which another site cannot add (CSRF protection)
+    headers: {
+      'X-Cronlight-Request': '1',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) throw new Error(await errorMessage(res))

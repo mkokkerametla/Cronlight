@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Quartz;
+using Quartz.Impl.Matchers;
 
 namespace Cronlight.Tests;
 
@@ -103,6 +105,125 @@ public class SecurityTests
     }
 
     [Fact]
+    public async Task Changes_without_the_dashboard_header_are_refused()
+    {
+        // What a form on another site, or a script ignoring the dashboard's rules, would send
+        await using var host = await TestHost.Start();
+        await host.Client().PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "p", triggers = new[] { new { cronExpression = "0 0 6 * * ?" } } });
+        var other = host.Client(asDashboard: false);
+
+        var create = await other.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "forged" });
+        Assert.Equal(HttpStatusCode.Forbidden, create.StatusCode);
+        Assert.Contains("X-Cronlight-Request", await create.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Forbidden, (await other.PostAsync("api/jobs/DEFAULT/p/pause", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await other.PostAsync("api/jobs/DEFAULT/p/trigger", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await other.PutJson("api/jobs/DEFAULT/p", new { description = "forged" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await other.DeleteAsync("api/jobs/DEFAULT/p")).StatusCode);
+
+        var scheduler = await host.Scheduler();
+        Assert.Equal(new[] { "p" }, (await scheduler.GetJobKeys(GroupMatcher<JobKey>.AnyGroup())).Select(k => k.Name));
+        Assert.Null((await scheduler.GetJobDetail(new JobKey("p")))!.Description);
+        Assert.Equal(TriggerState.Normal, await scheduler.GetTriggerState((await scheduler.GetTriggersOfJob(new JobKey("p"))).Single().Key));
+    }
+
+    [Fact]
+    public async Task Changes_a_browser_marks_as_cross_site_are_refused_even_with_the_header()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        client.DefaultRequestHeaders.Add("Sec-Fetch-Site", "cross-site");
+
+        var response = await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "forged" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Contains("another site", await response.Content.ReadAsStringAsync());
+        Assert.Empty(await (await host.Scheduler()).GetJobGroupNames());
+    }
+
+    [Theory]
+    [InlineData("same-origin")]
+    [InlineData("same-site")]
+    [InlineData("none")]
+    public async Task Changes_from_the_dashboard_or_the_same_site_are_accepted(string fetchSite)
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        client.DefaultRequestHeaders.Add("Sec-Fetch-Site", fetchSite);
+
+        var response = await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "ok" });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("api/jobs")]
+    [InlineData("api/scheduler")]
+    [InlineData("api/cron/preview?expression=0+0+6+*+*+%3F")]
+    public async Task Reads_do_not_need_the_dashboard_header(string path)
+    {
+        // Links, monitoring and scripts can keep reading without it
+        await using var host = await TestHost.Start();
+
+        Assert.Equal(HttpStatusCode.OK, (await host.Client(asDashboard: false).GetAsync(path)).StatusCode);
+    }
+
+    [Theory]
+    [MemberData(nameof(AllRouteKinds))]
+    public async Task Every_route_sends_the_security_headers(string path)
+    {
+        await using var host = await TestHost.Start();
+
+        var response = await host.Client().GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(CronlightOptions.DefaultContentSecurityPolicy, Header(response, "Content-Security-Policy"));
+        Assert.Equal("DENY", Header(response, "X-Frame-Options"));
+        Assert.Equal("nosniff", Header(response, "X-Content-Type-Options"));
+        Assert.Equal("no-referrer", Header(response, "Referrer-Policy"));
+    }
+
+    [Fact]
+    public async Task Refusals_send_the_security_headers_too()
+    {
+        await using var host = await TestHost.Start("Production");
+
+        var response = await host.Client().GetAsync("");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("DENY", Header(response, "X-Frame-Options"));
+    }
+
+    [Fact]
+    public async Task A_changed_policy_is_sent_as_is_and_can_allow_embedding()
+    {
+        var policy = CronlightOptions.DefaultContentSecurityPolicy.Replace("frame-ancestors 'none'", "frame-ancestors https://portal.contoso.com");
+        await using var host = await TestHost.Start(configure: o => o.ContentSecurityPolicy = policy);
+
+        var response = await host.Client().GetAsync("");
+
+        Assert.Equal(policy, Header(response, "Content-Security-Policy"));
+        // X-Frame-Options cannot name a site, and would contradict the policy
+        Assert.Null(Header(response, "X-Frame-Options"));
+    }
+
+    [Fact]
+    public async Task Without_a_policy_hosts_can_set_their_own()
+    {
+        await using var host = await TestHost.Start(configure: o => o.ContentSecurityPolicy = null);
+
+        var response = await host.Client().GetAsync("");
+
+        Assert.Null(Header(response, "Content-Security-Policy"));
+        Assert.Null(Header(response, "X-Frame-Options"));
+        Assert.Equal("nosniff", Header(response, "X-Content-Type-Options"));
+    }
+
+    private static string? Header(HttpResponseMessage response, string name) =>
+        response.Headers.TryGetValues(name, out var values) || response.Content.Headers.TryGetValues(name, out values)
+            ? string.Join(",", values)
+            : null;
+
+    [Fact]
     public async Task Only_discovered_job_types_can_be_created()
     {
         await using var host = await TestHost.Start();
@@ -133,7 +254,7 @@ public class SecurityTests
             data = new Dictionary<string, string> { ["customerId"] = "2", ["smtpPassword"] = "********", ["apiToken"] = "********" }
         });
 
-        var stored = await (await host.Scheduler()).GetJobDetail(new Quartz.JobKey("inv"));
+        var stored = await (await host.Scheduler()).GetJobDetail(new JobKey("inv"));
         Assert.Equal("2", stored!.JobDataMap.GetString("customerId"));
         Assert.Equal("hunter2", stored.JobDataMap.GetString("smtpPassword"));
         Assert.Equal("abc", stored.JobDataMap.GetString("apiToken"));

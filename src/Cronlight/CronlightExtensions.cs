@@ -44,6 +44,8 @@ public static class CronlightExtensions
         var logger = endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Cronlight");
 
         var group = endpoints.MapGroup(prefix);
+        // First, so every response carries them, including refusals
+        group.AddSecurityHeaders(options);
 
         if (options.ViewPolicy != null)
         {
@@ -70,6 +72,9 @@ public static class CronlightExtensions
         var manage = api.MapGroup("");
         if (options.ManagePolicy != null)
             manage.RequireAuthorization(options.ManagePolicy);
+        // First, so refused requests (forged, read-only mode) are audited too
+        manage.AddAuditing(endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(Audit.LoggerCategory));
+        manage.RequireDashboardRequests();
         if (options.ReadOnly)
         {
             manage.AddEndpointFilter((_, _) =>
@@ -83,6 +88,26 @@ public static class CronlightExtensions
 
         group.MapStaticUi();
         return group;
+    }
+
+    private static void AddSecurityHeaders(this RouteGroupBuilder group, CronlightOptions options)
+    {
+        var policy = options.ContentSecurityPolicy;
+        group.AddEndpointFilter((context, next) =>
+        {
+            var headers = context.HttpContext.Response.Headers;
+            headers.XContentTypeOptions = "nosniff";
+            // Links out of the dashboard (e.g. the schedule assistant) do not reveal where it is hosted
+            headers["Referrer-Policy"] = "no-referrer";
+            if (!string.IsNullOrEmpty(policy))
+            {
+                headers.ContentSecurityPolicy = policy;
+                // For browsers without frame-ancestors; only when it says the same, so it cannot contradict a changed policy
+                if (policy.Contains("frame-ancestors 'none'"))
+                    headers.XFrameOptions = "DENY";
+            }
+            return next(context);
+        });
     }
 
     private static void MapStaticUi(this RouteGroupBuilder group)

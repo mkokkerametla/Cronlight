@@ -73,3 +73,16 @@ test('moves between a job and its runs, and pages back through older runs', asyn
   await page.getByRole('button', { name: 'Show all jobs' }).click()
   await expect(page.getByText(`DEFAULT.${name}`)).toBeHidden()
 })
+
+test('an HTTP job refuses a host that is not in its allow list', async ({ page, request }) => {
+  const name = uniqueName('http-denied')
+  await createJob(request, { type: jobTypes.http, name, data: { url: 'https://example.com/hook', method: 'GET' } })
+  await openDashboard(page)
+
+  await jobRow(page, name).getByRole('button', { name: `Run ${name} now` }).click()
+  await page.getByRole('tab', { name: /History/ }).click()
+
+  const run = page.getByRole('row').filter({ hasText: name })
+  await expect(run).toContainText('Failed', { timeout: 20_000 })
+  await expect(run).toContainText('Host example.com is not in HttpJob:AllowedHosts')
+})

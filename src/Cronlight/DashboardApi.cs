@@ -55,6 +55,32 @@ internal static class DashboardApi
 {
     public const string Mask = "********";
 
+    /// <summary>
+    /// Header the dashboard sends with every request. Requests that change jobs must carry it: another
+    /// site cannot add a custom header to a cross-site request without the host allowing it through
+    /// CORS, so a page elsewhere cannot use the viewer's cookies to pause, run or delete jobs.
+    /// </summary>
+    public const string RequestHeader = "X-Cronlight-Request";
+
+    /// <summary>Refuses requests that change jobs unless they come from the dashboard or another same-site client.</summary>
+    public static void RequireDashboardRequests(this RouteGroupBuilder api)
+    {
+        api.AddEndpointFilter((context, next) =>
+        {
+            var request = context.HttpContext.Request;
+            // Browsers set Sec-Fetch-Site themselves and scripts cannot change it; other clients do not send it
+            var crossSite = request.Headers["Sec-Fetch-Site"] == "cross-site";
+            if (crossSite || !request.Headers.ContainsKey(RequestHeader))
+                return ValueTask.FromResult<object?>(Results.Problem(
+                    title: "Request refused.",
+                    detail: crossSite
+                        ? "Jobs cannot be changed from another site."
+                        : $"Requests that change jobs must send the {RequestHeader} header, as the dashboard does.",
+                    statusCode: StatusCodes.Status403Forbidden));
+            return next(context);
+        });
+    }
+
     /// <summary>Turns unhandled exceptions into ProblemDetails so no stack trace ever reaches the client.</summary>
     public static void AddErrorHandling(this RouteGroupBuilder api, ILogger logger)
     {
@@ -201,7 +227,7 @@ internal static class DashboardApi
 
     public static void MapManageEndpoints(this RouteGroupBuilder api)
     {
-        api.MapPost("/jobs", async (CreateJobRequest request, ISchedulerFactory factory, JobTypeCatalog catalog) =>
+        api.MapPost("/jobs", async (CreateJobRequest request, HttpContext http, ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             if (!catalog.TryGet(request.Type, out var type, out var info))
                 return Results.BadRequest($"Unknown job type '{request.Type}'");
@@ -230,13 +256,18 @@ internal static class DashboardApi
                 .StoreDurably()
                 .Build();
 
+            var changes = DataChanges(new Dictionary<string, object>(), job.JobDataMap, SecretKeys(info), options.Value);
+            AddChange(changes, "description", null, request.Description);
+            AddChange(changes, "triggers", null, DescribeTriggers(triggers));
+            Audit.RecordChanges(http, changes);
+
             // One call stores the job and its triggers together, so a failure leaves nothing behind
             await scheduler.ScheduleJob(job, triggers, replace: false);
 
             return Results.Created($"jobs/{key.Group}/{key.Name}", new { key.Name, key.Group });
         });
 
-        api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, HttpContext http, ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             var scheduler = await factory.GetScheduler();
             var key = new JobKey(name, group);
@@ -251,9 +282,10 @@ internal static class DashboardApi
                 return Results.BadRequest(invalid);
 
             var requested = new List<ITrigger>();
+            IReadOnlyCollection<ITrigger> current = [];
             if (request.Triggers != null)
             {
-                var current = await scheduler.GetTriggersOfJob(key);
+                current = await scheduler.GetTriggersOfJob(key);
                 if (!TryBuildTriggers(key, request.Triggers, current.Select(t => t.Key).ToList(), out requested, out var error))
                     return Results.BadRequest(error);
                 var ownCron = current.OfType<ICronTrigger>().Select(t => t.Key).ToHashSet();
@@ -261,9 +293,16 @@ internal static class DashboardApi
                     return Results.Conflict(conflict);
             }
 
+            var data = request.Data == null ? existing.JobDataMap : MergeJobData(existing.JobDataMap, request.Data);
+            var changes = DataChanges(existing.JobDataMap, data, SecretKeys(catalog.Describe(existing.JobType)), options.Value);
+            if (request.Description != null)
+                AddChange(changes, "description", existing.Description, request.Description);
+            if (request.Triggers != null)
+                AddChange(changes, "triggers", DescribeTriggers(current), DescribeTriggers(requested));
+            Audit.RecordChanges(http, changes);
+
             if (request.Data != null || request.Description != null)
             {
-                var data = request.Data == null ? existing.JobDataMap : MergeJobData(existing.JobDataMap, request.Data);
 
                 var updated = existing.GetJobBuilder()
                     .WithDescription(request.Description ?? existing.Description)
@@ -480,8 +519,7 @@ internal static class DashboardApi
         }
 
         var info = catalog.Describe(detail!.JobType);
-        var secretKeys = info?.Parameters.Where(p => p.Type == nameof(JobParameterType.Secret)).Select(p => p.Key).ToHashSet()
-            ?? new HashSet<string>();
+        var secretKeys = SecretKeys(info);
 
         var data = detail.JobDataMap.ToDictionary(
             kv => kv.Key,
@@ -545,6 +583,37 @@ internal static class DashboardApi
 
     private static JobDataMap ToJobDataMap(Dictionary<string, string> data) =>
         new((IDictionary<string, object>)data.ToDictionary(kv => kv.Key, kv => (object)kv.Value));
+
+    private static HashSet<string> SecretKeys(JobTypeInfo? info) =>
+        info?.Parameters.Where(p => p.Type == nameof(JobParameterType.Secret)).Select(p => p.Key).ToHashSet() ?? new HashSet<string>();
+
+    /// <summary>Job data that differs between two maps, by "data.&lt;key&gt;", for the audit log. Sensitive values are masked.</summary>
+    private static Dictionary<string, CronlightAuditChange> DataChanges(
+        IDictionary<string, object> before, IDictionary<string, object> after, HashSet<string> secretKeys, CronlightOptions options)
+    {
+        var changes = new Dictionary<string, CronlightAuditChange>();
+        foreach (var key in before.Keys.Union(after.Keys))
+        {
+            var old = before.TryGetValue(key, out var o) ? o?.ToString() : null;
+            var @new = after.TryGetValue(key, out var n) ? n?.ToString() : null;
+            if (old == @new)
+                continue;
+            var hide = IsSensitive(key, secretKeys, options);
+            changes[$"data.{key}"] = new(hide && old != null ? Mask : old, hide && @new != null ? Mask : @new);
+        }
+        return changes;
+    }
+
+    private static void AddChange(Dictionary<string, CronlightAuditChange> changes, string field, string? before, string? after)
+    {
+        if (before != after)
+            changes[field] = new(before, after);
+    }
+
+    private static string? DescribeTriggers(IEnumerable<ITrigger> triggers) =>
+        string.Join("; ", triggers.OfType<ICronTrigger>().Select(t => $"{t.CronExpressionString} ({t.TimeZone.Id})")) is { Length: > 0 } text
+            ? text
+            : null;
 
     private static bool IsSensitive(string key, HashSet<string> secretKeys, CronlightOptions options) =>
         secretKeys.Contains(key)

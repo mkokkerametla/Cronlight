@@ -23,7 +23,8 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   use: {
     baseURL: `http://127.0.0.1:${port}/ops/jobs/`,
-    extraHTTPHeaders: { 'X-Demo-Role': 'admin' },
+    // The API refuses changes without X-Cronlight-Request; tests that arrange jobs through it send it too
+    extraHTTPHeaders: { 'X-Demo-Role': 'admin', 'X-Cronlight-Request': '1' },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },

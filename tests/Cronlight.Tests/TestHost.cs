@@ -107,10 +107,13 @@ public sealed class TestHost : IAsyncDisposable
         }
     }
 
-    public HttpClient Client(string? role = null)
+    /// <summary>A client that calls the API as the dashboard does, unless <paramref name="asDashboard"/> is false.</summary>
+    public HttpClient Client(string? role = null, bool asDashboard = true)
     {
         var client = app.GetTestClient();
         client.BaseAddress = new Uri(client.BaseAddress!, "/cronlight/");
+        if (asDashboard)
+            client.DefaultRequestHeaders.Add("X-Cronlight-Request", "1");
         if (role != null)
             client.DefaultRequestHeaders.Add(HeaderRoleAuthHandler.Header, role);
         return client;

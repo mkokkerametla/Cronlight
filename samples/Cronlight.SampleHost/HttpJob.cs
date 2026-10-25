@@ -8,14 +8,21 @@ namespace Cronlight.SampleHost;
 public class HttpJobOptions
 {
     /// <summary>
-    /// Hosts the job may call. Empty allows any host, which is fine for a demo but lets anyone who can
-    /// create jobs make this server call arbitrary URLs (including internal ones). Restrict it in real apps.
+    /// Hosts the job may call: exact names (api.partner.com) or subdomain wildcards (*.partner.com).
+    /// Empty allows none, so a forgotten setting cannot let job authors call anything they like.
     /// </summary>
     public List<string> AllowedHosts { get; } = new();
+
+    /// <summary>
+    /// Allows connecting to loopback, private, link-local and other internal addresses. Off by default,
+    /// so even an allowed name cannot reach internal services or the cloud metadata endpoint.
+    /// </summary>
+    public bool AllowPrivateNetworks { get; set; }
 }
 
 /// <summary>
-/// Calls an HTTP API on a schedule. Everything about the request is job data, so people can schedule
+/// Calls an HTTP API on a schedule. Register it with <see cref="HttpJobServiceCollectionExtensions.AddHttpJob"/>,
+/// which also sets up the connection rules in <see cref="HttpJobNetwork"/>. Everything about the request is job data, so people can schedule
 /// any API call from the Cronlight UI. A response with an unexpected status fails the run, which then
 /// shows up in Cronlight's execution history.
 /// </summary>
@@ -44,8 +51,11 @@ public class HttpJob(IHttpClientFactory httpClientFactory, IOptions<HttpJobOptio
         if (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps)
             throw new JobExecutionException($"Only http and https URLs are allowed, not {url.Scheme}");
         var allowed = options.Value.AllowedHosts;
-        if (allowed.Count > 0 && !allowed.Contains(url.Host, StringComparer.OrdinalIgnoreCase))
-            throw new JobExecutionException($"Host {url.Host} is not in HttpJob:AllowedHosts");
+        if (allowed.Count == 0)
+            throw new JobExecutionException("HttpJob:AllowedHosts is empty, so no host may be called. List the hosts this job may call.");
+        // IdnHost: international names in their ASCII form, as they would be listed
+        if (!HttpJobNetwork.IsAllowedHost(url.IdnHost, allowed))
+            throw new JobExecutionException($"Host {url.IdnHost} is not in HttpJob:AllowedHosts");
 
         using var request = new HttpRequestMessage(method, url);
         if (Get("body") is { Length: > 0 } body && method != HttpMethod.Get && method != HttpMethod.Delete)

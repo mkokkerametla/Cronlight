@@ -66,8 +66,9 @@ Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
 | `AllowAnonymousOutsideDevelopment` | `false` | Without a `ViewPolicy` Cronlight returns 403 outside Development unless this is set |
 | `AllowManagingUnloadableJobs` | `false` | Allow pause/resume/delete on jobs whose type isn't in this app |
 | `JobAssemblies` | all loaded app assemblies | Where to look for `IJob` types offered in "New Job" |
-| `ShowScheduleAssistant` | `true` | Show the "describe your schedule" box that opens the question in ChatGPT or Google. Set to `false` where staff may not use external AI or search tools |
+| `ShowScheduleAssistant` | `false` | Show the "describe your schedule" box that opens the question in ChatGPT or Google. What users type goes to that site, so turn it on only where staff may use external AI or search tools |
 | `SensitiveKeyPatterns` | password, secret, token, apikey, connectionstring | JobDataMap keys masked in responses |
+| `ContentSecurityPolicy` | own files only, no framing | Content-Security-Policy for the dashboard. Change `frame-ancestors` to show it inside your own portal; `null` sends none |
 
 ## Describing your jobs (optional)
 
@@ -93,15 +94,22 @@ on a schedule: URL, method, headers, body, an `authorization` header kept as a m
 expected status codes (`2xx`, `200,202`, ...). A response with any other status fails the run, so it shows
 up in execution history.
 
-Copy it into your app and register it:
+Copy `HttpJob.cs` and `HttpJobNetwork.cs` into your app and register the job with the hosts it may call:
 
 ```csharp
-builder.Services.AddHttpClient(HttpJob.ClientName);
-builder.Services.Configure<HttpJobOptions>(o => o.AllowedHosts.AddRange(["api.partner.com", "hooks.internal"]));
+builder.Services.AddHttpJob(o => o.AllowedHosts.AddRange(["api.partner.com", "*.hooks.contoso.com"]));
 ```
 
-Restrict `AllowedHosts`: otherwise anyone who can create jobs can make your server call any URL,
-including internal services.
+Anyone who can create jobs chooses the URL, so the job only calls what you allow:
+
+- **Hosts** must be in `AllowedHosts`: exact names, or `*.example.com` for its subdomains. An empty list
+  allows none.
+- **Internal addresses are refused** even for allowed names: loopback, private networks, link-local
+  (including the cloud metadata endpoint `169.254.169.254`) and other reserved ranges, in IPv4 and IPv6.
+  The check runs on the address actually connected to, after DNS, so a name pointing (or re-pointed)
+  at an internal address is refused too. Set `AllowPrivateNetworks = true` only if job authors may
+  call internal services.
+- **Redirects are not followed**, and no proxy is used: a 3xx response is a status like any other.
 
 ## Execution history (optional package)
 
@@ -140,6 +148,35 @@ builder.Services.AddCronlightHistory(o =>
 | `QueueCapacity` | 10000 | |
 | `MaxErrorLength` | 2000 | |
 
+## Audit log
+
+Every change made through the dashboard or its API (create, edit, pause, resume, run now, delete) is
+logged under the `Cronlight.Audit` category: who made it, the job, whether it succeeded, and for creates
+and edits what changed. Refused attempts are logged as warnings with the reason, such as a cross-site
+request or read-only mode. Requests turned away by the host's authorization policies before reaching
+Cronlight are logged by ASP.NET Core instead. Secret values are never written: a changed secret shows as
+`********`.
+
+```text
+Audit: alice@contoso.com update billing.invoices: succeeded (204) {"description":{"Before":"Weekly","After":"Daily"},"triggers":{"Before":"0 0 9 ? * MON (UTC)","After":"0 0 9 * * ? (UTC)"}}
+```
+
+The fields are structured (`User`, `AuditAction`, `JobGroup`, `JobName`, `AuditOutcome`, `StatusCode`),
+so log tools such as Seq, Application Insights or Elasticsearch can filter on them. To keep events in your
+own store as well, register one or more sinks:
+
+```csharp
+// Resolved per request, so scoped services such as a DbContext can be used
+builder.Services.AddScoped<ICronlightAuditSink, MyAuditSink>();
+
+class MyAuditSink(AuditDbContext db) : ICronlightAuditSink
+{
+    public async Task WriteAsync(CronlightAuditEvent e, CancellationToken ct) { /* e.User, e.Action, e.Changes, ... */ }
+}
+```
+
+A sink that throws is logged as an error; the change itself has already been made and is not undone.
+
 ## Behaviour worth knowing
 
 - **Secrets** are shown as `********`. Saving a masked value back keeps the stored value.
@@ -147,6 +184,16 @@ builder.Services.AddCronlightHistory(o =>
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.
 - **Errors** are returned as ProblemDetails with a trace id, never stack traces.
+- **Security headers** are sent on every dashboard response: a Content-Security-Policy that allows only
+  the dashboard's own files and API and no embedding in other sites (`frame-ancestors 'none'`, plus
+  `X-Frame-Options: DENY`), `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. To
+  embed the dashboard in your portal:
+  `o.ContentSecurityPolicy = CronlightOptions.DefaultContentSecurityPolicy.Replace("frame-ancestors 'none'", "frame-ancestors https://portal.contoso.com");`
+- **Cross-site requests** cannot change jobs. Requests that create, edit, pause, run or delete must
+  send an `X-Cronlight-Request` header (any value), which the dashboard does and another site cannot,
+  and browser requests marked `Sec-Fetch-Site: cross-site` are refused. Scripts calling the API add the
+  header, e.g. `curl -X POST -H "X-Cronlight-Request: 1" …/api/jobs/DEFAULT/nightly/trigger`. Reads
+  need no header.
 - **Editing triggers** replaces the job's cron triggers; other trigger types are left alone. A paused
   trigger stays paused when its schedule changes.
 
@@ -159,6 +206,7 @@ builder.Services.AddCronlightHistory(o =>
 | `src/Cronlight.UI` | UI source: React, TypeScript, Vite, Tailwind and shadcn/ui. Built into `src/Cronlight/wwwroot` |
 | `samples/Cronlight.SampleHost` | Host app using SQLite, with an HTTP job, demo endpoints and demo `X-Demo-Role` header auth |
 | `tests/Cronlight.Tests` | Integration tests (TestServer; SQLite, PostgreSQL, SQL Server, MySQL) |
+| `tests/Cronlight.SampleHost.Tests` | Tests for the sample's own code, such as the HTTP job's network rules |
 | `tests/Cronlight.E2E` | End-to-end tests: Playwright drives the sample host in Chromium |
 | `assets` | Logo (`icon.svg`) and the 128px `icon.png` used as the NuGet package icon |
 | `build/verify-packages.sh` | Checks run on packed `.nupkg` files in CI |

@@ -76,7 +76,7 @@ EOF
   contains "$url/" '<div id="root">' || { cat app.log; echo "::error::$tfm: dashboard not served"; exit 1; }
   curl -sf "$url/favicon.svg" -o /dev/null || { echo "::error::$tfm: static asset not served"; exit 1; }
   contains "$url/api/jobs" '"name":"smoke"' || { echo "::error::$tfm: job not listed by the API"; exit 1; }
-  curl -sf -X POST "$url/api/jobs/checks/smoke/trigger" -o /dev/null || { echo "::error::$tfm: trigger failed"; exit 1; }
+  curl -sf -X POST -H "X-Cronlight-Request: 1" "$url/api/jobs/checks/smoke/trigger" -o /dev/null || { echo "::error::$tfm: trigger failed"; exit 1; }
   for _ in $(seq 20); do
     contains "$url/api/history?status=Succeeded" '"jobName":"smoke"' && break
     sleep 0.5

@@ -2,11 +2,11 @@ import { expect, test } from '@playwright/test'
 import { createJob, jobRow, jobTypes, openDashboard, uniqueName } from './helpers'
 
 test.describe('viewer role', () => {
-  test.use({ extraHTTPHeaders: { 'X-Demo-Role': 'viewer' } })
+  test.use({ extraHTTPHeaders: { 'X-Demo-Role': 'viewer', 'X-Cronlight-Request': '1' } })
 
   test('sees jobs read-only, without any controls that change them', async ({ page, playwright, baseURL }) => {
     // Arrange as admin, since a viewer cannot create jobs
-    const admin = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { 'X-Demo-Role': 'admin' } })
+    const admin = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { 'X-Demo-Role': 'admin', 'X-Cronlight-Request': '1' } })
     const name = uniqueName('viewer-sees')
     await createJob(admin, { type: jobTypes.plain, name, triggers: [{ cronExpression: '0 0 6 * * ?' }] })
     await admin.dispose()
