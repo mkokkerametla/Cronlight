@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test'
-import { choose, createJob, jobRow, jobTypes, openDashboard, uniqueName } from './helpers'
+import { expect, test } from './fixtures'
+import { choose, createJob, jobRow, jobTypes, openDashboard, refreshEvery, uniqueName } from './helpers'
 
 test('creating a job with a name already in use shows the error and keeps the form', async ({ page, request }) => {
   const name = uniqueName('taken')
@@ -19,11 +19,13 @@ test('creating a job with a name already in use shows the error and keeps the fo
 
 test('changes made elsewhere show up without a reload', async ({ page, request }) => {
   const name = uniqueName('elsewhere')
+  // Slower than the tests' usual second, so the sheet is still open when Pause is pressed after the delete
+  await refreshEvery(page, 5)
   await openDashboard(page)
 
-  // Created by someone else: appears with the next refresh, every 10 seconds
+  // Created by someone else: appears with the next refresh
   await createJob(request, { type: jobTypes.plain, name, triggers: [{ cronExpression: '0 0 6 * * ?' }] })
-  await expect(jobRow(page, name)).toBeVisible({ timeout: 15_000 })
+  await expect(jobRow(page, name)).toBeVisible()
 
   await jobRow(page, name).click()
   const details = page.getByRole('dialog', { name })
@@ -33,7 +35,7 @@ test('changes made elsewhere show up without a reload', async ({ page, request }
   await details.getByRole('button', { name: 'Pause' }).click()
   await expect(page.getByText('404 Not Found')).toBeVisible()
   // ...and the next refresh closes its sheet and drops it from the list
-  await expect(details).toBeHidden({ timeout: 15_000 })
+  await expect(details).toBeHidden()
   await expect(jobRow(page, name)).toHaveCount(0)
 })
 
@@ -45,7 +47,7 @@ test('a lost connection keeps the last data on screen until the scheduler is bac
 
   await page.route('**/api/**', route => route.abort('connectionrefused'))
   const banner = page.getByText('Lost connection to the scheduler')
-  await expect(banner).toBeVisible({ timeout: 15_000 })
+  await expect(banner).toBeVisible()
   await expect(jobRow(page, name)).toBeVisible()
 
   await page.unroute('**/api/**')

@@ -28,9 +28,14 @@ public class PlainJob(ILogger<PlainJob> logger) : IJob
 }
 
 [CronlightJob("Slow job")]
+[JobParameter("seconds", Type = JobParameterType.Int, DefaultValue = "15", Description = "How long each run takes")]
 public class SlowJob : IJob
 {
-    public Task Execute(IJobExecutionContext context) => Task.Delay(TimeSpan.FromSeconds(15), context.CancellationToken);
+    public Task Execute(IJobExecutionContext context)
+    {
+        var seconds = int.TryParse(context.MergedJobDataMap.GetString("seconds"), out var s) ? s : 15;
+        return Task.Delay(TimeSpan.FromSeconds(seconds), context.CancellationToken);
+    }
 }
 
 [CronlightJob("Flaky job", Description = "Fails about half the time, to demo failure history")]

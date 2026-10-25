@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { createJob, jobRow, jobTypes, openDashboard, runCount, uniqueName } from './helpers'
 
 test('a cron schedule runs the job by itself, and pausing stops it', async ({ page, request }) => {

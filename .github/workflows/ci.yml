@@ -187,7 +187,7 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      # Playwright starts the sample host (dotnet run, which also builds the UI) on a fresh SQLite database
+      # Builds the sample host (and the UI) once, then each worker starts its own on a fresh SQLite database
       - name: Playwright
         run: npx playwright test
 

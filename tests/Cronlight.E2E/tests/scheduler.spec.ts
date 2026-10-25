@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { openDashboard } from './helpers'
 
 test('the scheduler details menu describes the scheduler and your access', async ({ page }) => {

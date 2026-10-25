@@ -1,7 +1,9 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
+import { createElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { useHistory } from '@/hooks/use-history'
+import { RefreshInterval } from '@/hooks/use-polling'
 import { execution } from '@/test/fixtures'
 import type { ExecutionRecord, ExecutionStatus, HistoryFilter, HistoryPage } from '@/types'
 
@@ -112,6 +114,18 @@ describe('useHistory', () => {
     await act(() => vi.advanceTimersByTimeAsync(30_000))
     expect(mockApi).toHaveBeenCalledTimes(3)
     expect(ids(result.current.records)).toEqual([5, 4, 3])
+  })
+
+  it("refreshes at the server's interval when App provides one", async () => {
+    vi.useFakeTimers()
+    mockApi.mockResolvedValue(page([1]))
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(RefreshInterval.Provider, { value: 1000 }, children)
+    renderHook(() => useHistory(all), { wrapper })
+    await act(() => vi.advanceTimersByTimeAsync(0))
+
+    await act(() => vi.advanceTimersByTimeAsync(3000))
+    expect(mockApi).toHaveBeenCalledTimes(4)
   })
 
   it('skips a poll that fires while "load more" is loading, so the extra rows survive', async () => {

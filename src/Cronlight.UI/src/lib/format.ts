@@ -56,6 +56,10 @@ export function formatSeconds(seconds: number): string {
   return s ? `${m}m ${s}s` : `${m}m`
 }
 
+/** "every 10 seconds", or "every second" */
+export const everySeconds = (seconds: number) =>
+  seconds === 1 ? 'every second' : `every ${seconds} seconds`
+
 /** The waits before each retry, in seconds, never longer than a day (as the server caps them) */
 export const retryDelays = (policy: JobRetryPolicy): number[] =>
   Array.from({ length: Math.max(0, policy.maxRetries) }, (_, i) =>

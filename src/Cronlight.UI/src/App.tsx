@@ -12,7 +12,8 @@ import { JobSheet } from '@/components/jobs/job-sheet'
 import { JobsTable } from '@/components/jobs/jobs-table'
 import { RunningTable } from '@/components/running-table'
 import { Stats, type StatKey } from '@/components/stats'
-import { emptyQuery, useDashboard } from '@/hooks/use-dashboard'
+import { emptyQuery, refreshMs, useDashboard } from '@/hooks/use-dashboard'
+import { RefreshInterval } from '@/hooks/use-polling'
 import { jobKey } from '@/lib/format'
 import type { HistoryFilter, Job, JobQuery } from '@/types'
 
@@ -79,123 +80,125 @@ export default function App() {
           : jobQuery.status
 
   return (
-    <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
-      <Header scheduler={scheduler} />
+    <RefreshInterval.Provider value={refreshMs(scheduler)}>
+      <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
+        <Header scheduler={scheduler} />
 
-      {error && (
-        <Alert variant="destructive">
-          <WifiOff />
-          <AlertTitle>
-            {scheduler ? 'Lost connection to the scheduler' : 'Could not reach the scheduler'}
-          </AlertTitle>
-          <AlertDescription>
-            <p>{error}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={refresh}>
-              <RotateCw /> Try again
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+        {error && (
+          <Alert variant="destructive">
+            <WifiOff />
+            <AlertTitle>
+              {scheduler ? 'Lost connection to the scheduler' : 'Could not reach the scheduler'}
+            </AlertTitle>
+            <AlertDescription>
+              <p>{error}</p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={refresh}>
+                <RotateCw /> Try again
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
-      {loading ? (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            {Array.from({ length: 4 }, (_, i) => (
-              <Skeleton key={i} className="h-[74px]" />
-            ))}
+        {loading ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {Array.from({ length: 4 }, (_, i) => (
+                <Skeleton key={i} className="h-[74px]" />
+              ))}
+            </div>
+            <Skeleton className="h-80" />
           </div>
-          <Skeleton className="h-80" />
-        </div>
-      ) : (
-        scheduler && (
-          <>
-            <Stats
-              total={page?.counts.all ?? 0}
-              running={running.jobs.length}
-              paused={page?.counts.paused ?? 0}
-              unloadable={page?.counts.unloadable ?? 0}
-              failed={summary?.failed ?? null}
-              active={activeStat}
-              onSelect={selectStat}
-            />
+        ) : (
+          scheduler && (
+            <>
+              <Stats
+                total={page?.counts.all ?? 0}
+                running={running.jobs.length}
+                paused={page?.counts.paused ?? 0}
+                unloadable={page?.counts.unloadable ?? 0}
+                failed={summary?.failed ?? null}
+                active={activeStat}
+                onSelect={selectStat}
+              />
 
-            <Tabs value={tab} onValueChange={v => changeTab(v as Tab)}>
-              <TabsList>
-                <TabsTrigger value="jobs" className={tabTrigger}>
-                  Jobs
-                  <Badge variant="secondary" className={tabCount}>
-                    {page?.counts.all ?? 0}
-                  </Badge>
-                </TabsTrigger>
-                <TabsTrigger value="running" className={tabTrigger}>
-                  Running
-                  <Badge variant="secondary" className={tabCount}>
-                    {running.jobs.length}
-                  </Badge>
-                </TabsTrigger>
-                {historyEnabled && (
-                  <TabsTrigger value="history" className={tabTrigger}>
-                    History
+              <Tabs value={tab} onValueChange={v => changeTab(v as Tab)}>
+                <TabsList>
+                  <TabsTrigger value="jobs" className={tabTrigger}>
+                    Jobs
+                    <Badge variant="secondary" className={tabCount}>
+                      {page?.counts.all ?? 0}
+                    </Badge>
                   </TabsTrigger>
-                )}
-              </TabsList>
-              <TabsContent value="jobs" className="pt-2">
-                <JobsTable
-                  jobs={jobs}
-                  canManage={canManage}
-                  canCreate={jobTypes.length > 0}
-                  page={page}
-                  query={jobQuery}
-                  onQueryChange={setJobQuery}
-                  selectedKey={selectedKey}
-                  onSelect={job => setSelection({ group: job.group, name: job.name })}
-                  onNewJob={() => setCreating(true)}
-                  actions={actions}
-                />
-              </TabsContent>
-              <TabsContent value="running" className="pt-2">
-                <RunningTable
-                  running={running}
-                  canManage={canManage}
-                  localInstanceId={scheduler?.schedulerInstanceId}
-                  onCancel={actions.cancel}
-                />
-              </TabsContent>
-              {historyEnabled && (
-                <TabsContent value="history" className="pt-2">
-                  <HistoryTable
-                    filter={historyFilter}
-                    onFilterChange={setHistoryFilter}
-                    onOpenJob={(group, name) => setSelection({ group, name })}
+                  <TabsTrigger value="running" className={tabTrigger}>
+                    Running
+                    <Badge variant="secondary" className={tabCount}>
+                      {running.jobs.length}
+                    </Badge>
+                  </TabsTrigger>
+                  {historyEnabled && (
+                    <TabsTrigger value="history" className={tabTrigger}>
+                      History
+                    </TabsTrigger>
+                  )}
+                </TabsList>
+                <TabsContent value="jobs" className="pt-2">
+                  <JobsTable
+                    jobs={jobs}
                     canManage={canManage}
-                    onRetry={actions.retry}
+                    canCreate={jobTypes.length > 0}
+                    page={page}
+                    query={jobQuery}
+                    onQueryChange={setJobQuery}
+                    selectedKey={selectedKey}
+                    onSelect={job => setSelection({ group: job.group, name: job.name })}
+                    onNewJob={() => setCreating(true)}
+                    actions={actions}
                   />
                 </TabsContent>
-              )}
-            </Tabs>
-          </>
-        )
-      )}
+                <TabsContent value="running" className="pt-2">
+                  <RunningTable
+                    running={running}
+                    canManage={canManage}
+                    localInstanceId={scheduler?.schedulerInstanceId}
+                    onCancel={actions.cancel}
+                  />
+                </TabsContent>
+                {historyEnabled && (
+                  <TabsContent value="history" className="pt-2">
+                    <HistoryTable
+                      filter={historyFilter}
+                      onFilterChange={setHistoryFilter}
+                      onOpenJob={(group, name) => setSelection({ group, name })}
+                      canManage={canManage}
+                      onRetry={actions.retry}
+                    />
+                  </TabsContent>
+                )}
+              </Tabs>
+            </>
+          )
+        )}
 
-      <JobSheet
-        job={selected}
-        jobType={jobTypes.find(t => t.typeName === selected?.jobType)}
-        canManage={canManage}
-        historyEnabled={historyEnabled}
-        showScheduleAssistant={showScheduleAssistant}
-        secretReferences={secretReferences}
-        actions={actions}
-        onClose={() => setSelection(null)}
-        onViewHistory={showJobHistory}
-      />
-      <CreateJobSheet
-        open={creating}
-        onOpenChange={setCreating}
-        jobTypes={jobTypes}
-        showScheduleAssistant={showScheduleAssistant}
-        secretReferences={secretReferences}
-        onCreate={actions.create}
-      />
-    </div>
+        <JobSheet
+          job={selected}
+          jobType={jobTypes.find(t => t.typeName === selected?.jobType)}
+          canManage={canManage}
+          historyEnabled={historyEnabled}
+          showScheduleAssistant={showScheduleAssistant}
+          secretReferences={secretReferences}
+          actions={actions}
+          onClose={() => setSelection(null)}
+          onViewHistory={showJobHistory}
+        />
+        <CreateJobSheet
+          open={creating}
+          onOpenChange={setCreating}
+          jobTypes={jobTypes}
+          showScheduleAssistant={showScheduleAssistant}
+          secretReferences={secretReferences}
+          onCreate={actions.create}
+        />
+      </div>
+    </RefreshInterval.Provider>
   )
 }

@@ -20,7 +20,14 @@ import {
 } from '@/components/ui/table'
 import { ExecutionStatusBadge } from '@/components/jobs/status-badge'
 import { useHistory } from '@/hooks/use-history'
-import { formatDateTime, formatDuration, formatRelative, shortType } from '@/lib/format'
+import { useRefreshInterval } from '@/hooks/use-polling'
+import {
+  everySeconds,
+  formatDateTime,
+  formatDuration,
+  formatRelative,
+  shortType,
+} from '@/lib/format'
 import type { ExecutionRecord, ExecutionStatus, HistoryFilter } from '@/types'
 
 interface Props {
@@ -43,6 +50,7 @@ export function HistoryTable({
   onRetry,
 }: Props) {
   const { records, hasMore, loadMore, error, loaded, refresh } = useHistory(filter)
+  const refreshMs = useRefreshInterval()
 
   return (
     <div className="space-y-3">
@@ -78,7 +86,7 @@ export function HistoryTable({
           </Badge>
         )}
         <span className="ml-auto text-sm text-muted-foreground">
-          Newest first · refreshes every 10 seconds
+          Newest first · refreshes {everySeconds(refreshMs / 1000)}
         </span>
       </div>
 

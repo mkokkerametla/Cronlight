@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@/api'
-import { usePolling } from '@/hooks/use-polling'
+import { usePolling, useRefreshInterval } from '@/hooks/use-polling'
 import type { ExecutionRecord, HistoryFilter, HistoryPage } from '@/types'
 
 const PAGE_SIZE = 50
-const POLL_MS = 10_000
 
 function query(filter: HistoryFilter, before: number | null, limit: number) {
   const params = new URLSearchParams({ limit: String(limit) })
@@ -24,6 +23,7 @@ export function useHistory(filter: HistoryFilter, limit = PAGE_SIZE) {
   const [pages, setPages] = useState(1)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const refreshMs = useRefreshInterval()
   const { status, job } = filter
   const group = job?.group
   const name = job?.name
@@ -65,7 +65,7 @@ export function useHistory(filter: HistoryFilter, limit = PAGE_SIZE) {
     () => {
       if (!loadingMore.current) void loadFirstPage()
     },
-    POLL_MS,
+    refreshMs,
     pages === 1
   )
 

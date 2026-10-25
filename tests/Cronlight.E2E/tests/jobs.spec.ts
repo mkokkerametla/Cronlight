@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { choose, createJob, jobRow, jobTypes, openDashboard, uniqueName } from './helpers'
 
 test('creates a job from the form, with parameter validation and a cron preview', async ({ page }) => {

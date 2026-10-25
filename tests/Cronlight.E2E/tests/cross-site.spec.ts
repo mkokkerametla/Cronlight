@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { createJob, jobTypes, uniqueName } from './helpers'
 
 // The browser sends the demo role with every request, like a logged-in user's cookie, but not the

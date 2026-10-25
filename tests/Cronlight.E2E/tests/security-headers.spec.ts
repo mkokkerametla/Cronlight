@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { choose, createJob, jobRow, jobTypes, openDashboard, uniqueName } from './helpers'
 
 test('the dashboard works under its Content-Security-Policy', async ({ page, request }) => {

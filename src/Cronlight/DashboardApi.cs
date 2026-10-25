@@ -158,7 +158,8 @@ internal static class DashboardApi
                 CanManage = await CanManage(http, options.Value),
                 HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null,
                 options.Value.ShowScheduleAssistant,
-                SecretReferences = SecretReferences.Enabled(options.Value)
+                SecretReferences = SecretReferences.Enabled(options.Value),
+                RefreshSeconds = Math.Clamp(options.Value.RefreshSeconds, 1, 300)
             });
         });
 

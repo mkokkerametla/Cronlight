@@ -75,6 +75,8 @@ export interface SchedulerInfo {
   historyEnabled: boolean
   showScheduleAssistant: boolean
   secretReferences: boolean
+  /** How often the dashboard refreshes, in seconds */
+  refreshSeconds: number
 }
 
 /** Counts over every job, whatever the search and filters */

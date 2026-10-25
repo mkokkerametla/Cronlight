@@ -34,6 +34,12 @@ public class CronlightOptions
     public bool ShowScheduleAssistant { get; set; }
 
     /// <summary>
+    /// How often an open dashboard asks for fresh jobs, running jobs and history, in seconds (1 to 300). Each
+    /// open tab polls, while visible, so a shorter interval puts more load on the scheduler's database.
+    /// </summary>
+    public int RefreshSeconds { get; set; } = 10;
+
+    /// <summary>
     /// Turns on secret references. A secret parameter (or one matching <see cref="SensitiveKeyPatterns"/>) set to
     /// <c>secret:Smtp:Password</c> stores only that name, and the value is read from configuration key
     /// <c>{SecretsSection}:Smtp:Password</c> just before each run, so the database never holds the secret.

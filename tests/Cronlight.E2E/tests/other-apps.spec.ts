@@ -1,12 +1,12 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { insertForeignJob } from './foreign-jobs'
 import { createJob, jobRow, jobTypes, openDashboard, statCard, uniqueName } from './helpers'
 
-test('a job from another app sharing the scheduler is shown read-only', async ({ page, request }) => {
+test('a job from another app sharing the scheduler is shown read-only', async ({ page, request, sampleHost }) => {
   const group = uniqueName('shared')
   const ours = `${group}-ours`
   await createJob(request, { type: jobTypes.plain, name: ours, group, triggers: [{ cronExpression: '0 0 6 * * ?' }] })
-  const remove = insertForeignJob(group, 'report')
+  const remove = insertForeignJob(sampleHost.database, group, 'report')
 
   try {
     await openDashboard(page)

@@ -4,11 +4,12 @@ import { DatabaseSync } from 'node:sqlite'
 
 /**
  * Writes a job straight into the sample's Quartz tables with a type this app does not have, as another
- * app sharing the scheduler would. Returns a function that removes it again.
+ * app sharing the scheduler would. `database` is the worker's sample host database. Returns a function that
+ * removes the job again.
  */
-export function insertForeignJob(group: string, name: string) {
+export function insertForeignJob(database: string, group: string, name: string) {
   const run = (sql: string) => {
-    const db = new DatabaseSync(process.env.CRONLIGHT_E2E_DATABASE!)
+    const db = new DatabaseSync(database)
     try {
       db.exec('PRAGMA busy_timeout = 5000')
       db.prepare(sql).run(group, name)

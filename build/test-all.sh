@@ -114,7 +114,8 @@ ui() {
 }
 
 dotnet_tests() {
-  cd "$root" && dotnet test --configuration Release
+  # No build servers, so no MSBuild nodes or compiler server stay in memory after the run
+  cd "$root" && dotnet test --configuration Release --disable-build-servers -nodeReuse:false
 }
 
 results=()

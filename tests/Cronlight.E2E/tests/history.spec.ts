@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { createJob, jobRow, jobTypes, openDashboard, runCount, triggerJob, uniqueName } from './helpers'
 
 test('a failed run shows in history with its error, and the outcome filter finds it', async ({ page, request }) => {
@@ -12,7 +12,6 @@ test('a failed run shows in history with its error, and the outcome filter finds
   await page.getByLabel('Filter by outcome').click()
   await page.getByRole('option', { name: 'Failed' }).click()
   const run = page.getByRole('row').filter({ hasText: name })
-  // History refreshes every 10 seconds
   await expect(run).toContainText('Failed', { timeout: 20_000 })
   await expect(run).toContainText('Upstream API returned 503 Service Unavailable')
 })

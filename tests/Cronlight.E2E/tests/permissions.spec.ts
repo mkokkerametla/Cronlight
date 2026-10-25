@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { createJob, jobRow, jobTypes, openDashboard, uniqueName } from './helpers'
 
 test.describe('viewer role', () => {

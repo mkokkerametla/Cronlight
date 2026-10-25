@@ -23,6 +23,24 @@ public class ApiTests
         Assert.Equal(expected, scheduler.GetProperty("showScheduleAssistant").GetBoolean());
     }
 
+    [Theory]
+    [InlineData(null, 10)]
+    [InlineData(1, 1)]
+    [InlineData(0, 1)]
+    [InlineData(3600, 300)]
+    public async Task Scheduler_info_reports_how_often_the_dashboard_refreshes(int? setting, int expected)
+    {
+        await using var host = await TestHost.Start(configure: o =>
+        {
+            if (setting is { } seconds)
+                o.RefreshSeconds = seconds;
+        });
+
+        var scheduler = await host.Client().GetFromJsonAsync<JsonElement>("api/scheduler");
+
+        Assert.Equal(expected, scheduler.GetProperty("refreshSeconds").GetInt32());
+    }
+
     [Fact]
     public async Task Ui_is_served_under_the_prefix_with_relative_assets()
     {

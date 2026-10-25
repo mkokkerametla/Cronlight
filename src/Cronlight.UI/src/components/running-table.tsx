@@ -21,7 +21,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { formatDateTime, formatDuration, shortType } from '@/lib/format'
+import { useRefreshInterval } from '@/hooks/use-polling'
+import { everySeconds, formatDateTime, formatDuration, shortType } from '@/lib/format'
 import type { RunningJob, RunningJobs } from '@/types'
 
 export function RunningTable({
@@ -37,6 +38,7 @@ export function RunningTable({
   onCancel?: (job: RunningJob) => Promise<boolean>
 }) {
   const showCancel = canManage && onCancel != null
+  const refreshMs = useRefreshInterval()
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -52,7 +54,7 @@ export function RunningTable({
               : 'In-memory store: only jobs running on this node are visible'}
           </TooltipContent>
         </Tooltip>
-        Refreshes every 10 seconds
+        Refreshes {everySeconds(refreshMs / 1000)}
       </div>
 
       <div className="rounded-lg border">

@@ -67,6 +67,7 @@ Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
 | `AllowManagingUnloadableJobs` | `false` | Allow pause/resume/delete on jobs whose type isn't in this app |
 | `JobAssemblies` | all loaded app assemblies | Where to look for `IJob` types offered in "New Job" |
 | `ShowScheduleAssistant` | `false` | Show the "describe your schedule" box that opens the question in ChatGPT or Google. What users type goes to that site, so turn it on only where staff may use external AI or search tools |
+| `RefreshSeconds` | `10` | How often an open dashboard refreshes jobs, running jobs and history (1 to 300 seconds) |
 | `SensitiveKeyPatterns` | password, secret, token, apikey, connectionstring | JobDataMap keys masked in responses |
 | `SecretsSection` | none | Configuration section that [secret references](#secret-references) are read from; none turns them off |
 | `ContentSecurityPolicy` | own files only, no framing | Content-Security-Policy for the dashboard. Change `frame-ancestors` to show it inside your own portal; `null` sends none |
@@ -441,11 +442,14 @@ npm run test:coverage   # report in coverage/
 
 ### End-to-end tests
 
-[Playwright](https://playwright.dev) tests in `tests/Cronlight.E2E` start the sample host on a fresh
-SQLite database and drive the dashboard in Chromium: creating, editing, pausing, running and deleting
-jobs (several triggers and time zones, manual-only jobs, secrets kept on edit, secret references), cron schedules firing on
-their own, bulk pause and resume, search and filters, the stat cards, the running jobs view, history
-(paging, job filter, failing and succeeding HTTP jobs), read-only jobs from other apps sharing the
+[Playwright](https://playwright.dev) tests in `tests/Cronlight.E2E` build the sample host once, then
+each worker starts its own on a fresh SQLite database, so test files run in parallel. The hosts refresh
+the dashboard every second (`RefreshSeconds`) so tests wait less. The tests drive the dashboard in
+Chromium: creating, editing, pausing, running and deleting jobs (several triggers and time zones,
+manual-only jobs, secrets kept on edit, secret references), cron schedules firing on their own, bulk
+pause and resume, search, filters and paging of the job list, the stat cards, the running jobs view and
+cancelling a run, history (paging, job filter, failing and succeeding HTTP jobs), retries, running a
+job with different data, running a failed run again, read-only jobs from other apps sharing the
 scheduler, server errors, changes made elsewhere, a lost connection, viewer and anonymous access, the
 scheduler details, the theme switch and the schedule assistant.
 They need Node.js 22.13 or later, for its built-in SQLite module.
@@ -454,7 +458,8 @@ They need Node.js 22.13 or later, for its built-in SQLite module.
 cd tests/Cronlight.E2E
 npm ci
 npx playwright install chromium   # once
-npx playwright test               # starts the sample host itself, on port 5199 (E2E_PORT)
+npx playwright test               # builds and starts the sample hosts, on ports from 5199 (E2E_PORT)
+E2E_WORKERS=1 npx playwright test # one worker per 4 GB and 2 cores by default, at most 4; E2E_SKIP_BUILD=1 skips the build
 npx playwright show-report        # after a failure: traces and screenshots
 ```
 

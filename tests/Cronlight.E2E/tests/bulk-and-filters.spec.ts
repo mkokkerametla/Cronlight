@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { choose, createJob, jobRow, jobTypes, openDashboard, statCard, uniqueName } from './helpers'
 
 const daily = [{ cronExpression: '0 0 6 * * ?' }]
@@ -76,4 +76,38 @@ test('the stat cards open the matching view', async ({ page, request }) => {
 
   await statCard(page, 'Running now').click()
   await expect(page.getByRole('tab', { name: /Running/ })).toHaveAttribute('aria-selected', 'true')
+})
+
+test('pages through a long job list, and a new search starts again from the first page', async ({ page, request }) => {
+  const group = uniqueName('paging')
+  // One more job than a page holds, named so they sort in order
+  const names = Array.from({ length: 51 }, (_, i) => `${group}-${String(i + 1).padStart(2, '0')}`)
+  for (const name of names) await createJob(request, { type: jobTypes.plain, name, group })
+  await openDashboard(page)
+  await page.getByLabel('Search jobs').fill(group)
+
+  const pages = page.getByRole('navigation', { name: 'Job list pages' })
+  const rows = page.getByRole('row').filter({ hasText: group })
+  await expect(pages).toContainText('1–50 of 51')
+  await expect(rows).toHaveCount(50)
+  await expect(pages.getByRole('button', { name: 'Previous' })).toBeDisabled()
+
+  await pages.getByRole('button', { name: 'Next' }).click()
+  await expect(pages).toContainText('51–51 of 51')
+  await expect(rows).toHaveCount(1)
+  await expect(jobRow(page, names[50])).toBeVisible()
+  await expect(pages.getByRole('button', { name: 'Next' })).toBeDisabled()
+
+  await pages.getByRole('button', { name: 'Previous' }).click()
+  await expect(pages).toContainText('1–50 of 51')
+  await expect(jobRow(page, names[0])).toBeVisible()
+
+  // From the second page, a narrower search shows its first page, and no pages once one is enough
+  await pages.getByRole('button', { name: 'Next' }).click()
+  await expect(pages).toContainText('51–51 of 51')
+  await page.getByLabel('Search jobs').fill(`${group}-5`)
+  await expect(rows).toHaveCount(2)
+  await expect(jobRow(page, names[49])).toBeVisible()
+  await expect(jobRow(page, names[50])).toBeVisible()
+  await expect(pages).toBeHidden()
 })

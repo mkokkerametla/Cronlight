@@ -18,10 +18,13 @@ import type {
   UpdateJobRequest,
 } from '@/types'
 
-const POLL_MS = 10_000
 // The 24-hour failure count changes slowly; asking every poll would be a needless query per viewer
 const SUMMARY_MS = 60_000
 export const PAGE_SIZE = 50
+
+/** The server's refresh interval in milliseconds, or the default until the scheduler has answered */
+export const refreshMs = (scheduler: SchedulerInfo | null) =>
+  (scheduler?.refreshSeconds ?? 10) * 1000
 
 export const emptyQuery: JobQuery = { search: '', type: null, status: null, page: 1 }
 
@@ -34,7 +37,7 @@ function searchPath(query: JobQuery) {
 }
 
 /**
- * Everything the dashboard shows, refreshed every 10 seconds while the page is visible. The job list is
+ * Everything the dashboard shows, refreshed every RefreshSeconds (10 by default) while the page is visible. The job list is
  * searched, filtered and paged on the server by `query`; the selected job is loaded on its own when it is
  * not on the current page (e.g. opened from history).
  */
@@ -104,7 +107,7 @@ export function useDashboard(
       .catch((err: Error) => toast.error('Could not load job types', { description: err.message }))
   }, [])
 
-  usePolling(() => void refresh(), POLL_MS)
+  usePolling(() => void refresh(), refreshMs(scheduler))
 
   // Runs a call, reports the outcome as a toast and refreshes. Resolves to true on success.
   const perform = useCallback(

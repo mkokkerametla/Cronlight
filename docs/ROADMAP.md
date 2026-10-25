@@ -115,12 +115,7 @@ events or SignalR, and fall back to the current polling.
 
 ## Known gaps
 
-- The end-to-end tests have not been run against secret references, cancelling, alerts, paging or
-  retries.
-- There are no end-to-end tests for cancelling a run, paging the job list, retries, running with
-  different data, or Run again.
-- The retry and run-with-data tests (`RetryTests.cs`, the retry scenarios in `HistoryTests.cs` and the UI
-  tests) were written but have not been run yet.
+- No end-to-end tests for alerts, which would need a webhook receiver in the sample host.
 - Not covered by tests: a history table without the `ATTEMPT` column when `CreateTable` is off, and a
   blocked run counting as a failure in a cluster, where streaks are read from history.
 

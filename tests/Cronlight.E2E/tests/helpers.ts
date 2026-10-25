@@ -46,6 +46,17 @@ export async function triggerJob(request: APIRequestContext, group: string, name
   expect(response.ok(), await response.text()).toBe(true)
 }
 
+/**
+ * Makes this page refresh every `seconds`, whatever the server says. Tests refresh every second, which is
+ * too soon for one that must act on a view before the next refresh replaces it.
+ */
+export async function refreshEvery(page: Page, seconds: number) {
+  await page.route('**/api/scheduler', async route => {
+    const response = await route.fetch()
+    await route.fulfill({ response, json: { ...(await response.json()), refreshSeconds: seconds } })
+  })
+}
+
 /** A stat card, by its label. Its accessible name is the count followed by the label. */
 export const statCard = (page: Page, label: string) =>
   page.getByRole('button', { name: new RegExp(`^\\d+\\s*${escapeRegExp(label)}`) })

@@ -1,4 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { createContext, useContext, useEffect, useRef } from 'react'
+
+/** How often views refresh, in milliseconds. App provides the server's RefreshSeconds once it is known. */
+export const RefreshInterval = createContext(10_000)
+
+export const useRefreshInterval = () => useContext(RefreshInterval)
 
 /**
  * Calls `poll` every `ms` while the page is visible. Hidden tabs (another tab in front, a minimised
