@@ -40,7 +40,8 @@ public sealed class TestHost : IAsyncDisposable
         TestDatabase? database = null,
         Action<JobHistoryOptions>? history = null,
         bool useProperties = true,
-        Action<IServiceCollection>? services = null)
+        Action<IServiceCollection>? services = null,
+        bool ramJobStore = false)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
         var schedulerName = $"test-{id}";
@@ -57,6 +58,9 @@ public sealed class TestHost : IAsyncDisposable
         builder.Services.AddQuartz(q =>
         {
             q.SchedulerName = schedulerName;
+            // Quartz's default in-memory store, as many hosts use: nothing Cronlight can read directly
+            if (ramJobStore)
+                return;
             q.UsePersistentStore(store =>
             {
                 // Off lets job data hold non-string values, as many host apps do

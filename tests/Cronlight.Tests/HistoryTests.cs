@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
+using Quartz.Impl.Matchers;
 
 namespace Cronlight.Tests;
 
@@ -56,6 +57,25 @@ internal static class HistoryScenarios
         Assert.Equal(2, records.Count);
         Assert.Equal(("Succeeded", 1), (records[0].GetProperty("status").GetString(), records[0].GetProperty("refireCount").GetInt32()));
         Assert.Equal(("Failed", 0), (records[1].GetProperty("status").GetString(), records[1].GetProperty("refireCount").GetInt32()));
+    }
+
+    public static async Task RecordsVetoedRuns(TestHost host)
+    {
+        var scheduler = await host.Scheduler();
+        scheduler.ListenerManager.AddTriggerListener(new VetoGroupListener(), GroupMatcher<TriggerKey>.AnyGroup());
+        var client = host.Client();
+        var created = await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "skipped", group = VetoGroupListener.Group });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        await client.PostAsync($"api/jobs/{VetoGroupListener.Group}/skipped/trigger", null);
+
+        var records = await WaitForHistory(client, $"?group={VetoGroupListener.Group}&name=skipped",
+            r => r[0].GetProperty("status").GetString() == "Vetoed");
+        var vetoed = Assert.Single(records);
+        Assert.Equal(0, vetoed.GetProperty("durationMs").GetInt64());
+        Assert.Single(await History(client, "?status=vetoed"));
+        var summary = await client.GetFromJsonAsync<JsonElement>("api/history/summary?hours=1");
+        Assert.Equal(1, summary.GetProperty("vetoed").GetInt32());
     }
 
     public static async Task RecordsRunningThenCompleted(TestHost host)
@@ -192,6 +212,7 @@ public class HistoryTests
         var client = host.Client();
 
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/history")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/history/summary")).StatusCode);
         var scheduler = await client.GetFromJsonAsync<JsonElement>("api/scheduler");
         Assert.False(scheduler.GetProperty("historyEnabled").GetBoolean());
     }
@@ -266,6 +287,36 @@ public class HistoryTests
     {
         await using var host = await TestHost.Start(history: InMemory);
         await HistoryScenarios.RecordsEachRefireAttempt(host);
+    }
+
+    [Fact]
+    public async Task Sqlite_records_vetoed_runs()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        await HistoryScenarios.RecordsVetoedRuns(host);
+    }
+
+    [Fact]
+    public async Task In_memory_records_vetoed_runs()
+    {
+        await using var host = await TestHost.Start(history: InMemory);
+        await HistoryScenarios.RecordsVetoedRuns(host);
+    }
+
+    [Fact]
+    public async Task A_failed_write_is_skipped_and_later_records_are_still_written()
+    {
+        var store = new FailsFirstStartStore();
+        await using var host = await TestHost.Start(history: _ => { }, services: s => s.AddSingleton<IJobHistoryStore>(store));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(PlainJob), "ok");
+
+        await client.PostAsync("api/jobs/DEFAULT/ok/trigger", null);
+
+        // The start record failed to write; the finish still arrives, inserted as a complete record
+        var records = await HistoryScenarios.WaitForHistory(client, "", r => r[0].GetProperty("status").GetString() == "Succeeded");
+        Assert.Equal("ok", Assert.Single(records).GetProperty("jobName").GetString());
+        Assert.Equal(1, store.FailedStarts);
     }
 
     [Fact]
@@ -544,4 +595,51 @@ internal sealed class SlowStartingStore : IJobHistoryStore
 
     public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
         Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
+}
+
+/// <summary>Keeps records in a list and throws on the first start record, to check the writer carries on.</summary>
+internal sealed class FailsFirstStartStore : IJobHistoryStore
+{
+    private readonly List<JobExecutionRecord> records = new();
+    private long nextId;
+    private int starts;
+    public int FailedStarts;
+
+    public Task Initialize(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task RecordStarted(JobExecutionRecord record, CancellationToken cancellationToken)
+    {
+        if (Interlocked.Increment(ref starts) == 1)
+        {
+            FailedStarts++;
+            throw new InvalidOperationException("database unavailable");
+        }
+        return Upsert(record);
+    }
+
+    public Task RecordFinished(JobExecutionRecord record, CancellationToken cancellationToken) => Upsert(record);
+
+    private Task Upsert(JobExecutionRecord record)
+    {
+        lock (records)
+        {
+            var index = records.FindIndex(r => r.FireInstanceId == record.FireInstanceId && r.RefireCount == record.RefireCount);
+            if (index >= 0)
+                records[index] = record with { Id = records[index].Id };
+            else
+                records.Add(record with { Id = ++nextId });
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
+    {
+        lock (records)
+            return Task.FromResult<IReadOnlyList<JobExecutionRecord>>(records.Where(r => r.SchedulerName == schedulerName).OrderByDescending(r => r.Id).ToList());
+    }
+
+    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
+        Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
+
+    public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
 }

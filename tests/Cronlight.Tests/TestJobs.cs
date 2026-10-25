@@ -46,6 +46,31 @@ public class RefireOnceJob : IJob
             : Task.CompletedTask;
 }
 
+[CronlightJob("Report")]
+[JobParameter("format", DefaultValue = "pdf")]
+[JobParameter("pages", Type = JobParameterType.Int, DefaultValue = "10")]
+public class ReportJob : IJob
+{
+    public Task Execute(IJobExecutionContext context) => Task.CompletedTask;
+}
+
+/// <summary>Vetoes every job in the "vetoed" group, the way a host's maintenance-window listener might.</summary>
+public class VetoGroupListener : ITriggerListener
+{
+    public const string Group = "vetoed";
+
+    public string Name => "VetoGroup";
+
+    public Task<bool> VetoJobExecution(ITrigger trigger, IJobExecutionContext context, CancellationToken cancellationToken = default) =>
+        Task.FromResult(context.JobDetail.Key.Group == Group);
+
+    public Task TriggerFired(ITrigger trigger, IJobExecutionContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task TriggerMisfired(ITrigger trigger, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task TriggerComplete(ITrigger trigger, IJobExecutionContext context, SchedulerInstruction triggerInstructionCode,
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
+}
+
 [CronlightJob("Export")]
 [JobParameter("format", Required = true, Choices = new[] { "csv", "json" })]
 public class ExportJob : IJob
