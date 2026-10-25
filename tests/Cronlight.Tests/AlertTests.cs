@@ -154,6 +154,51 @@ public class AlertTests
     }
 
     [Fact]
+    public async Task Alerts_are_emailed_to_every_recipient()
+    {
+        await using var smtp = new FakeSmtpServer();
+        var sink = new RecordingAlertSink();
+        await using var host = await TestHost.Start(services: Alerts(sink, o =>
+        {
+            o.DashboardUrl = "https://ops.example/jobs/";
+            o.Email = Email(smtp.Port);
+        }));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(FailingJob), "broken");
+        await Run(client, "broken");
+        // Sinks are called after email has been sent
+        await sink.WaitFor(1);
+
+        var email = Assert.Single(smtp.Messages);
+        Assert.Equal(new[] { "ops@example.com", "oncall@example.com" }, email.To);
+        Assert.Equal("[Cronlight] Job DEFAULT.broken failed", email.Subject);
+        Assert.Contains("Job:       DEFAULT.broken", email.Body);
+        Assert.Contains("Error:\nInvalidOperationException: Boom: invoice 42 could not be sent", email.Body);
+        Assert.Contains("Open Cronlight: https://ops.example/jobs/", email.Body);
+    }
+
+    [Fact]
+    public async Task An_unreachable_mail_server_does_not_stop_other_alerts()
+    {
+        var sink = new RecordingAlertSink();
+        await using var host = await TestHost.Start(services: Alerts(sink, o => o.Email = Email(FakeSmtpServer.ClosedPort())));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(FailingJob), "broken");
+        await Run(client, "broken");
+
+        // After three attempts, two seconds and four seconds apart
+        await sink.WaitFor(1);
+        Assert.Equal("broken", Assert.Single(sink.Alerts).JobName);
+    }
+
+    private static CronlightEmailAlertOptions Email(int port)
+    {
+        var email = new CronlightEmailAlertOptions { Host = "127.0.0.1", Port = port, UseTls = false, From = "Cronlight <cronlight@example.com>" };
+        email.To.AddRange(["ops@example.com", "oncall@example.com"]);
+        return email;
+    }
+
+    [Fact]
     public async Task A_failing_webhook_or_sink_does_not_stop_the_others()
     {
         var handler = new RecordingHandler { Status = HttpStatusCode.BadRequest };
@@ -183,6 +228,22 @@ public class AlertTests
         error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             TestHost.Start(services: s => s.AddCronlightAlerts(o => o.Webhooks.Add(new CronlightWebhook { Url = "hooks.example/x" }))));
         Assert.Contains("absolute http(s) URL", error.Message);
+    }
+
+    [Fact]
+    public async Task Incomplete_email_settings_turn_email_off_without_stopping_the_app_or_other_alerts()
+    {
+        await using var smtp = new FakeSmtpServer();
+        var sink = new RecordingAlertSink();
+        // No To address, as in a configuration template not filled in yet
+        await using var host = await TestHost.Start(services: Alerts(sink, o =>
+            o.Email = new CronlightEmailAlertOptions { Host = "127.0.0.1", Port = smtp.Port, UseTls = false, From = "cronlight@example.com" }));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(FailingJob), "broken");
+        await Run(client, "broken");
+
+        await sink.WaitFor(1);
+        Assert.Empty(smtp.Messages);
     }
 
     internal sealed class RecordingAlertSink : ICronlightAlertSink

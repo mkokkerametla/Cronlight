@@ -49,8 +49,8 @@ public sealed record CronlightAlert(
 }
 
 /// <summary>
-/// Receives every alert, in addition to the webhooks in <see cref="CronlightAlertOptions.Webhooks"/>. Register one
-/// or more as singletons to send alerts elsewhere, such as email or a paging service. A sink that throws is
+/// Receives every alert, in addition to the webhooks and email in <see cref="CronlightAlertOptions"/>. Register one
+/// or more as singletons to send alerts elsewhere, such as a paging service. A sink that throws is
 /// logged and does not stop the others.
 /// </summary>
 public interface ICronlightAlertSink
@@ -90,6 +90,12 @@ public class CronlightAlertOptions
     public string? DashboardUrl { get; set; }
 
     public List<CronlightWebhook> Webhooks { get; } = new();
+
+    /// <summary>
+    /// Also send alerts by email. Optional: null (the default) sends none, and settings missing a host, sender or
+    /// recipient are skipped with a warning instead of stopping the app.
+    /// </summary>
+    public CronlightEmailAlertOptions? Email { get; set; }
 
     /// <summary>Which jobs raise alerts. Null (the default) means all.</summary>
     public Func<JobKey, bool>? Jobs { get; set; }
@@ -173,12 +179,18 @@ internal sealed class AlertWorker(
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private readonly Dictionary<JobKey, int> streaks = new();
+    private CronlightEmailAlertOptions? email;
     private readonly CancellationTokenSource stopping = new();
     private Task? sending;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         Validate(options.Value);
+        // Email is optional: incomplete settings (e.g. a template section not filled in yet) turn it off rather than stop the app
+        if (options.Value.Email is { } settings && EmailAlerts.Problem(settings) is { } problem)
+            logger.LogWarning("Cronlight alerts will not be emailed: {Problem} under Email", problem);
+        else
+            email = options.Value.Email;
         var scheduler = await schedulerFactory.GetScheduler(cancellationToken);
         if (scheduler.ListenerManager.GetJobListeners().All(l => l.Name != listener.Name))
             scheduler.ListenerManager.AddJobListener(listener, GroupMatcher<JobKey>.AnyGroup());
@@ -288,6 +300,18 @@ internal sealed class AlertWorker(
             {
                 // The URL carries the webhook's secret, so only its host is logged
                 logger.LogError(ex, "Sending alert to {Format} webhook at {Host} failed", webhook.Format, new Uri(webhook.Url).Host);
+            }
+        }
+
+        if (email != null)
+        {
+            try
+            {
+                await EmailAlerts.Send(email, alert, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                logger.LogError(ex, "Sending alert by email through {Host}:{Port} failed", email.Host, email.Port);
             }
         }
 

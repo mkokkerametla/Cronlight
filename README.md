@@ -225,7 +225,15 @@ builder.Services.AddCronlightAlerts(o =>
       { "Url": "https://hooks.slack.com/services/…", "Format": "Slack" },
       { "Url": "https://prod-00.westeurope.logic.azure.com/workflows/…", "Format": "Teams" },
       { "Url": "https://alerts.contoso.com/cronlight", "Format": "Json" }
-    ]
+    ],
+    "Email": {
+      "Host": "smtp.office365.com",
+      "Port": 587,
+      "UserName": "cronlight@contoso.com",
+      "Password": "…",
+      "From": "Cronlight <cronlight@contoso.com>",
+      "To": [ "ops@contoso.com" ]
+    }
   }
 }
 ```
@@ -237,8 +245,16 @@ on by default). Every alert is also logged as a warning under the `Cronlight.Ale
 - **Slack:** an incoming webhook. **Teams:** a Workflows "when a webhook request is received" flow, or
   an incoming webhook connector; both receive an Adaptive Card. **Json:** the alert as JSON, for your own
   endpoints.
-- Webhook URLs work as passwords, so keep them in configuration or a key vault rather than code.
-- Network errors, timeouts and 5xx responses are retried twice; other failures are logged.
+- **Email** (optional, off unless `Email` is set; settings missing a host, sender or recipient are
+  skipped with a warning rather than stopping the app): a plain-text message to every `To` address
+  through your SMTP server. It connects with
+  STARTTLS (`UseTls`, on by default), usually on port 587 as Office 365, SendGrid and Amazon SES offer;
+  implicit TLS on port 465 is not supported. `UserName` and `Password` are optional, for relays that
+  accept the app without signing in.
+- Webhook URLs and the SMTP password work as passwords, so keep them in configuration or a key vault
+  rather than code.
+- Network errors, timeouts, 5xx responses and unavailable mail servers are retried twice; other failures
+  are logged. One channel failing does not stop the others.
 - Cancelled runs neither count as failures nor end a streak. Vetoed runs are ignored.
 - `o.Jobs = job => job.Group != "experiments"` limits which jobs raise alerts.
 - With [execution history](#execution-history-optional-package), the streak is read from history, so it
@@ -246,15 +262,15 @@ on by default). Every alert is also logged as a warning under the `Cronlight.Ale
   runs it executed.
 - Alerts work without the dashboard: an app that only runs jobs can call `AddCronlightAlerts` alone.
 
-For email, a paging service or anything else, register a sink. Sinks are resolved once, as singletons:
+For a paging service or anything else, register a sink. Sinks are resolved once, as singletons:
 
 ```csharp
-builder.Services.AddSingleton<ICronlightAlertSink, EmailAlertSink>();
+builder.Services.AddSingleton<ICronlightAlertSink, PagerAlertSink>();
 
-class EmailAlertSink(IEmailSender email) : ICronlightAlertSink
+class PagerAlertSink(IPagerClient pager) : ICronlightAlertSink
 {
     public Task SendAsync(CronlightAlert alert, CancellationToken ct) =>
-        email.SendAsync("ops@contoso.com", alert.Title, $"{alert.Error}\n{alert.DashboardUrl}", ct);
+        alert.Kind == CronlightAlertKind.Failing ? pager.Trigger(alert.Title, alert.Error, ct) : pager.Resolve(alert.Title, ct);
 }
 ```
 

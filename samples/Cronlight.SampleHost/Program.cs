@@ -47,8 +47,8 @@ builder.Services.AddAuthorization(o =>
     o.AddPolicy("QuartzAdmins", p => p.RequireRole("admin"));
 });
 
-// Alerts when a job fails twice in a row, and when it recovers. Without webhooks they are only logged;
-// add Slack, Teams or JSON webhooks under "CronlightAlerts:Webhooks" in configuration.
+// Alerts when a job fails twice in a row, and when it recovers. Without webhooks or email they are only
+// logged; add them under "CronlightAlerts:Webhooks" and "CronlightAlerts:Email" in configuration.
 builder.Services.AddCronlightAlerts(o =>
 {
     o.AfterConsecutiveFailures = 2;
