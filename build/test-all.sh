@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Runs every test suite: UI lint, type-check and unit tests; the .NET tests on .NET 8 and 10; and the
-# Playwright end-to-end tests. A failing suite does not stop the others; the summary lists each result
-# and the script exits non-zero if any failed.
+# Runs the UI lint, type-check and unit tests and the .NET tests on .NET 8 and 10. The Playwright
+# end-to-end tests are not included; run them with `npx playwright test` in tests/Cronlight.E2E.
+# A failing suite does not stop the others; the summary lists each result and the script exits
+# non-zero if any failed.
 #
-# Usage: build/test-all.sh [--databases] [ui] [dotnet] [e2e]
-#   ui, dotnet, e2e  run only these suites (default: all)
+# Usage: build/test-all.sh [--databases] [ui] [dotnet]
+#   ui, dotnet       run only these suites (default: both)
 #   --databases      also test PostgreSQL, MySQL and SQL Server, in containers started for the run
 #                    (Docker or Podman) and removed afterwards. Connection strings already set in
 #                    QUARTZ_TEST_POSTGRES / _MYSQL / _SQLSERVER are used instead of a container.
@@ -18,9 +19,9 @@ suites=()
 for arg in "$@"; do
   case $arg in
     --databases) databases=true ;;
-    ui | dotnet | e2e) suites+=("$arg") ;;
+    ui | dotnet) suites+=("$arg") ;;
     -h | --help)
-      sed -n '2,12s/^# \{0,1\}//p' "$0"
+      sed -n '2,13s/^# \{0,1\}//p' "$0"
       exit 0
       ;;
     *)
@@ -29,7 +30,7 @@ for arg in "$@"; do
       ;;
   esac
 done
-[[ ${#suites[@]} -eq 0 ]] && suites=(ui dotnet e2e)
+[[ ${#suites[@]} -eq 0 ]] && suites=(ui dotnet)
 
 # Same images and password as CI; host ports chosen to stay clear of locally installed databases
 password=Cronlight_Test1
@@ -116,13 +117,6 @@ dotnet_tests() {
   cd "$root" && dotnet test --configuration Release
 }
 
-e2e() {
-  cd "$root/tests/Cronlight.E2E" &&
-    npm_install &&
-    npx playwright install chromium &&
-    npx playwright test
-}
-
 results=()
 failed=false
 run_suite() {
@@ -150,7 +144,6 @@ for suite in "${suites[@]}"; do
       fi
       run_suite ".NET tests (net8.0, net10.0)" dotnet_tests
       ;;
-    e2e) run_suite "End-to-end tests" e2e ;;
   esac
 done
 

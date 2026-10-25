@@ -242,7 +242,7 @@ A sink that throws is logged as an error; the change itself has already been mad
 | `assets` | Logo (`icon.svg`) and the 128px `icon.png` used as the NuGet package icon |
 | `build/verify-packages.sh` | Checks run on packed `.nupkg` files in CI |
 | `build/smoke-test.sh` | Installs the packed packages into new .NET 8 and .NET 10 apps and runs them |
-| `build/test-all.sh` | Runs every test suite: UI, .NET and end-to-end |
+| `build/test-all.sh` | Runs the UI and .NET test suites |
 | `.github/workflows` | CI and release pipelines |
 
 ## Development
@@ -262,14 +262,14 @@ cd src/Cronlight.UI && npm run dev
 
 `dotnet build -p:SkipDashboardUi=true` embeds an existing `wwwroot` without running npm.
 
-### Running every test
+### Running the UI and .NET tests
 
-`build/test-all.sh` runs the UI lint, type-check and unit tests, the .NET tests on .NET 8 and 10, and
-the end-to-end tests, installing npm packages and Chromium when missing. A failing suite does not stop
-the rest; a summary at the end lists each result.
+`build/test-all.sh` runs the UI lint, type-check and unit tests and the .NET tests on .NET 8 and 10,
+installing npm packages when missing. A failing suite does not stop the rest; a summary at the end lists
+each result. It does not run the end-to-end tests (see below).
 
 ```bash
-build/test-all.sh                  # all suites; databases as configured below
+build/test-all.sh                  # UI and .NET suites; databases as configured below
 build/test-all.sh --databases      # also PostgreSQL, MySQL and SQL Server, in throwaway containers
 build/test-all.sh ui dotnet        # only some suites
 ```
