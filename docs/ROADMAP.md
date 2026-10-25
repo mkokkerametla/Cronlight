@@ -63,12 +63,30 @@ It lags on:
 - live updates, job progress and captured log lines
 - adoption
 
-Suggested order: decide on Quartz 4 support first, since it changes how retries, history and several
-schedulers should be built; then misfire visibility.
+Suggested order: misfire visibility on 3.x now; Quartz 4 support once 4.x settles (see
+[Quartz 4 support](#quartz-4-support)), since it changes how retries, history and several schedulers should
+be built.
 
 ## Next (1.x)
 
 ### Quartz 4 support
+
+**Decision (2026-10-25): wait, and stay on Quartz 3.13.1.** 4.x is released (4.6.0 on 2026-10-19), but it is
+seven weeks old with 12 releases, and recent ones fixed serious bugs: 4.6.0 fixed `UseClustering()` leaving
+every node as `NON_CLUSTERED`, so nodes could take each other's fired triggers, and 4.2.4 fixed a database
+error committing half a fire batch (duplicate firings on PostgreSQL, triggers stuck `BLOCKED` on SQL Server
+and MySQL). 4.6.0 also added three more schema migrations. 3.x is still maintained (3.22.7 on the same day).
+
+Move when all of these hold:
+
+- at least four weeks after the latest 4.x release with no data-integrity, clustering or
+  missed/duplicate-firing fixes;
+- no new schema migrations in that time;
+- no open 4.x bugs of that kind on GitHub.
+
+Staying on 3.13.1 also avoids [quartznet#4167](https://github.com/quartznet/quartznet/issues/4167), open
+since 2026-10-25: non-concurrent jobs with many triggers start 15–35 seconds late on 3.19.1 and 3.22.7, but
+not on 3.13.0. Check it before raising the 3.x version.
 
 Quartz.NET 4.0 targets `net10.0` only. Public `Task` members became `ValueTask`, `IJob.Execute` takes a
 cancellation token, the container builds the scheduler (no `quartz.config`, no process-global singletons) and
