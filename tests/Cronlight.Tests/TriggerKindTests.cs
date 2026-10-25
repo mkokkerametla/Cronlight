@@ -65,10 +65,12 @@ public class TriggerKindTests
     [Fact]
     public async Task Triggers_sent_back_unchanged_are_left_alone_and_changed_ones_keep_their_rhythm()
     {
-        await using var host = await TestHost.Start();
+        // Neither fired nor handled as a misfire while the test reads it, which would move its next fire time
+        await using var host = await TestHost.Start(misfireThreshold: TimeSpan.FromHours(1));
         var client = host.Client();
         var started = DateTimeOffset.UtcNow.AddMinutes(-10).AddSeconds(-7);
         var scheduler = await host.Scheduler();
+        await scheduler.Standby();
         await client.PostJson("api/jobs", new { type = Plain, name = "poller" });
         // As the host might have registered it: started in the past, so it has fired before
         await scheduler.ScheduleJob(TriggerBuilder.Create().WithIdentity("every-minute", "DEFAULT").ForJob("poller", "DEFAULT")

@@ -126,17 +126,26 @@ jobs:
         run: dotnet build --configuration Release --no-restore -p:Version="$VERSION"
 
       - name: Test
+        # A test stuck for 5 minutes fails the run, naming it, with a dump of the test process
         run: >-
           dotnet test --configuration Release --no-build
           --logger trx --logger "console;verbosity=normal"
+          --blame-hang-timeout 5m --blame-hang-dump-type mini
           --results-directory TestResults
+        env:
+          # What the test hosts' servers logged as errors, to explain a 500 or a hang
+          CRONLIGHT_TEST_ERROR_LOG: ${{ github.workspace }}/TestResults/server-errors.log
 
       - name: Upload test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results
-          path: TestResults/*.trx
+          path: |
+            TestResults/*.trx
+            TestResults/server-errors.log
+            TestResults/**/Sequence_*.xml
+            TestResults/**/*.dmp
 
       - name: Pack
         run: |

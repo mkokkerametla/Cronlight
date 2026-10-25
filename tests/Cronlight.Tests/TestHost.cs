@@ -59,7 +59,7 @@ public sealed class TestHost : IAsyncDisposable
         // Quartz's LogProvider is process-static and captures the first host's ILoggerFactory.
         // A shared instance (which DI never disposes) keeps later hosts from hitting a disposed one.
         builder.Logging.ClearProviders();
-        builder.Services.Replace(ServiceDescriptor.Singleton<ILoggerFactory>(NullLoggerFactory.Instance));
+        builder.Services.Replace(ServiceDescriptor.Singleton<ILoggerFactory>(ErrorFileLoggerFactory.Instance));
 
         builder.Services.AddQuartz(q =>
         {
@@ -147,6 +147,59 @@ public sealed class TestHost : IAsyncDisposable
         await app.StopAsync();
         await app.DisposeAsync();
         Database.Cleanup();
+    }
+}
+
+/// <summary>
+/// Writes errors logged by every test host to the file named by CRONLIGHT_TEST_ERROR_LOG, as CI sets, so a 500 or a hang
+/// there shows what the server ran into. Without the variable nothing is logged. Many tests cause errors on purpose.
+/// </summary>
+public sealed class ErrorFileLoggerFactory : ILoggerFactory
+{
+    public static readonly ErrorFileLoggerFactory Instance = new(Environment.GetEnvironmentVariable("CRONLIGHT_TEST_ERROR_LOG"));
+
+    private readonly string? path;
+    private readonly object gate = new();
+
+    private ErrorFileLoggerFactory(string? path) => this.path = string.IsNullOrEmpty(path) ? null : path;
+
+    public ILogger CreateLogger(string categoryName) => path == null ? NullLogger.Instance : new Category(this, categoryName);
+
+    public void AddProvider(ILoggerProvider provider)
+    {
+    }
+
+    public void Dispose()
+    {
+    }
+
+    private void Write(string category, LogLevel level, string message, Exception? exception)
+    {
+        var entry = $"{DateTimeOffset.UtcNow:O} {level} {category}: {message}{(exception == null ? "" : Environment.NewLine + exception)}{Environment.NewLine}{Environment.NewLine}";
+        lock (gate)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path!))!);
+                File.AppendAllText(path!, entry);
+            }
+            catch (IOException)
+            {
+                // Logging must never fail a test
+            }
+        }
+    }
+
+    private sealed class Category(ErrorFileLoggerFactory factory, string name) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (IsEnabled(logLevel))
+                factory.Write(name, logLevel, formatter(state, exception), exception);
+        }
     }
 }
 
