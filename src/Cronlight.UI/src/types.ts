@@ -11,6 +11,22 @@ export interface Trigger {
   state: TriggerState
   nextFireTimeUtc: string | null
   previousFireTimeUtc: string | null
+  /** What Quartz does when the trigger misses a fire time, e.g. FireOnceNow or DoNothing */
+  misfireInstruction?: string
+  /** For a waiting retry (kind Retry), the attempt it will be: 2 for the first retry */
+  attempt?: number | null
+}
+
+/** How often, and how long apart, a failed run is retried */
+export interface JobRetryPolicy {
+  /** Retries after the first attempt; 0 means none */
+  maxRetries: number
+  /** Wait before the first retry */
+  delaySeconds: number
+  /** Double the wait before each further retry */
+  exponential: boolean
+  /** Retry only failures with these exception types (full or short names, or base types); null retries all */
+  retryOn?: string[] | null
 }
 
 export interface Job {
@@ -24,6 +40,8 @@ export interface Job {
   loadError: string | null
   data: Record<string, string | null>
   triggers: Trigger[]
+  /** The policy the job runs with, its own or its type's; null when failed runs are not retried */
+  retry: JobRetryPolicy | null
 }
 
 export type JobParameterType = 'String' | 'Int' | 'Bool' | 'Url' | 'Text' | 'Secret'
@@ -43,6 +61,8 @@ export interface JobType {
   description: string | null
   hidden: boolean
   parameters: JobParameter[]
+  /** From [CronlightRetry]: what new jobs of this type start with */
+  retry: JobRetryPolicy | null
 }
 
 export interface SchedulerInfo {
@@ -60,6 +80,40 @@ export interface SchedulerInfo {
   canManage: boolean
   historyEnabled: boolean
   showScheduleAssistant: boolean
+  secretReferences: boolean
+  /** How often the dashboard refreshes, in seconds */
+  refreshSeconds: number
+  /** Every scheduler the dashboard serves, the host's own first */
+  schedulers: string[]
+}
+
+/** Counts over every job, whatever the search and filters */
+export interface JobCounts {
+  all: number
+  active: number
+  paused: number
+  unloadable: number
+}
+
+/** One page of the job list, from jobs/search */
+export interface JobPage {
+  jobs: Job[]
+  /** Jobs matching the search and filters, on every page */
+  total: number
+  page: number
+  pageSize: number
+  counts: JobCounts
+  /** Every job type label in the scheduler, for the type filter */
+  types: string[]
+}
+
+export type JobStatus = 'Active' | 'Paused' | 'Unloadable'
+
+export interface JobQuery {
+  search: string
+  type: string | null
+  status: JobStatus | null
+  page: number
 }
 
 export interface RunningJob {
@@ -91,6 +145,8 @@ export interface TriggerRequest {
   name: string | null
   cronExpression: string
   timeZone: string | null
+  /** Skip a missed fire time instead of running once as soon as the scheduler can */
+  skipMissed?: boolean
 }
 
 export interface CreateJobRequest {
@@ -100,17 +156,36 @@ export interface CreateJobRequest {
   description: string | null
   data: Record<string, string>
   triggers: TriggerRequest[]
+  retry: JobRetryPolicy
 }
 
 export interface UpdateJobRequest {
   description: string | null
   data: Record<string, string>
   triggers: TriggerRequest[]
+  /** maxRetries 0 turns retries off, even when the job type has a policy */
+  retry: JobRetryPolicy
+}
+
+/** Runs a job now; data replaces saved values for this run and its retries only */
+export interface RunJobRequest {
+  data: Record<string, string>
+  /** The failed run this one retries, for the audit log */
+  retryOf?: string
 }
 
 export type JobAction = 'trigger' | 'pause' | 'resume'
 
-export type ExecutionStatus = 'Running' | 'Succeeded' | 'Failed' | 'Vetoed'
+export type ExecutionStatus =
+  | 'Running'
+  | 'Succeeded'
+  | 'Failed'
+  | 'Vetoed'
+  | 'Cancelled'
+  /** Failed, and another attempt is scheduled */
+  | 'Retried'
+  /** Not a run: the trigger missed its fire time (scheduledFireTimeUtc); error says what Quartz did */
+  | 'Misfired'
 
 export interface ExecutionRecord {
   id: number
@@ -129,6 +204,10 @@ export interface ExecutionRecord {
   status: ExecutionStatus
   error: string | null
   refireCount: number
+  /** 1 for a first attempt, 2 for its first automatic retry, and so on */
+  attempt: number
+  /** The run's own data (e.g. from a run with different data), secrets masked; null when it used the saved data */
+  data?: Record<string, string> | null
 }
 
 export interface HistoryPage {

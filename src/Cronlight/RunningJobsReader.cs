@@ -20,19 +20,20 @@ public record RunningJobsDto(string Source, IReadOnlyList<RunningJobDto> Jobs);
 
 /// <summary>
 /// IScheduler.GetCurrentlyExecutingJobs only sees this node. For ADO stores the dashboard reads
-/// QRTZ_FIRED_TRIGGERS instead, which covers every node in a cluster.
+/// QRTZ_FIRED_TRIGGERS instead, which covers every node in a cluster. Another scheduler the host added is read this
+/// way only when the host gave its properties to UseCronlight; otherwise this node's running jobs are shown.
 /// </summary>
-internal sealed class RunningJobsReader(QuartzDataSource dataSource, ILogger<RunningJobsReader> logger)
+internal sealed class RunningJobsReader(QuartzDataSource hostDataSource, CronlightSchedulers schedulers, ILogger<RunningJobsReader> logger)
 {
     public async Task<RunningJobsDto> Read(IScheduler scheduler, CancellationToken cancellationToken)
     {
         var meta = await scheduler.GetMetaData(cancellationToken);
 
-        if (meta.JobStoreSupportsPersistence && dataSource.Provider != null)
+        if (meta.JobStoreSupportsPersistence && await schedulers.DataSource(scheduler, hostDataSource, cancellationToken) is { } dataSource)
         {
             try
             {
-                return new RunningJobsDto("cluster", await ReadFiredTriggers(meta.SchedulerName, cancellationToken));
+                return new RunningJobsDto("cluster", await ReadFiredTriggers(dataSource, meta.SchedulerName, cancellationToken));
             }
             catch (Exception ex) when (ex is DbException or SchedulerException or InvalidOperationException)
             {
@@ -54,7 +55,8 @@ internal sealed class RunningJobsReader(QuartzDataSource dataSource, ILogger<Run
         )).ToList());
     }
 
-    private async Task<IReadOnlyList<RunningJobDto>> ReadFiredTriggers(string schedulerName, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<RunningJobDto>> ReadFiredTriggers(QuartzDataSource dataSource, string schedulerName,
+        CancellationToken cancellationToken)
     {
         var prefix = dataSource.TablePrefix;
         await using var connection = await dataSource.OpenConnection(cancellationToken);

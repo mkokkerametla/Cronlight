@@ -30,6 +30,38 @@ public static class CronlightExtensions
         services.AddSingleton<JobTypeCatalog>();
         services.TryAddSingleton<QuartzDataSource>();
         services.AddSingleton<RunningJobsReader>();
+        services.AddSingleton<JobIndexReader>();
+        services.TryAddSingleton<SecretReferenceListener>();
+        services.TryAddSingleton<RetryPlanner>();
+        services.TryAddSingleton<RetryListener>();
+        services.AddSchedulerAttachment<RetryAttachment>();
+        services.AddSchedulerAttachment<SecretReferenceAttachment>();
+        return services;
+    }
+
+    /// <summary>
+    /// Sends an alert when a job fails <see cref="CronlightAlertOptions.AfterConsecutiveFailures"/> times in a row,
+    /// and when it recovers, to the configured webhooks (Slack, Teams or JSON), email and any registered
+    /// <see cref="ICronlightAlertSink"/>, and optionally when a trigger misfires
+    /// (<see cref="CronlightAlertOptions.NotifyOnMisfire"/>). Works without the dashboard being mapped. In a cluster
+    /// with execution history registered, failure streaks are counted across every node.
+    /// </summary>
+    public static IServiceCollection AddCronlightAlerts(
+        this IServiceCollection services,
+        Action<CronlightAlertOptions>? configure = null
+    )
+    {
+        services.AddOptions<CronlightAlertOptions>();
+        if (configure != null)
+            services.Configure(configure);
+
+        services.AddHttpClient(AlertWorker.HttpClientName);
+        services.TryAddSingleton<AlertQueue>();
+        services.TryAddSingleton<AlertListener>();
+        services.AddSchedulerAttachment<AlertAttachment>();
+        // First in the collection: alerts are sent until Quartz has finished its last job
+        if (!services.Any(d => d.ImplementationType == typeof(AlertWorker)))
+            services.Insert(0, ServiceDescriptor.Singleton<IHostedService, AlertWorker>());
         return services;
     }
 
@@ -44,6 +76,8 @@ public static class CronlightExtensions
         var logger = endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Cronlight");
 
         var group = endpoints.MapGroup(prefix);
+        // First, so every response carries them, including refusals
+        group.AddSecurityHeaders(options);
 
         if (options.ViewPolicy != null)
         {
@@ -65,11 +99,16 @@ public static class CronlightExtensions
 
         var api = group.MapGroup("/api");
         api.AddErrorHandling(logger);
+        api.RequireSchedulerAccess(manage: false);
         api.MapReadEndpoints();
 
         var manage = api.MapGroup("");
         if (options.ManagePolicy != null)
             manage.RequireAuthorization(options.ManagePolicy);
+        // First, so refused requests (forged, read-only mode) are audited too
+        manage.AddAuditing(endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(Audit.LoggerCategory));
+        manage.RequireDashboardRequests();
+        manage.RequireSchedulerAccess(manage: true);
         if (options.ReadOnly)
         {
             manage.AddEndpointFilter((_, _) =>
@@ -83,6 +122,26 @@ public static class CronlightExtensions
 
         group.MapStaticUi();
         return group;
+    }
+
+    private static void AddSecurityHeaders(this RouteGroupBuilder group, CronlightOptions options)
+    {
+        var policy = options.ContentSecurityPolicy;
+        group.AddEndpointFilter((context, next) =>
+        {
+            var headers = context.HttpContext.Response.Headers;
+            headers.XContentTypeOptions = "nosniff";
+            // Links out of the dashboard (e.g. the schedule assistant) do not reveal where it is hosted
+            headers["Referrer-Policy"] = "no-referrer";
+            if (!string.IsNullOrEmpty(policy))
+            {
+                headers.ContentSecurityPolicy = policy;
+                // For browsers without frame-ancestors; only when it says the same, so it cannot contradict a changed policy
+                if (policy.Contains("frame-ancestors 'none'"))
+                    headers.XFrameOptions = "DENY";
+            }
+            return next(context);
+        });
     }
 
     private static void MapStaticUi(this RouteGroupBuilder group)

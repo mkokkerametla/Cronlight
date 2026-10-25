@@ -1,4 +1,4 @@
-import { History, X } from 'lucide-react'
+import { History, RotateCcw, X } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,17 +20,41 @@ import {
 } from '@/components/ui/table'
 import { ExecutionStatusBadge } from '@/components/jobs/status-badge'
 import { useHistory } from '@/hooks/use-history'
-import { formatDateTime, formatDuration, formatRelative, shortType } from '@/lib/format'
-import type { ExecutionStatus, HistoryFilter } from '@/types'
+import { useRefreshInterval } from '@/hooks/use-polling'
+import {
+  errorTone,
+  everySeconds,
+  formatDateTime,
+  formatDuration,
+  formatRelative,
+  recordTime,
+  shortType,
+  startedLate,
+} from '@/lib/format'
+import { cn } from '@/lib/utils'
+import type { ExecutionRecord, ExecutionStatus, HistoryFilter } from '@/types'
 
 interface Props {
   filter: HistoryFilter
   onFilterChange: (filter: HistoryFilter) => void
   onOpenJob: (group: string, name: string) => void
+  canManage?: boolean
+  /** Runs the job again; resolves to true when it was started */
+  onRetry?: (record: ExecutionRecord) => Promise<boolean>
 }
 
-export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
-  const { records, hasMore, loadMore, error, loaded } = useHistory(filter)
+// Runs that ended without succeeding and will not be retried automatically
+const retryable: ExecutionStatus[] = ['Failed', 'Vetoed', 'Cancelled']
+
+export function HistoryTable({
+  filter,
+  onFilterChange,
+  onOpenJob,
+  canManage = false,
+  onRetry,
+}: Props) {
+  const { records, hasMore, loadMore, error, loaded, refresh } = useHistory(filter)
+  const refreshMs = useRefreshInterval()
 
   return (
     <div className="space-y-3">
@@ -45,9 +69,12 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
           <SelectContent>
             <SelectItem value="all">All outcomes</SelectItem>
             <SelectItem value="Failed">Failed</SelectItem>
+            <SelectItem value="Retried">Retried</SelectItem>
             <SelectItem value="Succeeded">Succeeded</SelectItem>
             <SelectItem value="Running">Running</SelectItem>
+            <SelectItem value="Cancelled">Cancelled</SelectItem>
             <SelectItem value="Vetoed">Vetoed</SelectItem>
+            <SelectItem value="Misfired">Misfired</SelectItem>
           </SelectContent>
         </Select>
         {filter.job && (
@@ -64,7 +91,7 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
           </Badge>
         )}
         <span className="ml-auto text-sm text-muted-foreground">
-          Newest first · refreshes every 10 seconds
+          Newest first · refreshes {everySeconds(refreshMs / 1000)}
         </span>
       </div>
 
@@ -100,6 +127,11 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
                 <TableHead>Fired</TableHead>
                 <TableHead className="text-right">Duration</TableHead>
                 <TableHead>Node</TableHead>
+                {canManage && onRetry && (
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -116,10 +148,29 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
                     <div className="text-xs text-muted-foreground">
                       {r.jobGroup} · {shortType(r.jobType)}
                       {r.refireCount > 0 && ` · refire ${r.refireCount}`}
+                      {r.attempt > 1 && ` · attempt ${r.attempt}`}
+                      {startedLate(r) && (
+                        <span className="text-amber-700 dark:text-amber-400">
+                          {` · started ${startedLate(r)} late`}
+                        </span>
+                      )}
+                      {r.data && (
+                        <>
+                          {' · '}
+                          <span
+                            className="underline decoration-dotted"
+                            title={Object.entries(r.data)
+                              .map(([k, v]) => `${k} = ${v}`)
+                              .join('\n')}
+                          >
+                            own data
+                          </span>
+                        </>
+                      )}
                     </div>
                     {r.error && (
                       <p
-                        className="mt-1 line-clamp-2 text-xs break-words text-destructive"
+                        className={cn('mt-1 line-clamp-2 text-xs break-words', errorTone(r))}
                         title={r.error}
                       >
                         {r.error}
@@ -129,8 +180,9 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
                   <TableCell>
                     <ExecutionStatusBadge status={r.status} />
                   </TableCell>
-                  <TableCell title={formatDateTime(r.firedTimeUtc)}>
-                    {formatRelative(r.firedTimeUtc)}
+                  <TableCell title={formatDateTime(recordTime(r))}>
+                    {r.status === 'Misfired' && 'missed '}
+                    {formatRelative(recordTime(r))}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatDuration(r.durationMs)}
@@ -138,6 +190,22 @@ export function HistoryTable({ filter, onFilterChange, onOpenJob }: Props) {
                   <TableCell className="font-mono text-xs text-muted-foreground">
                     {r.instanceName}
                   </TableCell>
+                  {canManage && onRetry && (
+                    <TableCell className="text-right">
+                      {retryable.includes(r.status) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Run ${r.jobName} again`}
+                          onClick={async () => {
+                            if (await onRetry(r)) setTimeout(refresh, 1000)
+                          }}
+                        >
+                          <RotateCcw /> Run again
+                        </Button>
+                      )}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>

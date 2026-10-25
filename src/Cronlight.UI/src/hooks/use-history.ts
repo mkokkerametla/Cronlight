@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@/api'
+import { usePolling, useRefreshInterval } from '@/hooks/use-polling'
 import type { ExecutionRecord, HistoryFilter, HistoryPage } from '@/types'
 
 const PAGE_SIZE = 50
-const POLL_MS = 10_000
 
 function query(filter: HistoryFilter, before: number | null, limit: number) {
   const params = new URLSearchParams({ limit: String(limit) })
@@ -23,6 +23,7 @@ export function useHistory(filter: HistoryFilter, limit = PAGE_SIZE) {
   const [pages, setPages] = useState(1)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const refreshMs = useRefreshInterval()
   const { status, job } = filter
   const group = job?.group
   const name = job?.name
@@ -60,13 +61,13 @@ export function useHistory(filter: HistoryFilter, limit = PAGE_SIZE) {
   }, [loadFirstPage])
 
   // Only auto-refresh while just the first page is shown, so "load more" results don't jump around
-  useEffect(() => {
-    if (pages > 1) return
-    const interval = setInterval(() => {
+  usePolling(
+    () => {
       if (!loadingMore.current) void loadFirstPage()
-    }, POLL_MS)
-    return () => clearInterval(interval)
-  }, [loadFirstPage, pages])
+    },
+    refreshMs,
+    pages === 1
+  )
 
   const loadMore = useCallback(async () => {
     if (nextBefore === null || loadingMore.current) return

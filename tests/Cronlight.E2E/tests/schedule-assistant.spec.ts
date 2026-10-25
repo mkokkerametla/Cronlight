@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { openDashboard } from './helpers'
 
 test('turns a plain-language schedule into a ChatGPT or Google question in a new tab', async ({ page, context }) => {

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
+using Quartz.Impl.Matchers;
 
 namespace Cronlight.Tests;
 
@@ -44,6 +45,80 @@ internal static class HistoryScenarios
         Assert.True(scheduler.GetProperty("historyEnabled").GetBoolean());
     }
 
+    /// <summary>A history table from before the outcome index gets it at startup.</summary>
+    public static async Task AddsTheOutcomeIndexToAnOlderTable(TestHost host)
+    {
+        var store = host.Services.GetRequiredService<IJobHistoryStore>();
+        var drop = host.Database.Name is "SQLite" or "PostgreSQL"
+            ? "DROP INDEX IDX_QRTZ_CRONLIGHT_HISTORY_STATUS"
+            : "DROP INDEX IDX_QRTZ_CRONLIGHT_HISTORY_STATUS ON QRTZ_CRONLIGHT_HISTORY";
+        // The writer creates the table and its indexes in the background at startup: wait for them rather than race it
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(100))
+        {
+            try
+            {
+                await host.Database.Execute(drop);
+                break;
+            }
+            catch (Exception) when (DateTime.UtcNow < deadline)
+            {
+            }
+        }
+
+        await store.Initialize(CancellationToken.None);
+
+        // Dropping it again works only because startup added it back
+        await host.Database.Execute(drop);
+        await store.Initialize(CancellationToken.None);
+        // And a start with the index in place leaves it alone
+        await store.Initialize(CancellationToken.None);
+    }
+
+    /// <summary>A history table from before retries gets the ATTEMPT column at startup.</summary>
+    public static async Task AddsTheAttemptColumnToAnOlderTable(TestHost host)
+    {
+        var store = host.Services.GetRequiredService<IJobHistoryStore>();
+        const string drop = "ALTER TABLE QRTZ_CRONLIGHT_HISTORY DROP COLUMN ATTEMPT";
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(100))
+        {
+            try
+            {
+                await host.Database.Execute(drop);
+                break;
+            }
+            catch (Exception) when (DateTime.UtcNow < deadline)
+            {
+            }
+        }
+
+        await store.Initialize(CancellationToken.None);
+        await store.RecordFinished(Record(host.SchedulerName, "upgraded", DateTimeOffset.UtcNow) with { Attempt = 2 }, CancellationToken.None);
+        var record = Assert.Single(await store.Query(host.SchedulerName, new JobHistoryQuery { JobName = "upgraded" }, CancellationToken.None));
+        Assert.Equal(2, record.Attempt);
+        // A start with the column in place leaves it alone
+        await store.Initialize(CancellationToken.None);
+    }
+
+    /// <summary>Fails twice and succeeds on its second retry: each failure that is retried shows as Retried.</summary>
+    public static async Task RecordsRetryAttempts(TestHost host)
+    {
+        var client = host.Client();
+        var key = Guid.NewGuid().ToString("N");
+        RetriedJob.FailuresLeft[key] = 2;
+        await Create(client, typeof(RetriedJob), "flaky", new { key });
+        await client.PostAsync("api/jobs/DEFAULT/flaky/trigger", null);
+
+        var records = await WaitForHistory(client, "?name=flaky", r => r.Count(x => x.GetProperty("status").GetString() != "Running") >= 3);
+
+        Assert.Equal(new[] { ("Succeeded", 3), ("Retried", 2), ("Retried", 1) },
+            records.Select(r => (r.GetProperty("status").GetString()!, r.GetProperty("attempt").GetInt32())));
+        Assert.Equal(new[] { "Cronlight.Retries", "Cronlight.Retries" }, records.Take(2).Select(r => r.GetProperty("triggerGroup").GetString()));
+        Assert.StartsWith("InvalidOperationException:", records[1].GetProperty("error").GetString());
+        // Retried attempts are not failures: the job ended up succeeding
+        var summary = await client.GetFromJsonAsync<JsonElement>("api/history/summary?hours=1");
+        Assert.Equal((1, 0), (summary.GetProperty("succeeded").GetInt32(), summary.GetProperty("failed").GetInt32()));
+    }
+
     public static async Task RecordsEachRefireAttempt(TestHost host)
     {
         var client = host.Client();
@@ -56,6 +131,25 @@ internal static class HistoryScenarios
         Assert.Equal(2, records.Count);
         Assert.Equal(("Succeeded", 1), (records[0].GetProperty("status").GetString(), records[0].GetProperty("refireCount").GetInt32()));
         Assert.Equal(("Failed", 0), (records[1].GetProperty("status").GetString(), records[1].GetProperty("refireCount").GetInt32()));
+    }
+
+    public static async Task RecordsVetoedRuns(TestHost host)
+    {
+        var scheduler = await host.Scheduler();
+        scheduler.ListenerManager.AddTriggerListener(new VetoGroupListener(), GroupMatcher<TriggerKey>.AnyGroup());
+        var client = host.Client();
+        var created = await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "skipped", group = VetoGroupListener.Group });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        await client.PostAsync($"api/jobs/{VetoGroupListener.Group}/skipped/trigger", null);
+
+        var records = await WaitForHistory(client, $"?group={VetoGroupListener.Group}&name=skipped",
+            r => r[0].GetProperty("status").GetString() == "Vetoed");
+        var vetoed = Assert.Single(records);
+        Assert.Equal(0, vetoed.GetProperty("durationMs").GetInt64());
+        Assert.Single(await History(client, "?status=vetoed"));
+        var summary = await client.GetFromJsonAsync<JsonElement>("api/history/summary?hours=1");
+        Assert.Equal(1, summary.GetProperty("vetoed").GetInt32());
     }
 
     public static async Task RecordsRunningThenCompleted(TestHost host)
@@ -142,7 +236,7 @@ internal static class HistoryScenarios
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
-    private static async Task<List<JsonElement>> History(HttpClient client, string query) =>
+    public static async Task<List<JsonElement>> History(HttpClient client, string query) =>
         (await client.GetFromJsonAsync<JsonElement>($"api/history{query}")).GetProperty("records").EnumerateArray().ToList();
 
     /// <summary>History is written in the background, so poll until it shows what the test expects.</summary>
@@ -186,12 +280,34 @@ public class HistoryTests
     private static readonly Action<JobHistoryOptions> InMemory = o => o.Storage = JobHistoryStorage.InMemory;
 
     [Fact]
+    public async Task A_history_table_from_an_older_version_gets_the_outcome_index()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        await HistoryScenarios.AddsTheOutcomeIndexToAnOlderTable(host);
+    }
+
+    [Fact]
+    public async Task A_history_table_from_an_older_version_gets_the_attempt_column()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        await HistoryScenarios.AddsTheAttemptColumnToAnOlderTable(host);
+    }
+
+    [Fact]
+    public async Task Records_each_retry_attempt()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        await HistoryScenarios.RecordsRetryAttempts(host);
+    }
+
+    [Fact]
     public async Task History_is_off_unless_registered()
     {
         await using var host = await TestHost.Start();
         var client = host.Client();
 
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/history")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/history/summary")).StatusCode);
         var scheduler = await client.GetFromJsonAsync<JsonElement>("api/scheduler");
         Assert.False(scheduler.GetProperty("historyEnabled").GetBoolean());
     }
@@ -269,6 +385,36 @@ public class HistoryTests
     }
 
     [Fact]
+    public async Task Sqlite_records_vetoed_runs()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        await HistoryScenarios.RecordsVetoedRuns(host);
+    }
+
+    [Fact]
+    public async Task In_memory_records_vetoed_runs()
+    {
+        await using var host = await TestHost.Start(history: InMemory);
+        await HistoryScenarios.RecordsVetoedRuns(host);
+    }
+
+    [Fact]
+    public async Task A_failed_write_is_skipped_and_later_records_are_still_written()
+    {
+        var store = new FailsFirstStartStore();
+        await using var host = await TestHost.Start(history: _ => { }, services: s => s.AddSingleton<IJobHistoryStore>(store));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(PlainJob), "ok");
+
+        await client.PostAsync("api/jobs/DEFAULT/ok/trigger", null);
+
+        // The start record failed to write; the finish still arrives, inserted as a complete record
+        var records = await HistoryScenarios.WaitForHistory(client, "", r => r[0].GetProperty("status").GetString() == "Succeeded");
+        Assert.Equal("ok", Assert.Single(records).GetProperty("jobName").GetString());
+        Assert.Equal(1, store.FailedStarts);
+    }
+
+    [Fact]
     public async Task Sqlite_history_table_can_be_schema_qualified()
     {
         await using var host = await TestHost.Start(history: o =>
@@ -277,7 +423,7 @@ public class HistoryTests
             o.TableName = "main.QUALIFIED_HISTORY";
         });
         await HistoryScenarios.RecordsSuccessAndFailure(host);
-        Assert.Equal(4L, await host.Database.Scalar(
+        Assert.Equal(5L, await host.Database.Scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'QUALIFIED_HISTORY' AND name LIKE 'IDX%'"));
     }
 
@@ -376,6 +522,50 @@ public class DatabaseTests
 
     [SkippableTheory]
     [MemberData(nameof(Databases))]
+    public async Task History_tables_from_older_versions_get_the_outcome_index(string name)
+    {
+        await using var host = await Start(name);
+        await HistoryScenarios.AddsTheOutcomeIndexToAnOlderTable(host);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task History_tables_from_older_versions_get_the_attempt_column(string name)
+    {
+        await using var host = await Start(name);
+        await HistoryScenarios.AddsTheAttemptColumnToAnOlderTable(host);
+    }
+
+    // Retries are triggers in the job store, written from the job's thread
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Each_retry_attempt_is_recorded(string name)
+    {
+        await using var host = await Start(name);
+        await HistoryScenarios.RecordsRetryAttempts(host);
+    }
+
+    // Only a cluster reads failure streaks from history, and SQLite cannot be clustered
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Alerts_read_failure_streaks_from_history_in_a_cluster(string name)
+    {
+        var sink = new AlertTests.RecordingAlertSink();
+        await using var host = await TestHost.Start(database: Require(name), clustered: true,
+            history: o => o.Storage = JobHistoryStorage.Database, services: AlertTests.Alerts(sink, AlertTests.StreakOptions));
+        await AlertTests.AlertsOnceAfterFailuresInARow(host, sink);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Job_search_reads_the_Quartz_tables(string name)
+    {
+        await using var host = await Start(name);
+        await JobSearchScenarios.SearchesFiltersAndPages(host);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
     public async Task History_records_success_and_failure(string name)
     {
         await using var host = await Start(name);
@@ -460,7 +650,7 @@ public class DatabaseTests
                 "SQL Server" => $"SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID('{table}') AND name LIKE 'IDX%'",
                 _ => $"SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{tableName}' AND INDEX_NAME LIKE 'IDX%'"
             });
-            Assert.Equal(4, Convert.ToInt32(indexes));
+            Assert.Equal(5, Convert.ToInt32(indexes));
         }
         finally
         {
@@ -544,4 +734,51 @@ internal sealed class SlowStartingStore : IJobHistoryStore
 
     public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
         Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
+}
+
+/// <summary>Keeps records in a list and throws on the first start record, to check the writer carries on.</summary>
+internal sealed class FailsFirstStartStore : IJobHistoryStore
+{
+    private readonly List<JobExecutionRecord> records = new();
+    private long nextId;
+    private int starts;
+    public int FailedStarts;
+
+    public Task Initialize(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task RecordStarted(JobExecutionRecord record, CancellationToken cancellationToken)
+    {
+        if (Interlocked.Increment(ref starts) == 1)
+        {
+            FailedStarts++;
+            throw new InvalidOperationException("database unavailable");
+        }
+        return Upsert(record);
+    }
+
+    public Task RecordFinished(JobExecutionRecord record, CancellationToken cancellationToken) => Upsert(record);
+
+    private Task Upsert(JobExecutionRecord record)
+    {
+        lock (records)
+        {
+            var index = records.FindIndex(r => r.FireInstanceId == record.FireInstanceId && r.RefireCount == record.RefireCount);
+            if (index >= 0)
+                records[index] = record with { Id = records[index].Id };
+            else
+                records.Add(record with { Id = ++nextId });
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
+    {
+        lock (records)
+            return Task.FromResult<IReadOnlyList<JobExecutionRecord>>(records.Where(r => r.SchedulerName == schedulerName).OrderByDescending(r => r.Id).ToList());
+    }
+
+    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
+        Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
+
+    public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
 }

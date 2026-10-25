@@ -10,14 +10,17 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { MASK, type DataRow } from '@/lib/job-form'
+import { MASK, SECRET_PREFIX, type DataRow } from '@/lib/job-form'
 
 export function DataEditor({
   rows,
   onChange,
+  secretReferences = false,
 }: {
   rows: DataRow[]
   onChange: (rows: DataRow[]) => void
+  /** The server resolves secret:<name> values in secret fields from its configuration */
+  secretReferences?: boolean
 }) {
   const update = (index: number, patch: Partial<DataRow>) =>
     onChange(rows.map((r, i) => (i === index ? { ...r, ...patch } : r)))
@@ -34,10 +37,17 @@ export function DataEditor({
             <ValueInput
               id={`param-${row.key}`}
               row={row}
+              secretReferences={secretReferences}
               onChange={value => update(index, { value })}
             />
             {row.param.description && (
               <p className="text-xs text-muted-foreground">{row.param.description}</p>
+            )}
+            {secretReferences && row.param.type === 'Secret' && (
+              <p className="text-xs text-muted-foreground">
+                Or enter <code className="font-mono">{SECRET_PREFIX}name</code> to use a secret
+                stored in the server&apos;s configuration, so the value is never saved with the job.
+              </p>
             )}
           </div>
         ) : (
@@ -49,7 +59,11 @@ export function DataEditor({
               placeholder="key"
               aria-label="Data key"
             />
-            <ValueInput row={row} onChange={value => update(index, { value })} />
+            <ValueInput
+              row={row}
+              secretReferences={secretReferences}
+              onChange={value => update(index, { value })}
+            />
             <Button
               type="button"
               variant="ghost"
@@ -82,13 +96,17 @@ export function DataEditor({
 function ValueInput({
   id,
   row,
+  secretReferences,
   onChange,
 }: {
   id?: string
   row: DataRow
+  secretReferences: boolean
   onChange: (value: string) => void
 }) {
   const type = row.param?.type ?? (row.value === MASK ? 'Secret' : 'String')
+  // A reference only names a secret, so it is shown rather than hidden like a password
+  const isReference = secretReferences && row.value.startsWith(SECRET_PREFIX)
   const common = {
     id,
     value: row.value,
@@ -137,7 +155,7 @@ function ValueInput({
               ? 'number'
               : type === 'Url'
                 ? 'url'
-                : type === 'Secret'
+                : type === 'Secret' && !isReference
                   ? 'password'
                   : 'text'
           }

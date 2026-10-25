@@ -1,5 +1,16 @@
-import { useState } from 'react'
-import { Inbox, MoreHorizontal, Pause, Play, PlayCircle, Plus, Search, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Inbox,
+  MoreHorizontal,
+  Pause,
+  Play,
+  PlayCircle,
+  Plus,
+  Search,
+  X,
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -36,19 +47,22 @@ import {
   jobStatus,
   nextFire,
   typeLabel,
-  type JobStatus,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { Job, JobAction } from '@/types'
+import type { Job, JobAction, JobPage, JobQuery, JobStatus } from '@/types'
 
 const ALL = 'all'
+// Typing waits this long before searching, so the server is asked once per pause rather than per key
+const SEARCH_DELAY_MS = 300
 
 interface Props {
+  /** The current page, as the server searched, filtered and paged it */
   jobs: Job[]
+  page: Pick<JobPage, 'total' | 'page' | 'pageSize' | 'types'> | null
+  query: JobQuery
+  onQueryChange: (query: JobQuery) => void
   canManage: boolean
   canCreate: boolean
-  statusFilter: JobStatus | typeof ALL
-  onStatusFilterChange: (status: JobStatus | typeof ALL) => void
   selectedKey: string | null
   onSelect: (job: Job) => void
   onNewJob: () => void
@@ -57,32 +71,40 @@ interface Props {
 
 export function JobsTable({
   jobs,
+  page,
+  query,
+  onQueryChange,
   canManage,
   canCreate,
-  statusFilter,
-  onStatusFilterChange,
   selectedKey,
   onSelect,
   onNewJob,
   actions,
 }: Props) {
-  const [search, setSearch] = useState('')
-  const [typeFilter, setTypeFilter] = useState<string>(ALL)
+  const [search, setSearch] = useState(query.search)
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
 
-  const query = search.trim().toLowerCase()
-  const visible = jobs.filter(
-    job =>
-      (!query ||
-        job.name.toLowerCase().includes(query) ||
-        job.group.toLowerCase().includes(query)) &&
-      (typeFilter === ALL || typeLabel(job) === typeFilter) &&
-      (statusFilter === ALL || jobStatus(job) === statusFilter)
-  )
-  const selectable = visible.filter(j => j.loadable)
+  // Changing what is listed also clears the selection, so bulk actions only touch jobs on screen
+  const changeQuery = (next: Partial<JobQuery>) => {
+    setChecked(new Set())
+    onQueryChange({ ...query, page: 1, ...next })
+  }
+
+  const latest = useRef({ query, changeQuery })
+  useEffect(() => {
+    latest.current = { query, changeQuery }
+  })
+  useEffect(() => {
+    if (search === latest.current.query.search) return
+    const timer = setTimeout(() => latest.current.changeQuery({ search }), SEARCH_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [search])
+
+  const selectable = jobs.filter(j => j.loadable)
+  // Only jobs on this page: the page may have changed under a selection made earlier
   const checkedJobs = jobs.filter(j => checked.has(jobKey(j)))
-  const filtered = query || typeFilter !== ALL || statusFilter !== ALL
+  const filtered = query.search || query.type || query.status
 
   const toggle = (job: Job) =>
     setChecked(prev => {
@@ -113,13 +135,16 @@ export function JobsTable({
             aria-label="Search jobs"
           />
         </div>
-        <Select value={typeFilter} onValueChange={setTypeFilter}>
+        <Select
+          value={query.type ?? ALL}
+          onValueChange={v => changeQuery({ type: v === ALL ? null : v })}
+        >
           <SelectTrigger className="w-40" aria-label="Filter by type">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All types</SelectItem>
-            {[...new Set(jobs.map(typeLabel))].sort().map(t => (
+            {(page?.types ?? []).map(t => (
               <SelectItem key={t} value={t}>
                 {t}
               </SelectItem>
@@ -127,8 +152,8 @@ export function JobsTable({
           </SelectContent>
         </Select>
         <Select
-          value={statusFilter}
-          onValueChange={v => onStatusFilterChange(v as JobStatus | typeof ALL)}
+          value={query.status ?? ALL}
+          onValueChange={v => changeQuery({ status: v === ALL ? null : (v as JobStatus) })}
         >
           <SelectTrigger className="w-36" aria-label="Filter by status">
             <SelectValue />
@@ -146,8 +171,7 @@ export function JobsTable({
             size="sm"
             onClick={() => {
               setSearch('')
-              setTypeFilter(ALL)
-              onStatusFilterChange(ALL)
+              changeQuery({ search: '', type: null, status: null })
             }}
           >
             <X /> Clear
@@ -172,9 +196,9 @@ export function JobsTable({
         )}
       </div>
 
-      {canManage && checked.size > 0 && (
+      {canManage && checkedJobs.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/50 px-3 py-2 text-sm">
-          <span className="font-medium">{checked.size} selected</span>
+          <span className="font-medium">{checkedJobs.length} selected</span>
           <Button size="sm" variant="outline" disabled={bulkBusy} onClick={() => runBulk('pause')}>
             <Pause /> Pause
           </Button>
@@ -193,7 +217,7 @@ export function JobsTable({
       )}
 
       <div className="rounded-lg border">
-        {visible.length === 0 ? (
+        {jobs.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-14 text-center">
             <Inbox className="size-8 text-muted-foreground" />
             <p className="font-medium">No jobs found</p>
@@ -212,7 +236,7 @@ export function JobsTable({
                       checked={
                         selectable.length > 0 && selectable.every(j => checked.has(jobKey(j)))
                           ? true
-                          : checked.size > 0
+                          : checkedJobs.length > 0
                             ? 'indeterminate'
                             : false
                       }
@@ -230,7 +254,7 @@ export function JobsTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visible.map(job => {
+              {jobs.map(job => {
                 const key = jobKey(job)
                 const next = nextFire(job)
                 return (
@@ -289,7 +313,46 @@ export function JobsTable({
           </Table>
         )}
       </div>
+
+      {page && page.total > page.pageSize && (
+        <Pagination page={page} onPageChange={p => changeQuery({ page: p })} />
+      )}
     </div>
+  )
+}
+
+function Pagination({
+  page,
+  onPageChange,
+}: {
+  page: Pick<JobPage, 'total' | 'page' | 'pageSize'>
+  onPageChange: (page: number) => void
+}) {
+  const first = (page.page - 1) * page.pageSize + 1
+  const last = Math.min(page.page * page.pageSize, page.total)
+  const pages = Math.ceil(page.total / page.pageSize)
+  return (
+    <nav className="flex items-center justify-end gap-2 text-sm" aria-label="Job list pages">
+      <span className="text-muted-foreground tabular-nums">
+        {first.toLocaleString()}–{last.toLocaleString()} of {page.total.toLocaleString()}
+      </span>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={page.page <= 1}
+        onClick={() => onPageChange(page.page - 1)}
+      >
+        <ChevronLeft /> Previous
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={page.page >= pages}
+        onClick={() => onPageChange(page.page + 1)}
+      >
+        Next <ChevronRight />
+      </Button>
+    </nav>
   )
 }
 

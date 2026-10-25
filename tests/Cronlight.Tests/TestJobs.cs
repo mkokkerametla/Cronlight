@@ -46,9 +46,114 @@ public class RefireOnceJob : IJob
             : Task.CompletedTask;
 }
 
+[CronlightJob("Report")]
+[JobParameter("format", DefaultValue = "pdf")]
+[JobParameter("pages", Type = JobParameterType.Int, DefaultValue = "10")]
+public class ReportJob : IJob
+{
+    public Task Execute(IJobExecutionContext context) => Task.CompletedTask;
+}
+
+/// <summary>Vetoes every job in the "vetoed" group, the way a host's maintenance-window listener might.</summary>
+public class VetoGroupListener : ITriggerListener
+{
+    public const string Group = "vetoed";
+
+    public string Name => "VetoGroup";
+
+    public Task<bool> VetoJobExecution(ITrigger trigger, IJobExecutionContext context, CancellationToken cancellationToken = default) =>
+        Task.FromResult(context.JobDetail.Key.Group == Group);
+
+    public Task TriggerFired(ITrigger trigger, IJobExecutionContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task TriggerMisfired(ITrigger trigger, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task TriggerComplete(ITrigger trigger, IJobExecutionContext context, SchedulerInstruction triggerInstructionCode,
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
+}
+
 [CronlightJob("Export")]
 [JobParameter("format", Required = true, Choices = new[] { "csv", "json" })]
 public class ExportJob : IJob
 {
     public Task Execute(IJobExecutionContext context) => Task.CompletedTask;
+}
+
+/// <summary>Records the smtpPassword and endpoint values each run sees, keyed by the "run" job data value.</summary>
+[CronlightJob("Secret echo")]
+[JobParameter("smtpPassword", Type = JobParameterType.Secret)]
+[JobParameter("endpoint")]
+public class SecretEchoJob : IJob
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string? Password, string? Endpoint)> Seen = new();
+
+    public Task Execute(IJobExecutionContext context)
+    {
+        var data = context.MergedJobDataMap;
+        string? Get(string key) => data.TryGetValue(key, out var value) ? value?.ToString() : null;
+        Seen[data.GetString("run")!] = (Get("smtpPassword"), Get("endpoint"));
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Runs until cancelled. Signals BlockingJob.Gate("gate").Started once running.</summary>
+public class CancellableJob : IJob
+{
+    public async Task Execute(IJobExecutionContext context)
+    {
+        BlockingJob.Gate(context.MergedJobDataMap.GetString("gate")!).Started.Release();
+        await Task.Delay(Timeout.Infinite, context.CancellationToken);
+    }
+}
+
+/// <summary>Fails while <see cref="Failing"/> holds its "key" job data value, and succeeds otherwise.</summary>
+public class FlipJob : IJob
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> Failing = new();
+
+    public Task Execute(IJobExecutionContext context)
+    {
+        var key = context.MergedJobDataMap.GetString("key")!;
+        return Failing.GetValueOrDefault(key) ? throw new InvalidOperationException($"{key} is broken") : Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Retried twice, a second apart. Fails while <see cref="FailuresLeft"/> for its "key" is above zero, and records
+/// the "region" each attempt saw.
+/// </summary>
+[CronlightRetry(2, DelaySeconds = 1)]
+public class RetriedJob : IJob
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> FailuresLeft = new();
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentQueue<string?>> Seen = new();
+
+    public Task Execute(IJobExecutionContext context)
+    {
+        var data = context.MergedJobDataMap;
+        var key = data.GetString("key")!;
+        Seen.GetOrAdd(key, _ => new()).Enqueue(data.TryGetValue("region", out var region) ? region?.ToString() : null);
+        var left = FailuresLeft.AddOrUpdate(key, -1, (_, n) => n - 1);
+        return left >= 0 ? throw new InvalidOperationException($"{key} failed, {left} failures to go") : Task.CompletedTask;
+    }
+}
+
+/// <summary>Retried only on timeouts: throws a TimeoutException when its "error" is "timeout", else an InvalidOperationException.</summary>
+[CronlightRetry(2, DelaySeconds = 1, RetryOn = [typeof(TimeoutException)])]
+public class PickyRetryJob : IJob
+{
+    public Task Execute(IJobExecutionContext context) =>
+        context.MergedJobDataMap.GetString("error") == "timeout"
+            ? throw new TimeoutException("Upstream timed out")
+            : throw new InvalidOperationException("Bad input");
+}
+
+/// <summary>Deletes itself, then fails, so its retry cannot be scheduled: the job it would run is gone.</summary>
+[CronlightRetry(1, DelaySeconds = 1)]
+public class SelfDeletingJob : IJob
+{
+    public async Task Execute(IJobExecutionContext context)
+    {
+        await context.Scheduler.DeleteJob(context.JobDetail.Key);
+        throw new InvalidOperationException("Failed after deleting itself");
+    }
 }

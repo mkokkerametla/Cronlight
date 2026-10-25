@@ -10,7 +10,8 @@ namespace Cronlight;
 public static class CronlightHistoryExtensions
 {
     /// <summary>
-    /// Records every job execution of the host's Quartz scheduler and makes it available to the dashboard.
+    /// Records every job execution of the host's Quartz scheduler, and of schedulers added with
+    /// <see cref="CronlightSchedulerExtensions.UseCronlight"/>, and makes it available to the dashboard.
     /// Uses the Quartz database when possible; see <see cref="JobHistoryOptions"/>.
     /// Register your own <see cref="IJobHistoryStore"/> before calling this to replace the built-in stores.
     /// </summary>
@@ -24,11 +25,12 @@ public static class CronlightHistoryExtensions
 
         services.TryAddSingleton<QuartzDataSource>();
         services.TryAddSingleton<JobHistoryQueue>();
+        services.TryAddSingleton<MisfireLinks>();
         services.TryAddSingleton<JobHistoryListener>();
         services.TryAddSingleton<IJobHistoryStore>(CreateStore);
+        services.AddSchedulerAttachment<JobHistoryAttachment>();
 
-        // First in the collection: hosted services start in registration order and stop in reverse,
-        // so the listener is attached before Quartz starts and history is drained after Quartz stops.
+        // First in the collection: hosted services stop in reverse order, so history is drained after Quartz stops
         if (!services.Any(d => d.ImplementationType == typeof(JobHistoryWriter)))
             services.Insert(0, ServiceDescriptor.Singleton<IHostedService, JobHistoryWriter>());
 

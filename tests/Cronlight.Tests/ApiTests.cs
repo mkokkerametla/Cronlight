@@ -8,8 +8,8 @@ namespace Cronlight.Tests;
 public class ApiTests
 {
     [Theory]
-    [InlineData(null, true)]
-    [InlineData(false, false)]
+    [InlineData(null, false)]
+    [InlineData(true, true)]
     public async Task Scheduler_info_reports_whether_to_show_the_schedule_assistant(bool? setting, bool expected)
     {
         await using var host = await TestHost.Start(configure: o =>
@@ -21,6 +21,24 @@ public class ApiTests
         var scheduler = await host.Client().GetFromJsonAsync<JsonElement>("api/scheduler");
 
         Assert.Equal(expected, scheduler.GetProperty("showScheduleAssistant").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData(null, 10)]
+    [InlineData(1, 1)]
+    [InlineData(0, 1)]
+    [InlineData(3600, 300)]
+    public async Task Scheduler_info_reports_how_often_the_dashboard_refreshes(int? setting, int expected)
+    {
+        await using var host = await TestHost.Start(configure: o =>
+        {
+            if (setting is { } seconds)
+                o.RefreshSeconds = seconds;
+        });
+
+        var scheduler = await host.Client().GetFromJsonAsync<JsonElement>("api/scheduler");
+
+        Assert.Equal(expected, scheduler.GetProperty("refreshSeconds").GetInt32());
     }
 
     [Fact]
@@ -179,7 +197,7 @@ public class ApiTests
         var scheduler = await host.Scheduler();
         var key = new JobKey("typed");
         await scheduler.AddJob(JobBuilder.Create<PlainJob>().WithIdentity(key).StoreDurably()
-            .SetJobData(new JobDataMap { ["count"] = 5, ["enabled"] = true, ["label"] = "a", ["items"] = new List<string> { "x", "y" } })
+            .SetJobData(new JobDataMap { ["count"] = 5, ["enabled"] = true, ["strict"] = false, ["label"] = "a", ["items"] = new List<string> { "x", "y" } })
             .Build(), replace: false);
         var before = (await scheduler.GetJobDetail(key))!.JobDataMap;
 
@@ -187,12 +205,16 @@ public class ApiTests
         var shown = (await client.GetFromJsonAsync<JsonElement>("api/jobs/DEFAULT/typed")).GetProperty("data")
             .EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString());
         shown["count"] = "6";
+        shown["enabled"] = "sometimes"; // does not convert to bool, so it is kept as text
         Assert.Equal(HttpStatusCode.NoContent, (await client.PutJson("api/jobs/DEFAULT/typed", new { data = shown })).StatusCode);
 
         var after = (await scheduler.GetJobDetail(key))!.JobDataMap;
         Assert.Equal(before["count"].GetType(), after["count"].GetType());
         Assert.Equal(6L, Convert.ToInt64(after["count"]));
-        Assert.Equal(before["enabled"].GetType(), after["enabled"].GetType());
+        Assert.Equal("sometimes", after["enabled"]);
+        // Sent back unchanged as "False", so it is still a bool
+        Assert.Equal(before["strict"].GetType(), after["strict"].GetType());
+        Assert.Equal(false, after["strict"]);
         Assert.Equal(before["items"].GetType(), after["items"].GetType());
         Assert.Equal("a", after["label"]);
     }
@@ -249,6 +271,118 @@ public class ApiTests
         Assert.DoesNotContain("p-trigger-1", crons.Keys);
         Assert.Equal(2, crons.Count);
         Assert.Contains("0 0 3 * * ?", crons.Values);
+    }
+
+    [Fact]
+    public async Task Jobs_are_read_back_with_their_triggers_defaults_and_masked_secrets()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        var created = await client.PostJson("api/jobs", new
+        {
+            type = typeof(ReportJob).FullName,
+            name = "r",
+            group = "reports",
+            description = "Monthly",
+            data = new Dictionary<string, string> { ["format"] = "csv", ["apiToken"] = "s3cret" },
+            triggers = new[] { new { name = "monthly", cronExpression = "0 0 6 1 * ?", timeZone = "Europe/London" } }
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var scheduler = await host.Scheduler();
+        await scheduler.ScheduleJob(TriggerBuilder.Create().WithIdentity("once", "reports").ForJob("r", "reports")
+            .StartAt(DateTimeOffset.UtcNow.AddDays(1)).Build());
+        await scheduler.PauseTrigger(new TriggerKey("monthly", "reports"));
+
+        var job = await client.GetFromJsonAsync<JsonElement>("api/jobs/reports/r");
+
+        Assert.Equal("Monthly", job.GetProperty("description").GetString());
+        Assert.Equal(typeof(ReportJob).FullName, job.GetProperty("jobType").GetString());
+        Assert.Equal("Report", job.GetProperty("displayName").GetString());
+        Assert.True(job.GetProperty("durable").GetBoolean());
+        Assert.True(job.GetProperty("loadable").GetBoolean());
+
+        var data = job.GetProperty("data");
+        Assert.Equal("csv", data.GetProperty("format").GetString());
+        Assert.Equal("10", data.GetProperty("pages").GetString()); // [JobParameter] default, applied on create
+        Assert.Equal("********", data.GetProperty("apiToken").GetString()); // SensitiveKeyPatterns
+
+        var triggers = job.GetProperty("triggers").EnumerateArray().ToDictionary(t => t.GetProperty("name").GetString()!);
+        var monthly = triggers["monthly"];
+        Assert.Equal("reports", monthly.GetProperty("group").GetString());
+        Assert.Equal("Cron", monthly.GetProperty("kind").GetString());
+        Assert.Equal("0 0 6 1 * ?", monthly.GetProperty("cronExpression").GetString());
+        Assert.Equal("Europe/London", monthly.GetProperty("timeZone").GetString());
+        Assert.Equal("Paused", monthly.GetProperty("state").GetString());
+
+        var once = triggers["once"];
+        Assert.Equal("Simple", once.GetProperty("kind").GetString());
+        Assert.Equal(JsonValueKind.Null, once.GetProperty("cronExpression").ValueKind);
+        Assert.Equal("Normal", once.GetProperty("state").GetString());
+        var next = once.GetProperty("nextFireTimeUtc").GetDateTimeOffset();
+        Assert.InRange(next, DateTimeOffset.UtcNow.AddHours(23), DateTimeOffset.UtcNow.AddHours(25));
+        Assert.Equal(JsonValueKind.Null, once.GetProperty("previousFireTimeUtc").ValueKind);
+
+        // The list endpoint returns the same shape
+        var listed = (await client.GetFromJsonAsync<JsonElement>("api/jobs")).EnumerateArray().Single(j => j.GetProperty("name").GetString() == "r");
+        Assert.Equal(2, listed.GetProperty("triggers").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Missing_and_conflicting_requests_get_clear_errors()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        var type = typeof(PlainJob).FullName;
+
+        Assert.Equal(HttpStatusCode.Created, (await client.PostJson("api/jobs", new { type, name = "dup" })).StatusCode);
+        var duplicate = await client.PostJson("api/jobs", new { type, name = "dup" });
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+        Assert.Contains("already exists", await duplicate.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/jobs/DEFAULT/missing")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PutJson("api/jobs/DEFAULT/missing", new { description = "x" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync("api/jobs/DEFAULT/missing/pause", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync("api/jobs/DEFAULT/missing/trigger", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.DeleteAsync("api/jobs/DEFAULT/missing")).StatusCode);
+
+        var sameName = await client.PostJson("api/jobs", new
+        {
+            type, name = "twice",
+            triggers = new[] { new { name = "same", cronExpression = "0 0 1 * * ?" }, new { name = "same", cronExpression = "0 0 2 * * ?" } }
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, sameName.StatusCode);
+        Assert.Contains("Duplicate trigger name 'same'", await sameName.Content.ReadAsStringAsync());
+
+        var preview = await client.GetFromJsonAsync<JsonElement>($"api/cron/preview?expression={Uri.EscapeDataString("0 0 9 * * ?")}&timeZone=Mars/Olympus");
+        Assert.False(preview.GetProperty("isValid").GetBoolean());
+        Assert.Equal("Unknown time zone 'Mars/Olympus'", preview.GetProperty("errorMessage").GetString());
+    }
+
+    [Fact]
+    public async Task Jobs_from_other_apps_cannot_be_edited_even_when_managing_them_is_allowed()
+    {
+        await using var host = await TestHost.Start(configure: o => o.AllowManagingUnloadableJobs = true);
+        host.InsertForeignJob("other", "report");
+
+        var response = await host.Client().PutJson("api/jobs/other/report", new { description = "x" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("cannot be edited", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Pausing_and_resuming_a_job_changes_the_state_of_its_triggers()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "p", triggers = new[] { new { cronExpression = "0 0 6 * * ?" } } });
+        async Task<string?> State() =>
+            (await client.GetFromJsonAsync<JsonElement>("api/jobs/DEFAULT/p")).GetProperty("triggers")[0].GetProperty("state").GetString();
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("api/jobs/DEFAULT/p/pause", null)).StatusCode);
+        Assert.Equal("Paused", await State());
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("api/jobs/DEFAULT/p/resume", null)).StatusCode);
+        Assert.Equal("Normal", await State());
     }
 
     [Fact]

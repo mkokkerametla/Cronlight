@@ -1,0 +1,45 @@
+{
+  // Run and Debug: "Sample host" serves the dashboard at http://localhost:5099/ops/jobs/;
+  // "Sample host + UI dev server" also starts Vite with hot reload at http://localhost:5173/.
+  // Same as build/run.sh [--ui] from a terminal.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Sample host",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build sample host",
+      "program": "${workspaceFolder}/samples/Cronlight.SampleHost/bin/Debug/net10.0/Cronlight.SampleHost.dll",
+      // The sample keeps its SQLite database (quartz.db) next to the project, as dotnet run does
+      "cwd": "${workspaceFolder}/samples/Cronlight.SampleHost",
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "http://localhost:5099"
+      },
+      "serverReadyAction": {
+        "action": "openExternally",
+        "pattern": "Now listening on: (https?://\\S+)",
+        "uriFormat": "%s/ops/jobs/"
+      },
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "UI dev server",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/src/Cronlight.UI",
+      "env": {
+        "DASHBOARD_URL": "http://localhost:5099/ops/jobs"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Sample host + UI dev server",
+      "configurations": ["Sample host", "UI dev server"],
+      "stopAll": true
+    }
+  ]
+}

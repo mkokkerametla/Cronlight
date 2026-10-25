@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Threading.Channels;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Quartz;
@@ -39,8 +41,42 @@ internal sealed class JobHistoryQueue(IOptions<JobHistoryOptions> options, ILogg
     public void Complete() => channel.Writer.TryComplete();
 }
 
-internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHistoryOptions> options) : IJobListener
+/// <summary>
+/// Misfires that Quartz handles by running the trigger at once. The run that follows is recorded with the fire time
+/// it makes up for as its scheduled time, so history shows how late it really started. Only this node's misfires are
+/// known: in a cluster, the run may start on a node that did not handle the misfire, and is then not linked.
+/// </summary>
+internal sealed class MisfireLinks
 {
+    private const string ContextKey = "Cronlight.MissedFireTime";
+    private readonly ConcurrentDictionary<(string, TriggerKey), DateTimeOffset> missed = new();
+
+    // The first missed time is kept: a catch-up run that misfires again makes up for the same one
+    public void Missed(Misfire misfire) => missed.TryAdd((misfire.SchedulerName, misfire.Trigger), misfire.MissedFireTimeUtc);
+
+    /// <summary>The fire time this run makes up for, if it is a catch-up run; asked again, the same answer.</summary>
+    public DateTimeOffset? MakesUpFor(IJobExecutionContext context)
+    {
+        if (context.Get(ContextKey) is DateTimeOffset known)
+            return known;
+        if (!missed.TryRemove((context.Scheduler.SchedulerName, context.Trigger.Key), out var time))
+            return null;
+        context.Put(ContextKey, time);
+        return time;
+    }
+}
+
+internal sealed class JobHistoryListener(
+    JobHistoryQueue queue,
+    MisfireLinks links,
+    IOptions<JobHistoryOptions> options,
+    IServiceProvider services) : IJobListener
+{
+    // Registered by AddCronlight; without it, nothing is retried and no job type says which values are secret
+    private readonly RetryPlanner? retries = services.GetService<RetryPlanner>();
+    private readonly JobTypeCatalog? catalog = services.GetService<JobTypeCatalog>();
+    private readonly IOptions<CronlightOptions> cronlight = services.GetRequiredService<IOptions<CronlightOptions>>();
+
     public string Name => "Cronlight.History";
 
     public Task JobToBeExecuted(IJobExecutionContext context, CancellationToken cancellationToken = default)
@@ -54,23 +90,39 @@ internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHist
         queue.Enqueue(HistoryEvent.Finished, Record(context, JobExecutionStatus.Vetoed) with
         {
             FinishedTimeUtc = context.FireTimeUtc,
-            DurationMs = 0
+            DurationMs = 0,
+            Error = context.Get(CronlightContextKeys.VetoReason) is string reason ? Truncate(reason) : null
         });
         return Task.CompletedTask;
     }
 
-    public Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken cancellationToken = default)
+    public async Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken cancellationToken = default)
     {
-        queue.Enqueue(HistoryEvent.Finished, Record(context, jobException == null ? JobExecutionStatus.Succeeded : JobExecutionStatus.Failed) with
+        var status = RunOutcome.Status(context, jobException);
+        if (retries != null && await retries.Retry(context, jobException, cancellationToken))
+            status = JobExecutionStatus.Retried;
+        queue.Enqueue(HistoryEvent.Finished, Record(context, status) with
         {
             FinishedTimeUtc = context.FireTimeUtc + context.JobRunTime,
             DurationMs = (long)context.JobRunTime.TotalMilliseconds,
-            Error = jobException == null ? null : Describe(jobException)
+            Error = RunOutcome.Error(context, jobException) is { } error ? Truncate(error) : null
         });
-        return Task.CompletedTask;
     }
 
-    private static JobExecutionRecord Record(IJobExecutionContext context, JobExecutionStatus status) => new()
+    /// <summary>
+    /// The run's trigger data, masked as the API masks job data, so Run again can repeat the run without secrets
+    /// being stored in history. Its merged data is not used: it holds the job's saved data and resolved secrets.
+    /// </summary>
+    private Dictionary<string, string>? RunData(IJobExecutionContext context)
+    {
+        var data = context.Trigger.JobDataMap.Where(kv => !Retries.IsReserved(kv.Key)).ToList();
+        if (data.Count == 0)
+            return null;
+        var secretKeys = DashboardApi.SecretKeys(catalog?.Describe(context.JobDetail.JobType));
+        return data.ToDictionary(kv => kv.Key, kv => DashboardApi.Display(kv.Key, kv.Value?.ToString(), secretKeys, cronlight.Value) ?? "");
+    }
+
+    private JobExecutionRecord Record(IJobExecutionContext context, JobExecutionStatus status) => new()
     {
         SchedulerName = context.Scheduler.SchedulerName,
         InstanceName = context.Scheduler.SchedulerInstanceId,
@@ -80,22 +132,16 @@ internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHist
         JobType = context.JobDetail.JobType.FullName,
         TriggerName = context.Trigger.Key.Name,
         TriggerGroup = context.Trigger.Key.Group,
-        ScheduledFireTimeUtc = context.ScheduledFireTimeUtc,
+        ScheduledFireTimeUtc = links.MakesUpFor(context) ?? context.ScheduledFireTimeUtc,
         FiredTimeUtc = context.FireTimeUtc,
         Status = status,
-        RefireCount = context.RefireCount
+        RefireCount = context.RefireCount,
+        Attempt = Retries.Attempt(context),
+        Data = RunData(context)
     };
 
-    // Quartz wraps what the job threw as JobExecutionException -> SchedulerException("Job threw an unhandled
-    // exception") -> the real exception, so unwrap Quartz's layers. A JobExecutionException the job threw
-    // itself has no inner exception and keeps its own message.
-    // Only type and message are kept: stack traces are long and more likely to carry sensitive details.
-    private string Describe(JobExecutionException exception)
+    private string Truncate(string text)
     {
-        Exception cause = exception;
-        while (cause is SchedulerException { InnerException: { } inner })
-            cause = inner;
-        var text = $"{cause.GetType().Name}: {cause.Message}";
         var max = options.Value.MaxErrorLength;
         return text.Length <= max ? text : text[..(max - 1)] + "…";
     }

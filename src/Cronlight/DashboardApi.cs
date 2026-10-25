@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -11,6 +12,8 @@ using Quartz.Impl.Matchers;
 
 namespace Cronlight;
 
+/// <param name="MisfireInstruction">What Quartz does when the trigger misses a fire time, e.g. FireOnceNow or DoNothing.</param>
+/// <param name="Attempt">For a waiting retry, the attempt it will be: 2 for the first retry.</param>
 public record TriggerDto(
     string Name,
     string Group,
@@ -19,7 +22,9 @@ public record TriggerDto(
     string? TimeZone,
     string State,
     DateTimeOffset? NextFireTimeUtc,
-    DateTimeOffset? PreviousFireTimeUtc
+    DateTimeOffset? PreviousFireTimeUtc,
+    string MisfireInstruction,
+    int? Attempt = null
 );
 
 public record JobDto(
@@ -32,10 +37,31 @@ public record JobDto(
     bool Loadable,
     string? LoadError,
     IDictionary<string, string?> Data,
-    IReadOnlyList<TriggerDto> Triggers
+    IReadOnlyList<TriggerDto> Triggers,
+    // The policy the job runs with, its own or its type's; null when failed runs are not retried
+    JobRetryPolicy? Retry = null
 );
 
-public record TriggerRequest(string? Name, string CronExpression, string? TimeZone);
+/// <summary>One page of the job list, with counts over every job for the dashboard's stat cards.</summary>
+/// <param name="Total">Jobs matching the search and filters, on every page.</param>
+/// <param name="Types">Every job type label in the scheduler, for the type filter.</param>
+public record JobPageDto(
+    IReadOnlyList<JobDto> Jobs,
+    int Total,
+    int Page,
+    int PageSize,
+    JobCountsDto Counts,
+    IReadOnlyList<string> Types
+);
+
+/// <summary>Counts over every job, whatever the search and filters.</summary>
+public record JobCountsDto(int All, int Active, int Paused, int Unloadable);
+
+/// <param name="SkipMissed">
+/// When the scheduler misses a fire time (it was down, or had no free thread), skip it and wait for the next one,
+/// instead of running once as soon as it can (Quartz's default).
+/// </param>
+public record TriggerRequest(string? Name, string CronExpression, string? TimeZone, bool SkipMissed = false);
 
 public record CreateJobRequest(
     string Type,
@@ -43,17 +69,87 @@ public record CreateJobRequest(
     string? Group,
     string? Description,
     Dictionary<string, string>? Data,
-    List<TriggerRequest>? Triggers
+    List<TriggerRequest>? Triggers,
+    // Null follows the job type's [CronlightRetry], if any
+    JobRetryPolicy? Retry = null
 );
 
-/// <summary>Null properties are left unchanged. Triggers replaces the job's cron triggers only.</summary>
-public record UpdateJobRequest(string? Description, Dictionary<string, string>? Data, List<TriggerRequest>? Triggers);
+/// <summary>
+/// Null properties are left unchanged. Triggers replaces the job's cron triggers only. Retry with MaxRetries 0 turns
+/// retries off, even when the job type has a [CronlightRetry] policy.
+/// </summary>
+public record UpdateJobRequest(string? Description, Dictionary<string, string>? Data, List<TriggerRequest>? Triggers,
+    JobRetryPolicy? Retry = null);
+
+/// <summary>Runs a job now. Data overrides the saved job data for this run (and its retries) only.</summary>
+/// <param name="RetryOf">The fire instance id of the failed run this one retries, for the audit log.</param>
+public record RunJobRequest(Dictionary<string, string>? Data, string? RetryOf = null);
 
 public record CronPreviewDto(bool IsValid, string Expression, string? Description, IReadOnlyList<DateTimeOffset> NextFireTimes, string? ErrorMessage);
 
 internal static class DashboardApi
 {
     public const string Mask = "********";
+
+    /// <summary>
+    /// Header the dashboard sends with every request. Requests that change jobs must carry it: another
+    /// site cannot add a custom header to a cross-site request without the host allowing it through
+    /// CORS, so a page elsewhere cannot use the viewer's cookies to pause, run or delete jobs.
+    /// </summary>
+    public const string RequestHeader = "X-Cronlight-Request";
+
+    /// <summary>Query parameter that picks a scheduler. Without it, requests go to the host's own scheduler.</summary>
+    public const string SchedulerParameter = "scheduler";
+
+    public static string RequestedScheduler(HttpContext http) => http.Request.Query[SchedulerParameter].ToString();
+
+    /// <summary>The scheduler the request asks for, else the host's own. An unknown name ends the request with 404.</summary>
+    private static async Task<IScheduler> Scheduler(HttpContext http, CancellationToken cancellationToken = default) =>
+        await http.RequestServices.GetRequiredService<CronlightSchedulers>().Find(RequestedScheduler(http), cancellationToken)
+        ?? throw new UnknownSchedulerException(RequestedScheduler(http));
+
+    /// <summary>
+    /// Refuses requests for a scheduler the user may not see (<see cref="CronlightOptions.Schedulers"/>), or for
+    /// changes to one they may not manage. Reads are checked here; changes on the manage group, after auditing, so
+    /// refusals are audited.
+    /// </summary>
+    public static void RequireSchedulerAccess(this RouteGroupBuilder api, bool manage)
+    {
+        api.AddEndpointFilter(async (context, next) =>
+        {
+            var http = context.HttpContext;
+            var options = http.RequestServices.GetRequiredService<IOptions<CronlightOptions>>().Value;
+            if (options.Schedulers.Count == 0 || !manage && !HttpMethods.IsGet(http.Request.Method))
+                return await next(context);
+            var name = (await Scheduler(http)).SchedulerName;
+            if (!await CanView(http, options, name))
+                return Results.Problem(title: "Access denied.", detail: $"You do not have access to scheduler '{name}'.",
+                    statusCode: StatusCodes.Status403Forbidden);
+            if (manage && !await CanManage(http, options, name))
+                return Results.Problem(title: "Access denied.", detail: $"You cannot change jobs in scheduler '{name}'.",
+                    statusCode: StatusCodes.Status403Forbidden);
+            return await next(context);
+        });
+    }
+
+    /// <summary>Refuses requests that change jobs unless they come from the dashboard or another same-site client.</summary>
+    public static void RequireDashboardRequests(this RouteGroupBuilder api)
+    {
+        api.AddEndpointFilter((context, next) =>
+        {
+            var request = context.HttpContext.Request;
+            // Browsers set Sec-Fetch-Site themselves and scripts cannot change it; other clients do not send it
+            var crossSite = request.Headers["Sec-Fetch-Site"] == "cross-site";
+            if (crossSite || !request.Headers.ContainsKey(RequestHeader))
+                return ValueTask.FromResult<object?>(Results.Problem(
+                    title: "Request refused.",
+                    detail: crossSite
+                        ? "Jobs cannot be changed from another site."
+                        : $"Requests that change jobs must send the {RequestHeader} header, as the dashboard does.",
+                    statusCode: StatusCodes.Status403Forbidden));
+            return next(context);
+        });
+    }
 
     /// <summary>Turns unhandled exceptions into ProblemDetails so no stack trace ever reaches the client.</summary>
     public static void AddErrorHandling(this RouteGroupBuilder api, ILogger logger)
@@ -63,6 +159,10 @@ internal static class DashboardApi
             try
             {
                 return await next(context);
+            }
+            catch (UnknownSchedulerException ex)
+            {
+                return Results.Problem(title: "Scheduler not found.", detail: ex.Message, statusCode: StatusCodes.Status404NotFound);
             }
             catch (Exception ex) when (!context.HttpContext.RequestAborted.IsCancellationRequested)
             {
@@ -83,10 +183,14 @@ internal static class DashboardApi
 
     public static void MapReadEndpoints(this RouteGroupBuilder api)
     {
-        api.MapGet("/scheduler", async (HttpContext http, ISchedulerFactory factory, IOptions<CronlightOptions> options) =>
+        api.MapGet("/scheduler", async (HttpContext http, CronlightSchedulers schedulers, IOptions<CronlightOptions> options) =>
         {
-            var scheduler = await factory.GetScheduler();
+            var scheduler = await Scheduler(http);
             var meta = await scheduler.GetMetaData();
+            var visible = new List<string>();
+            foreach (var s in await schedulers.All())
+                if (await CanView(http, options.Value, s.SchedulerName))
+                    visible.Add(s.SchedulerName);
             return Results.Ok(new
             {
                 meta.SchedulerName,
@@ -101,39 +205,82 @@ internal static class DashboardApi
                 meta.NumberOfJobsExecuted,
                 meta.RunningSince,
                 // Lets the UI hide controls the user cannot use; the server still enforces it
-                CanManage = await CanManage(http, options.Value),
+                CanManage = await CanManage(http, options.Value, scheduler.SchedulerName),
                 HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null,
-                options.Value.ShowScheduleAssistant
+                options.Value.ShowScheduleAssistant,
+                SecretReferences = SecretReferences.Enabled(options.Value),
+                RefreshSeconds = Math.Clamp(options.Value.RefreshSeconds, 1, 300),
+                // Every scheduler served that the user may see, the host's own first, for the dashboard's scheduler picker
+                Schedulers = visible
             });
         });
 
         api.MapGet("/job-types", (JobTypeCatalog catalog) =>
             Results.Ok(catalog.All.Where(t => !t.Hidden).OrderBy(t => t.DisplayName)));
 
-        api.MapGet("/jobs", async (ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        api.MapGet("/jobs", async (HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
-            var scheduler = await factory.GetScheduler();
+            var scheduler = await Scheduler(http);
             var keys = await scheduler.GetJobKeys(GroupMatcher<JobKey>.AnyGroup());
             var jobs = new List<JobDto>();
             foreach (var key in keys.OrderBy(k => k.Group).ThenBy(k => k.Name))
-                jobs.Add(await LoadJob(scheduler, key, catalog, options.Value));
+            {
+                if (await LoadJob(scheduler, key, catalog, options.Value) is { } job)
+                    jobs.Add(job);
+            }
             return Results.Ok(jobs);
         });
 
-        api.MapGet("/jobs/{group}/{name}", async (string group, string name, ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        // What the dashboard uses: searches, filters, counts and pages over a cheap index of every job, and
+        // loads full details only for the page shown. GET /jobs loads every job and suits small schedulers.
+        api.MapGet("/jobs/search", async (string? search, string? type, string? status, int? page, int? pageSize,
+            HttpContext http, JobIndexReader index, JobTypeCatalog catalog, IOptions<CronlightOptions> options, CancellationToken ct) =>
         {
-            var scheduler = await factory.GetScheduler();
+            if (status != null && !JobStatuses.Contains(status, StringComparer.OrdinalIgnoreCase))
+                return Results.BadRequest($"Unknown status '{status}'; expected one of {string.Join(", ", JobStatuses)}");
+
+            var scheduler = await Scheduler(http, ct);
+            var all = await index.Read(scheduler, ct);
+            var text = search?.Trim();
+            var matching = all
+                .Where(j => string.IsNullOrEmpty(text)
+                    || j.Name.Contains(text, StringComparison.OrdinalIgnoreCase)
+                    || j.Group.Contains(text, StringComparison.OrdinalIgnoreCase))
+                .Where(j => string.IsNullOrEmpty(type) || j.TypeLabel == type)
+                .Where(j => string.IsNullOrEmpty(status) || string.Equals(j.Status, status, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(j => j.Group).ThenBy(j => j.Name)
+                .ToList();
+
+            var size = Math.Clamp(pageSize ?? 50, 1, 200);
+            var pages = Math.Max(1, (matching.Count + size - 1) / size);
+            var current = Math.Clamp(page ?? 1, 1, pages);
+            var jobs = new List<JobDto>();
+            foreach (var entry in matching.Skip((current - 1) * size).Take(size))
+            {
+                if (await LoadJob(scheduler, entry.Key, catalog, options.Value) is { } job)
+                    jobs.Add(job);
+            }
+
+            var counts = new JobCountsDto(all.Count, all.Count(j => j.Status == "Active"), all.Count(j => j.Status == "Paused"),
+                all.Count(j => j.Status == "Unloadable"));
+            var types = all.Select(j => j.TypeLabel).Distinct().Order().ToList();
+            return Results.Ok(new JobPageDto(jobs, matching.Count, current, size, counts, types));
+        });
+
+        api.MapGet("/jobs/{group}/{name}", async (string group, string name, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        {
+            var scheduler = await Scheduler(http);
             var key = new JobKey(name, group);
-            return await scheduler.CheckExists(key)
-                ? Results.Ok(await LoadJob(scheduler, key, catalog, options.Value))
+            return await LoadJob(scheduler, key, catalog, options.Value) is { } job
+                ? Results.Ok(job)
                 : Results.NotFound();
         });
 
-        api.MapGet("/running", async (ISchedulerFactory factory, RunningJobsReader reader, CancellationToken ct) =>
-            Results.Ok(await reader.Read(await factory.GetScheduler(ct), ct)));
+        api.MapGet("/running", async (HttpContext http, RunningJobsReader reader, CancellationToken ct) =>
+            Results.Ok(await reader.Read(await Scheduler(http, ct), ct)));
 
         // History is optional: these return 404 unless the Cronlight.History package is registered
-        api.MapGet("/history", async (HttpContext http, ISchedulerFactory factory, string? group, string? name, string? status, long? before, int? limit, CancellationToken ct) =>
+        api.MapGet("/history", async (HttpContext http, string? group, string? name, string? status, long? before, int? limit, CancellationToken ct) =>
         {
             if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
                 return Results.NotFound("Execution history is not enabled.");
@@ -146,7 +293,7 @@ internal static class DashboardApi
                 statusFilter = parsed;
             }
 
-            var scheduler = await factory.GetScheduler(ct);
+            var scheduler = await Scheduler(http, ct);
             var pageSize = Math.Clamp(limit ?? 50, 1, 500);
             var records = await store.Query(scheduler.SchedulerName, new JobHistoryQuery
             {
@@ -164,12 +311,12 @@ internal static class DashboardApi
             });
         });
 
-        api.MapGet("/history/summary", async (HttpContext http, ISchedulerFactory factory, int? hours, CancellationToken ct) =>
+        api.MapGet("/history/summary", async (HttpContext http, int? hours, CancellationToken ct) =>
         {
             if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
                 return Results.NotFound("Execution history is not enabled.");
 
-            var scheduler = await factory.GetScheduler(ct);
+            var scheduler = await Scheduler(http, ct);
             var since = DateTimeOffset.UtcNow.AddHours(-Math.Clamp(hours ?? 24, 1, 24 * 90));
             return Results.Ok(await store.Summarize(scheduler.SchedulerName, since, ct));
         });
@@ -201,7 +348,7 @@ internal static class DashboardApi
 
     public static void MapManageEndpoints(this RouteGroupBuilder api)
     {
-        api.MapPost("/jobs", async (CreateJobRequest request, ISchedulerFactory factory, JobTypeCatalog catalog) =>
+        api.MapPost("/jobs", async (CreateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             if (!catalog.TryGet(request.Type, out var type, out var info))
                 return Results.BadRequest($"Unknown job type '{request.Type}'");
@@ -210,25 +357,41 @@ internal static class DashboardApi
             foreach (var p in info.Parameters.Where(p => p.DefaultValue != null && !data.ContainsKey(p.Key)))
                 data[p.Key] = p.DefaultValue!;
 
+            if (ReservedKey(data) is { } reserved)
+                return Results.BadRequest(reserved);
             if (ValidateParameters(info, data) is { } invalid)
                 return Results.BadRequest(invalid);
+            if (request.Retry?.Problem() is { } badRetry)
+                return Results.BadRequest(badRetry);
+            var secretKeys = SecretKeys(info);
+            if (CheckSecretReferences(http, data, secretKeys, options.Value) is { } unresolved)
+                return Results.BadRequest(unresolved);
 
             var key = new JobKey(request.Name, string.IsNullOrWhiteSpace(request.Group) ? "DEFAULT" : request.Group);
             if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
                 return Results.BadRequest(error);
 
-            var scheduler = await factory.GetScheduler();
+            var scheduler = await Scheduler(http);
             if (await scheduler.CheckExists(key))
                 return Results.Conflict($"Job {key} already exists");
             if (await FindTriggerConflict(scheduler, triggers, new HashSet<TriggerKey>()) is { } conflict)
                 return Results.Conflict(conflict);
 
+            var jobData = ToJobDataMap(data);
+            if (request.Retry != null && Retries.Store(request.Retry, type) is { } policy)
+                jobData[Retries.PolicyKey] = policy;
             var job = JobBuilder.Create(type)
                 .WithIdentity(key)
                 .WithDescription(request.Description)
-                .SetJobData(ToJobDataMap(data))
+                .SetJobData(jobData)
                 .StoreDurably()
                 .Build();
+
+            var changes = DataChanges(new Dictionary<string, object>(), job.JobDataMap, secretKeys, options.Value);
+            AddChange(changes, "description", null, request.Description);
+            AddChange(changes, "triggers", null, DescribeTriggers(triggers));
+            AddChange(changes, "retry", null, DescribeRetry(Retries.For(job)));
+            Audit.RecordChanges(http, changes);
 
             // One call stores the job and its triggers together, so a failure leaves nothing behind
             await scheduler.ScheduleJob(job, triggers, replace: false);
@@ -236,9 +399,9 @@ internal static class DashboardApi
             return Results.Created($"jobs/{key.Group}/{key.Name}", new { key.Name, key.Group });
         });
 
-        api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, ISchedulerFactory factory, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
-            var scheduler = await factory.GetScheduler();
+            var scheduler = await Scheduler(http);
             var key = new JobKey(name, group);
             var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
             if (problem != null)
@@ -247,13 +410,22 @@ internal static class DashboardApi
                 return Results.Conflict($"Job {key} has a type that cannot be loaded here and cannot be edited.");
 
             // Validate everything before mutating anything
-            if (request.Data != null && catalog.Describe(existing.JobType) is { } info && ValidateParameters(info, request.Data) is { } invalid)
+            var info = catalog.Describe(existing.JobType);
+            var secretKeys = SecretKeys(info);
+            if (request.Data != null && ReservedKey(request.Data) is { } reserved)
+                return Results.BadRequest(reserved);
+            if (request.Data != null && info != null && ValidateParameters(info, request.Data) is { } invalid)
                 return Results.BadRequest(invalid);
+            if (request.Retry?.Problem() is { } badRetry)
+                return Results.BadRequest(badRetry);
+            if (request.Data != null && CheckSecretReferences(http, request.Data, secretKeys, options.Value) is { } unresolved)
+                return Results.BadRequest(unresolved);
 
             var requested = new List<ITrigger>();
+            IReadOnlyCollection<ITrigger> current = [];
             if (request.Triggers != null)
             {
-                var current = await scheduler.GetTriggersOfJob(key);
+                current = await scheduler.GetTriggersOfJob(key);
                 if (!TryBuildTriggers(key, request.Triggers, current.Select(t => t.Key).ToList(), out requested, out var error))
                     return Results.BadRequest(error);
                 var ownCron = current.OfType<ICronTrigger>().Select(t => t.Key).ToHashSet();
@@ -261,10 +433,26 @@ internal static class DashboardApi
                     return Results.Conflict(conflict);
             }
 
-            if (request.Data != null || request.Description != null)
+            var data = request.Data == null ? new JobDataMap((IDictionary<string, object>)existing.JobDataMap) : MergeJobData(existing.JobDataMap, request.Data);
+            if (request.Retry != null)
             {
-                var data = request.Data == null ? existing.JobDataMap : MergeJobData(existing.JobDataMap, request.Data);
+                data.Remove(Retries.PolicyKey);
+                if (Retries.Store(request.Retry, existing.JobType) is { } policy)
+                    data[Retries.PolicyKey] = policy;
+            }
+            var changes = DataChanges(existing.JobDataMap, data, secretKeys, options.Value);
+            if (request.Description != null)
+                AddChange(changes, "description", existing.Description, request.Description);
+            if (request.Triggers != null)
+                AddChange(changes, "triggers", DescribeTriggers(current), DescribeTriggers(requested));
+            var retryBefore = Retries.For(existing);
+            var retryAfter = Retries.For(existing.GetJobBuilder().SetJobData(data).Build());
+            if (retryBefore != retryAfter)
+                AddChange(changes, "retry", DescribeRetry(retryBefore), DescribeRetry(retryAfter));
+            Audit.RecordChanges(http, changes);
 
+            if (request.Data != null || request.Description != null || request.Retry != null)
+            {
                 var updated = existing.GetJobBuilder()
                     .WithDescription(request.Description ?? existing.Description)
                     .SetJobData(data)
@@ -278,19 +466,141 @@ internal static class DashboardApi
             return Results.NoContent();
         });
 
-        api.MapPost("/jobs/{group}/{name}/pause", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
-            OnJob(f, o.Value, group, name, (s, k) => s.PauseJob(k)));
-        api.MapPost("/jobs/{group}/{name}/resume", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
-            OnJob(f, o.Value, group, name, (s, k) => s.ResumeJob(k)));
-        api.MapPost("/jobs/{group}/{name}/trigger", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
-            OnJob(f, o.Value, group, name, (s, k) => s.TriggerJob(k)));
-        api.MapDelete("/jobs/{group}/{name}", (string group, string name, ISchedulerFactory f, IOptions<CronlightOptions> o) =>
-            OnJob(f, o.Value, group, name, (s, k) => s.DeleteJob(k)));
+        api.MapPost("/jobs/{group}/{name}/pause", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
+            OnJob(http, o.Value, group, name, (s, k) => s.PauseJob(k)));
+        api.MapPost("/jobs/{group}/{name}/resume", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
+            OnJob(http, o.Value, group, name, (s, k) => s.ResumeJob(k)));
+        api.MapPost("/jobs/{group}/{name}/trigger", RunJob);
+        api.MapDelete("/jobs/{group}/{name}", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
+            OnJob(http, o.Value, group, name, (s, k) => s.DeleteJob(k)));
+
+        api.MapPost("/jobs/{group}/{name}/runs/{fireInstanceId}/cancel", CancelRun);
+        api.MapPost("/jobs/{group}/{name}/retries/{trigger}/cancel-retry", CancelRetry);
     }
 
-    private static async Task<IResult> OnJob(ISchedulerFactory factory, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)
+    /// <summary>
+    /// Unschedules a waiting retry. The attempt that failed stays in history as Retried, and no alert is sent for it:
+    /// cancelling is a decision someone made.
+    /// </summary>
+    private static async Task<IResult> CancelRetry(string group, string name, string trigger, HttpContext http,
+        IOptions<CronlightOptions> options)
     {
-        var scheduler = await factory.GetScheduler();
+        var scheduler = await Scheduler(http);
+        var key = new JobKey(name, group);
+        var (_, problem) = await GetManageableJob(scheduler, key, options.Value);
+        if (problem != null)
+            return problem;
+
+        var triggerKey = new TriggerKey(trigger, Retries.TriggerGroup);
+        if (await scheduler.GetTrigger(triggerKey) is not { } retry || !retry.JobKey.Equals(key))
+            return Results.NotFound($"Job {key} has no waiting retry {trigger}; it may have run already.");
+        // Quartz deletes a non-durable job together with its last trigger
+        if (await scheduler.GetJobDetail(key) is { Durable: false } && (await scheduler.GetTriggersOfJob(key)).Count == 1)
+            return Results.Conflict($"The retry is job {key}'s only trigger, and the job is not durable: cancelling it would delete the job.");
+
+        await scheduler.UnscheduleJob(triggerKey);
+        return Results.NoContent();
+    }
+
+    /// <summary>
+    /// Runs the job now, optionally with some of its data replaced for this run. The replacements go in the run's
+    /// trigger data, so the saved job is unchanged and the job reads them as usual from its merged data.
+    /// </summary>
+    private static async Task<IResult> RunJob(string group, string name, RunJobRequest? request, HttpContext http,
+        JobTypeCatalog catalog, IOptions<CronlightOptions> options)
+    {
+        var scheduler = await Scheduler(http);
+        var key = new JobKey(name, group);
+        var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
+        if (problem != null)
+            return problem;
+
+        var changes = new Dictionary<string, CronlightAuditChange>();
+        if (request?.RetryOf is { Length: > 0 } retryOf)
+            changes["retryOf"] = new(null, retryOf.Length <= 200 ? retryOf : retryOf[..200]);
+
+        var data = new JobDataMap();
+        var requested = request?.Data ?? new();
+        if (requested.Count > 0)
+        {
+            if (existing == null)
+                return Results.Conflict($"Job {key} has a type that cannot be loaded here and cannot be run with different data.");
+            if (ReservedKey(requested) is { } reserved)
+                return Results.BadRequest(reserved);
+
+            var saved = existing.JobDataMap;
+            // A masked or unchanged value is the saved one: nothing to replace
+            var overrides = requested
+                .Where(kv => kv.Value != Mask && (!saved.TryGetValue(kv.Key, out var old) || old?.ToString() != kv.Value))
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+            var info = catalog.Describe(existing.JobType);
+            var secretKeys = SecretKeys(info);
+            if (info != null)
+            {
+                var merged = saved.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? "");
+                foreach (var (k, v) in overrides)
+                    merged[k] = v;
+                if (ValidateParameters(info, merged) is { } invalid)
+                    return Results.BadRequest(invalid);
+            }
+            if (CheckSecretReferences(http, overrides, secretKeys, options.Value) is { } unresolved)
+                return Results.BadRequest(unresolved);
+
+            foreach (var (k, v) in overrides)
+            {
+                var old = saved.TryGetValue(k, out var o) ? o : null;
+                // Keeps the saved value's type, as editing the job does
+                data[k] = old is not (null or string) ? TryConvert(v, old.GetType()) ?? v : v;
+                changes[$"data.{k}"] = new(Display(k, old?.ToString(), secretKeys, options.Value), Display(k, v, secretKeys, options.Value));
+            }
+        }
+        Audit.RecordChanges(http, changes);
+
+        await scheduler.TriggerJob(key, data);
+        return Results.NoContent();
+    }
+
+    /// <summary>
+    /// Asks a running job to stop by cancelling its <see cref="IJobExecutionContext.CancellationToken"/>.
+    /// Quartz can only interrupt runs on its own node, so a run on another cluster node is refused.
+    /// </summary>
+    private static async Task<IResult> CancelRun(string group, string name, string fireInstanceId, HttpContext http,
+        RunningJobsReader reader, IOptions<CronlightOptions> options, CancellationToken ct)
+    {
+        var scheduler = await Scheduler(http, ct);
+        var key = new JobKey(name, group);
+        var (_, problem) = await GetManageableJob(scheduler, key, options.Value);
+        if (problem != null)
+            return problem;
+
+        var local = (await scheduler.GetCurrentlyExecutingJobs(ct))
+            .FirstOrDefault(c => c.FireInstanceId == fireInstanceId && c.JobDetail.Key.Equals(key));
+        if (local != null)
+        {
+            if (local.CancellationToken.IsCancellationRequested)
+                return Results.Accepted(value: new { Message = "Cancellation was already requested." });
+            local.Put(CronlightContextKeys.CancelledBy, Audit.UserName(http.User));
+            await scheduler.Interrupt(fireInstanceId, ct);
+            return Results.Accepted(value: new { Message = "Cancellation requested. The job stops when it next checks its cancellation token." });
+        }
+
+        var elsewhere = (await reader.Read(scheduler, ct)).Jobs
+            .FirstOrDefault(j => j.FireInstanceId == fireInstanceId && j.Group == group && j.Name == name);
+        return elsewhere != null
+            ? Results.Problem(
+                title: "This run is on another node.",
+                detail: $"It runs on {elsewhere.InstanceName}. Only the node running a job can cancel it; open the dashboard there.",
+                statusCode: StatusCodes.Status409Conflict)
+            : Results.Problem(
+                title: "This run is not running.",
+                detail: "It has already finished, or was never started.",
+                statusCode: StatusCodes.Status404NotFound);
+    }
+
+    private static async Task<IResult> OnJob(HttpContext http, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)
+    {
+        var scheduler = await Scheduler(http);
         var key = new JobKey(name, group);
         var (_, problem) = await GetManageableJob(scheduler, key, options);
         if (problem != null)
@@ -342,7 +652,8 @@ internal static class DashboardApi
                 await scheduler.ScheduleJob(trigger);
                 continue;
             }
-            if (old.CronExpressionString == trigger.CronExpressionString && old.TimeZone.Id == trigger.TimeZone.Id)
+            if (old.CronExpressionString == trigger.CronExpressionString && old.TimeZone.Id == trigger.TimeZone.Id
+                && old.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing == (trigger.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing))
                 continue;
 
             // Rescheduling replaces the trigger, so carry over a paused state explicitly
@@ -378,6 +689,9 @@ internal static class DashboardApi
     private static JobDataMap MergeJobData(JobDataMap existing, Dictionary<string, string> requested)
     {
         var data = new JobDataMap();
+        // The form never shows Cronlight's own keys, so they are kept rather than read as removed
+        foreach (var (k, v) in existing.Where(kv => Retries.IsReserved(kv.Key)))
+            data[k] = v;
         foreach (var (k, v) in requested)
         {
             var known = existing.TryGetValue(k, out var old);
@@ -459,13 +773,21 @@ internal static class DashboardApi
             triggers.Add(TriggerBuilder.Create()
                 .WithIdentity(name, group)
                 .ForJob(key)
-                .WithCronSchedule(r.CronExpression.Trim(), c => c.InTimeZone(tz))
+                .WithCronSchedule(r.CronExpression.Trim(), c =>
+                {
+                    c.InTimeZone(tz);
+                    if (r.SkipMissed)
+                        c.WithMisfireHandlingInstructionDoNothing();
+                })
                 .Build());
         }
         return true;
     }
 
-    private static async Task<JobDto> LoadJob(IScheduler scheduler, JobKey key, JobTypeCatalog catalog, CronlightOptions options)
+    private static readonly string[] JobStatuses = ["Active", "Paused", "Unloadable"];
+
+    /// <summary>The job as the dashboard shows it, or null when it does not exist (e.g. deleted meanwhile).</summary>
+    private static async Task<JobDto?> LoadJob(IScheduler scheduler, JobKey key, JobTypeCatalog catalog, CronlightOptions options)
     {
         IJobDetail? detail;
         try
@@ -479,17 +801,18 @@ internal static class DashboardApi
                 ex.InnerException?.Message ?? ex.Message, new Dictionary<string, string?>(), await LoadTriggers(scheduler, key));
         }
 
-        var info = catalog.Describe(detail!.JobType);
-        var secretKeys = info?.Parameters.Where(p => p.Type == nameof(JobParameterType.Secret)).Select(p => p.Key).ToHashSet()
-            ?? new HashSet<string>();
+        if (detail == null)
+            return null;
+        var info = catalog.Describe(detail.JobType);
+        var secretKeys = SecretKeys(info);
 
-        var data = detail.JobDataMap.ToDictionary(
+        var data = detail.JobDataMap.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(
             kv => kv.Key,
-            kv => IsSensitive(kv.Key, secretKeys, options) ? Mask : kv.Value?.ToString()
+            kv => Display(kv.Key, kv.Value?.ToString(), secretKeys, options)
         );
 
         return new JobDto(key.Name, key.Group, detail.Description, detail.JobType.FullName, info?.DisplayName,
-            detail.Durable, true, null, data, await LoadTriggers(scheduler, key));
+            detail.Durable, true, null, data, await LoadTriggers(scheduler, key), Retries.For(detail));
     }
 
     private static async Task<IReadOnlyList<TriggerDto>> LoadTriggers(IScheduler scheduler, JobKey key)
@@ -502,22 +825,33 @@ internal static class DashboardApi
             result.Add(new TriggerDto(
                 trigger.Key.Name,
                 trigger.Key.Group,
-                cron != null ? "Cron" : trigger is ISimpleTrigger ? "Simple" : trigger.GetType().Name,
+                cron != null ? "Cron" : trigger.Key.Group == Retries.TriggerGroup ? "Retry" : trigger is ISimpleTrigger ? "Simple" : trigger.GetType().Name,
                 cron?.CronExpressionString,
                 cron?.TimeZone.Id,
                 state.ToString(),
                 trigger.GetNextFireTimeUtc(),
-                trigger.GetPreviousFireTimeUtc()
+                trigger.GetPreviousFireTimeUtc(),
+                Misfires.Instruction(trigger),
+                trigger.Key.Group == Retries.TriggerGroup && int.TryParse(trigger.JobDataMap.GetString(Retries.AttemptKey), out var attempt) ? attempt : null
             ));
         }
         return result;
     }
 
-    private static async Task<bool> CanManage(HttpContext http, CronlightOptions options)
+    private static async Task<bool> CanManage(HttpContext http, CronlightOptions options, string schedulerName)
     {
         if (options.ReadOnly)
             return false;
-        var policy = options.ManagePolicy ?? options.ViewPolicy;
+        options.Schedulers.TryGetValue(schedulerName, out var access);
+        return await Authorized(http, options.ManagePolicy ?? options.ViewPolicy)
+            && await Authorized(http, access?.ManagePolicy ?? access?.ViewPolicy);
+    }
+
+    private static async Task<bool> CanView(HttpContext http, CronlightOptions options, string schedulerName) =>
+        !options.Schedulers.TryGetValue(schedulerName, out var access) || await Authorized(http, access.ViewPolicy);
+
+    private static async Task<bool> Authorized(HttpContext http, string? policy)
+    {
         if (policy == null)
             return true;
         // Resolved lazily: hosts without policies need not register authorization at all
@@ -546,9 +880,64 @@ internal static class DashboardApi
     private static JobDataMap ToJobDataMap(Dictionary<string, string> data) =>
         new((IDictionary<string, object>)data.ToDictionary(kv => kv.Key, kv => (object)kv.Value));
 
-    private static bool IsSensitive(string key, HashSet<string> secretKeys, CronlightOptions options) =>
+    internal static HashSet<string> SecretKeys(JobTypeInfo? info) =>
+        info?.Parameters.Where(p => p.Type == nameof(JobParameterType.Secret)).Select(p => p.Key).ToHashSet() ?? new HashSet<string>();
+
+    /// <summary>Job data that differs between two maps, by "data.&lt;key&gt;", for the audit log. Sensitive values are masked.</summary>
+    private static Dictionary<string, CronlightAuditChange> DataChanges(
+        IDictionary<string, object> before, IDictionary<string, object> after, HashSet<string> secretKeys, CronlightOptions options)
+    {
+        var changes = new Dictionary<string, CronlightAuditChange>();
+        // Cronlight's own keys are audited as what they mean, e.g. "retry"
+        foreach (var key in before.Keys.Union(after.Keys).Where(k => !Retries.IsReserved(k)))
+        {
+            var old = before.TryGetValue(key, out var o) ? o?.ToString() : null;
+            var @new = after.TryGetValue(key, out var n) ? n?.ToString() : null;
+            if (old == @new)
+                continue;
+            changes[$"data.{key}"] = new(Display(key, old, secretKeys, options), Display(key, @new, secretKeys, options));
+        }
+        return changes;
+    }
+
+    private static void AddChange(Dictionary<string, CronlightAuditChange> changes, string field, string? before, string? after)
+    {
+        if (before != after)
+            changes[field] = new(before, after);
+    }
+
+    private static string? DescribeRetry(JobRetryPolicy? policy) =>
+        policy == null ? null
+        : $"{policy.MaxRetries} {(policy.MaxRetries == 1 ? "retry" : "retries")}, {policy.DelaySeconds}s {(policy.Exponential ? "doubling" : "apart")}"
+          + (policy.RetryOn is { Count: > 0 } types ? $", only on {string.Join(", ", types)}" : "");
+
+    private static string? ReservedKey(Dictionary<string, string> data) =>
+        data.Keys.FirstOrDefault(Retries.IsReserved) is { } key
+            ? $"'{key}' is reserved: job data keys starting with '{Retries.ReservedPrefix}' are Cronlight's own"
+            : null;
+
+    private static string? DescribeTriggers(IEnumerable<ITrigger> triggers) =>
+        string.Join("; ", triggers.OfType<ICronTrigger>().Select(t => $"{t.CronExpressionString} ({t.TimeZone.Id}{(t.MisfireInstruction == MisfireInstruction.CronTrigger.DoNothing ? ", skips missed" : "")})")) is { Length: > 0 } text
+            ? text
+            : null;
+
+    internal static bool IsSensitive(string key, HashSet<string> secretKeys, CronlightOptions options) =>
         secretKeys.Contains(key)
         || options.SensitiveKeyPatterns.Any(p => key.Contains(p, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// A job data value as the API and audit log show it: sensitive values are masked, except secret
+    /// references, which name a secret without revealing it and are shown so people can see which one is used.
+    /// </summary>
+    internal static string? Display(string key, string? value, HashSet<string> secretKeys, CronlightOptions options) =>
+        value == null || !IsSensitive(key, secretKeys, options) ? value
+        : SecretReferences.Enabled(options) && SecretReferences.IsReference(value) ? value
+        : Mask;
+
+    /// <summary>Refuses secret references that would fail when the job runs, so the mistake shows when saving.</summary>
+    private static string? CheckSecretReferences(HttpContext http, Dictionary<string, string> data, HashSet<string> secretKeys, CronlightOptions options) =>
+        SecretReferences.Check(data, key => IsSensitive(key, secretKeys, options), options,
+            http.RequestServices.GetRequiredService<IConfiguration>());
 
     private static bool TryResolveTimeZone(string? id, out TimeZoneInfo tz)
     {

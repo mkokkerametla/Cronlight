@@ -25,13 +25,21 @@ builder.Services.AddQuartz(q =>
     });
 });
 builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
+// A second, in-memory scheduler built in code, to show the dashboard's scheduler picker
+builder.Services.AddHostedService<ReportsScheduler>();
 
 // Execution history, stored next to the Quartz tables (QRTZ_CRONLIGHT_HISTORY)
 builder.Services.AddCronlightHistory(o => o.Retention = TimeSpan.FromDays(7));
 
-// HTTP request job: lets people schedule API calls from the UI. Restrict AllowedHosts in real apps.
-builder.Services.AddHttpClient(HttpJob.ClientName);
-builder.Services.Configure<HttpJobOptions>(builder.Configuration.GetSection("HttpJob"));
+// HTTP request job: lets people schedule API calls from the UI, to the hosts listed here only
+builder.Services.AddHttpJob(o =>
+{
+    // The demo calls its own /demo endpoints on this machine. Real apps list their APIs' hosts
+    // instead and leave AllowPrivateNetworks off.
+    o.AllowedHosts.AddRange(["127.0.0.1", "localhost"]);
+    o.AllowPrivateNetworks = true;
+    builder.Configuration.GetSection("HttpJob").Bind(o);
+});
 
 // Demo auth: the "X-Demo-Role" header becomes a role claim. Real hosts use their own scheme.
 builder.Services.AddAuthentication("Demo").AddScheme<AuthenticationSchemeOptions, DemoAuthHandler>("Demo", null);
@@ -41,8 +49,24 @@ builder.Services.AddAuthorization(o =>
     o.AddPolicy("QuartzAdmins", p => p.RequireRole("admin"));
 });
 
+// Alerts when a job fails twice in a row, and when it recovers. Without webhooks or email they are only
+// logged; add them under "CronlightAlerts:Webhooks" and "CronlightAlerts:Email" in configuration.
+builder.Services.AddCronlightAlerts(o =>
+{
+    o.AfterConsecutiveFailures = 2;
+    builder.Configuration.GetSection("CronlightAlerts").Bind(o);
+});
+
+// Demo secret; real apps keep these in user secrets, environment variables or a key vault
+builder.Configuration["JobSecrets:Demo:OrdersToken"] ??= "Bearer demo-token";
+
 builder.Services.AddCronlight(o =>
 {
+    // Off by default, since what users type goes to ChatGPT or Google; the demo shows it
+    o.ShowScheduleAssistant = true;
+    // Secret parameters may name a secret from configuration instead of holding it, e.g.
+    // authorization = secret:Demo:OrdersToken for the HTTP job calling /demo/orders
+    o.SecretsSection = "JobSecrets";
     // Bound from config so the spike can flip modes without recompiling
     builder.Configuration.GetSection("Cronlight").Bind(o);
 });

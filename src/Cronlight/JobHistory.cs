@@ -8,7 +8,20 @@ public enum JobExecutionStatus
     Running,
     Succeeded,
     Failed,
-    Vetoed
+    Vetoed,
+
+    /// <summary>Cancelled while running: its cancellation token was cancelled, from the dashboard or by the host.</summary>
+    Cancelled,
+
+    /// <summary>Failed, and another attempt is scheduled by the job's retry policy.</summary>
+    Retried,
+
+    /// <summary>
+    /// Not a run: the trigger missed its fire time by more than Quartz's misfire threshold. The record's
+    /// scheduled time is the fire time missed, its fired time when Quartz noticed, and its error says what Quartz
+    /// did about it.
+    /// </summary>
+    Misfired
 }
 
 /// <summary>One execution of a job, as recorded by the Cronlight.History listener.</summary>
@@ -30,6 +43,15 @@ public record JobExecutionRecord
     public required JobExecutionStatus Status { get; init; }
     public string? Error { get; init; }
     public int RefireCount { get; init; }
+
+    /// <summary>1 for a first attempt, 2 for its first automatic retry, and so on.</summary>
+    public int Attempt { get; init; } = 1;
+
+    /// <summary>
+    /// The run's own data: its trigger's, such as the values of a run with different data, which its retries carry
+    /// too. Null when the run used only the job's saved data. Sensitive values are masked, except secret references.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Data { get; init; }
 }
 
 public record JobHistoryQuery

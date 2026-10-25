@@ -5,6 +5,7 @@ export const jobTypes = {
   plain: 'Cronlight.SampleHost.PlainJob',
   flaky: 'Cronlight.SampleHost.FlakyJob',
   http: 'Cronlight.SampleHost.HttpJob',
+  slow: 'Cronlight.SampleHost.SlowJob',
 } as const
 
 /** Job names are unique per test, since all tests share one scheduler. */
@@ -29,6 +30,19 @@ export async function openDashboard(page: Page) {
   await expect(page.getByRole('tab', { name: /Jobs/ })).toBeVisible()
 }
 
+/**
+ * Searches the job list and waits for the server's answer. The search applies after a short pause in
+ * typing and clears any selection, so acting on the list before it applies would act on the wrong jobs.
+ */
+export async function searchJobs(page: Page, text: string) {
+  const answered = page.waitForResponse(response => {
+    const url = new URL(response.url())
+    return url.pathname.endsWith('/api/jobs/search') && url.searchParams.get('search') === text
+  })
+  await page.getByLabel('Search jobs').fill(text)
+  await answered
+}
+
 /** The jobs table row for a job, found by its name. */
 export const jobRow = (page: Page, name: string) =>
   page.getByRole('row').filter({ has: page.getByText(name, { exact: true }) })
@@ -37,4 +51,34 @@ export const jobRow = (page: Page, name: string) =>
 export async function choose(page: Page, trigger: ReturnType<Page['locator']>, option: string | RegExp) {
   await trigger.click()
   await page.getByRole('option', { name: option }).click()
+}
+
+/** Starts a job once through the API. */
+export async function triggerJob(request: APIRequestContext, group: string, name: string) {
+  const response = await request.post(`api/jobs/${group}/${name}/trigger`)
+  expect(response.ok(), await response.text()).toBe(true)
+}
+
+/**
+ * Makes this page refresh every `seconds`, whatever the server says. Tests refresh every second, which is
+ * too soon for one that must act on a view before the next refresh replaces it.
+ */
+export async function refreshEvery(page: Page, seconds: number) {
+  await page.route('**/api/scheduler', async route => {
+    const response = await route.fetch()
+    await route.fulfill({ response, json: { ...(await response.json()), refreshSeconds: seconds } })
+  })
+}
+
+/** A stat card, by its label. Its accessible name is the count followed by the label. */
+export const statCard = (page: Page, label: string) =>
+  page.getByRole('button', { name: new RegExp(`^\\d+\\s*${escapeRegExp(label)}`) })
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Number of recorded runs of a job, optionally only those with one outcome, read through the API. */
+export async function runCount(request: APIRequestContext, group: string, name: string, status?: string) {
+  const query = new URLSearchParams({ group, name, limit: '500', ...(status && { status }) })
+  const response = await request.get(`api/history?${query}`)
+  return ((await response.json()) as { records: unknown[] }).records.length
 }

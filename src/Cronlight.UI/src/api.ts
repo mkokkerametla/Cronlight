@@ -1,16 +1,42 @@
 import type { Job } from '@/types'
 
+const SCHEDULER_PARAM = 'scheduler'
+
+// The scheduler every request is for, from the page's ?scheduler=; null for the host's own
+let scheduler: string | null =
+  new URLSearchParams(window.location.search).get(SCHEDULER_PARAM) || null
+
+export const currentScheduler = () => scheduler
+
+/** Sends later requests to this scheduler (null for the host's own), and keeps it in the page's URL for reloads and links. */
+export function selectScheduler(name: string | null) {
+  scheduler = name
+  const url = new URL(window.location.href)
+  if (name) url.searchParams.set(SCHEDULER_PARAM, name)
+  else url.searchParams.delete(SCHEDULER_PARAM)
+  window.history.replaceState(window.history.state, '', url)
+}
+
+const forScheduler = (path: string) =>
+  scheduler
+    ? `${path}${path.includes('?') ? '&' : '?'}${SCHEDULER_PARAM}=${encodeURIComponent(scheduler)}`
+    : path
+
 // Relative to the page, so it resolves to {prefix}/api/... wherever the dashboard is mapped.
 // Same-origin cookies flow automatically, so host cookie auth works without extra setup.
 export async function api<T = void>(
   path: string,
   { method = 'GET', body, signal }: { method?: string; body?: unknown; signal?: AbortSignal } = {}
 ): Promise<T> {
-  const res = await fetch(`api/${path}`, {
+  const res = await fetch(`api/${forScheduler(path)}`, {
     method,
     signal,
     credentials: 'same-origin',
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    // The server refuses changes without this header, which another site cannot add (CSRF protection)
+    headers: {
+      'X-Cronlight-Request': '1',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) throw new Error(await errorMessage(res))

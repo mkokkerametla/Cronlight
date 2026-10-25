@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -40,7 +41,11 @@ public sealed class TestHost : IAsyncDisposable
         TestDatabase? database = null,
         Action<JobHistoryOptions>? history = null,
         bool useProperties = true,
-        Action<IServiceCollection>? services = null)
+        Action<IServiceCollection>? services = null,
+        bool ramJobStore = false,
+        Dictionary<string, string?>? settings = null,
+        bool clustered = false,
+        TimeSpan? misfireThreshold = null)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
         var schedulerName = $"test-{id}";
@@ -49,6 +54,8 @@ public sealed class TestHost : IAsyncDisposable
 
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = environment });
         builder.WebHost.UseTestServer();
+        if (settings != null)
+            builder.Configuration.AddInMemoryCollection(settings);
         // Quartz's LogProvider is process-static and captures the first host's ILoggerFactory.
         // A shared instance (which DI never disposes) keeps later hosts from hitting a disposed one.
         builder.Logging.ClearProviders();
@@ -57,12 +64,19 @@ public sealed class TestHost : IAsyncDisposable
         builder.Services.AddQuartz(q =>
         {
             q.SchedulerName = schedulerName;
+            if (misfireThreshold is { } threshold)
+                q.MisfireThreshold = threshold;
+            // Quartz's default in-memory store, as many hosts use: nothing Cronlight can read directly
+            if (ramJobStore)
+                return;
             q.UsePersistentStore(store =>
             {
                 // Off lets job data hold non-string values, as many host apps do
                 store.UseProperties = useProperties;
                 database.UseFor(store, $"ds-{id}");
                 store.UseNewtonsoftJsonSerializer();
+                if (clustered)
+                    store.UseClustering();
             });
         });
         builder.Services.AddQuartzHostedService();
@@ -83,19 +97,33 @@ public sealed class TestHost : IAsyncDisposable
             configure?.Invoke(o);
         });
 
-        var app = builder.Build();
-        app.UseAuthentication();
-        app.UseAuthorization();
-        app.MapCronlight("/cronlight");
-        await app.StartAsync();
-
-        return new TestHost(app, schedulerName, database);
+        WebApplication? app = null;
+        try
+        {
+            app = builder.Build();
+            app.UseAuthentication();
+            app.UseAuthorization();
+            app.MapCronlight("/cronlight");
+            await app.StartAsync();
+            return new TestHost(app, schedulerName, database);
+        }
+        catch
+        {
+            // Tests that expect startup to fail get no host to dispose, so clean up here
+            if (app != null)
+                await app.DisposeAsync();
+            database.Cleanup();
+            throw;
+        }
     }
 
-    public HttpClient Client(string? role = null)
+    /// <summary>A client that calls the API as the dashboard does, unless <paramref name="asDashboard"/> is false.</summary>
+    public HttpClient Client(string? role = null, bool asDashboard = true)
     {
         var client = app.GetTestClient();
         client.BaseAddress = new Uri(client.BaseAddress!, "/cronlight/");
+        if (asDashboard)
+            client.DefaultRequestHeaders.Add("X-Cronlight-Request", "1");
         if (role != null)
             client.DefaultRequestHeaders.Add(HeaderRoleAuthHandler.Header, role);
         return client;

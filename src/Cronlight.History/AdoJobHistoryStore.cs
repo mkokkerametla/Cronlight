@@ -1,5 +1,7 @@
 using System.Data.Common;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace Cronlight.History;
@@ -15,11 +17,23 @@ internal sealed class AdoJobHistoryStore(
     bool createTable,
     ILogger<AdoJobHistoryStore> logger) : IJobHistoryStore
 {
-    private const string InsertColumns =
+    private const string BaseColumns =
         "SCHED_NAME, ENTRY_ID, INSTANCE_NAME, JOB_NAME, JOB_GROUP, JOB_TYPE, TRIGGER_NAME, TRIGGER_GROUP, " +
         "SCHEDULED_TIME, FIRED_TIME, FINISHED_TIME, DURATION_MS, STATUS, ERROR, REFIRE_COUNT";
 
-    private const string Columns = "ID, " + InsertColumns;
+    // Added after the first release: ATTEMPT with retries, DATA for repeating a run exactly. A table created by an
+    // earlier version gets them at startup, unless CreateTable is off; then history is written without them.
+    private const string AttemptColumn = "ATTEMPT";
+    private const string DataColumn = "DATA";
+    private static readonly (string Column, string Purpose)[] AddedColumns =
+        [(AttemptColumn, "retry attempts are not recorded"), (DataColumn, "each run's own data is not kept")];
+    private volatile string[] addedColumns = AddedColumns.Select(c => c.Column).ToArray();
+
+    private bool Has(string column) => addedColumns.Contains(column);
+    private string InsertColumns => string.Join(", ", [BaseColumns, .. addedColumns]);
+    private string Columns => "ID, " + InsertColumns;
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     // The writer initializes the store in the background at startup. Until then the table may not exist yet,
     // so reads return no history instead of failing; once initialization has failed, reads fail again so the
@@ -49,7 +63,11 @@ internal sealed class AdoJobHistoryStore(
     {
         await using var connection = await dataSource.OpenConnection(cancellationToken);
         if (await TableExists(connection, cancellationToken))
+        {
+            await AddMissingColumns(connection, cancellationToken);
+            await AddMissingIndexes(connection, cancellationToken);
             return;
+        }
 
         if (!createTable)
             throw new InvalidOperationException(
@@ -167,6 +185,95 @@ internal sealed class AdoJobHistoryStore(
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Columns added after the first release. With CreateTable off a missing column is reported, and history is
+    /// written without it.
+    /// </summary>
+    private async Task AddMissingColumns(DbConnection connection, CancellationToken cancellationToken)
+    {
+        var present = new List<string>();
+        foreach (var (column, purpose) in AddedColumns)
+        {
+            try
+            {
+                await using var probe = connection.CreateCommand();
+                probe.CommandText = $"SELECT {column} FROM {tableName} WHERE 1 = 0";
+                await probe.ExecuteScalarAsync(cancellationToken);
+                present.Add(column);
+                continue;
+            }
+            catch (DbException)
+            {
+            }
+
+            var statement = $"ALTER TABLE {tableName} ADD {column} {ColumnType(column)} NULL";
+            if (!createTable)
+            {
+                logger.LogWarning("History table {Table} has no {Column} column, so {Purpose}. Add it with: {Statement}",
+                    tableName, column, purpose, statement);
+                continue;
+            }
+            logger.LogInformation("Adding column {Column} to history table {Table}", column, tableName);
+            await using var command = connection.CreateCommand();
+            command.CommandText = statement;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            present.Add(column);
+        }
+        addedColumns = present.ToArray();
+    }
+
+    private string ColumnType(string column) => (column, dialect) switch
+    {
+        (AttemptColumn, _) when dialect == SqlDialect.PostgreSql || dialect == SqlDialect.Sqlite => "INTEGER",
+        (AttemptColumn, _) => "INT",
+        (_, _) when dialect == SqlDialect.SqlServer => "NVARCHAR(MAX)",
+        (_, _) when dialect == SqlDialect.MySql => "MEDIUMTEXT",
+        _ => "TEXT",
+    };
+
+    /// <summary>
+    /// Indexes added after the first release, which tables created by an earlier version lack. With CreateTable
+    /// off the host owns the schema, so a missing index is only reported, with the statement to add it.
+    /// </summary>
+    private async Task AddMissingIndexes(DbConnection connection, CancellationToken cancellationToken)
+    {
+        // Keeps filtering every job's runs by outcome (e.g. all failures) from scanning the whole table
+        foreach (var statement in dialect.SchemaStatements(tableName).Where(s => s.Contains("_STATUS ON", StringComparison.Ordinal)))
+        {
+            var index = Regex.Match(statement, @"CREATE INDEX (?:\S+\.)?(\S+) ON").Groups[1].Value;
+            if (await IndexExists(connection, index, cancellationToken))
+                continue;
+            if (!createTable)
+            {
+                logger.LogWarning("History table {Table} has no index {Index}, so filtering runs by outcome is slow on large tables. Add it with: {Statement}",
+                    tableName, index, statement);
+                continue;
+            }
+            logger.LogInformation("Adding index {Index} to history table {Table}", index, tableName);
+            await using var command = connection.CreateCommand();
+            command.CommandText = statement;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private async Task<bool> IndexExists(DbConnection connection, string index, CancellationToken cancellationToken)
+    {
+        var dot = tableName.LastIndexOf('.');
+        var table = tableName[(dot + 1)..];
+        await using var command = connection.CreateCommand();
+        command.CommandText = dialect switch
+        {
+            _ when dialect == SqlDialect.SqlServer => $"SELECT COUNT(*) FROM sys.indexes WHERE name = {P("index")} AND object_id = OBJECT_ID({P("table")})",
+            // Unquoted names are stored in lower case
+            _ when dialect == SqlDialect.PostgreSql => $"SELECT COUNT(*) FROM pg_indexes WHERE indexname = lower({P("index")}) AND tablename = lower({P("table")})",
+            _ when dialect == SqlDialect.MySql => $"SELECT COUNT(*) FROM information_schema.STATISTICS WHERE INDEX_NAME = {P("index")} AND TABLE_NAME = {P("table")} AND TABLE_SCHEMA = DATABASE()",
+            _ => $"SELECT COUNT(*) FROM {tableName[..(dot + 1)]}sqlite_master WHERE type = 'index' AND name = {P("index")}",
+        };
+        Add(command, "index", index);
+        Add(command, "table", dialect == SqlDialect.SqlServer ? tableName : table);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)) > 0;
+    }
+
     private async Task<bool> TableExists(DbConnection connection, CancellationToken cancellationToken)
     {
         // Portable existence check: selecting nothing from a missing table fails on every database
@@ -189,7 +296,8 @@ internal sealed class AdoJobHistoryStore(
         command.CommandText =
             $"INSERT INTO {tableName} ({InsertColumns}) VALUES ({P("sched")}, {P("entry")}, {P("instance")}, " +
             $"{P("job")}, {P("group")}, {P("type")}, {P("trigger")}, {P("triggerGroup")}, {P("scheduled")}, {P("fired")}, " +
-            $"{P("finished")}, {P("duration")}, {P("status")}, {P("error")}, {P("refire")})";
+            $"{P("finished")}, {P("duration")}, {P("status")}, {P("error")}, {P("refire")}" +
+            string.Concat(addedColumns.Select(c => $", {P(c.ToLowerInvariant())}")) + ")";
         Add(command, "sched", r.SchedulerName);
         Add(command, "entry", r.FireInstanceId);
         Add(command, "instance", r.InstanceName);
@@ -205,14 +313,20 @@ internal sealed class AdoJobHistoryStore(
         Add(command, "status", r.Status.ToString());
         Add(command, "error", r.Error);
         Add(command, "refire", r.RefireCount);
+        if (Has(AttemptColumn))
+            Add(command, "attempt", r.Attempt);
+        if (Has(DataColumn))
+            Add(command, "data", r.Data is { Count: > 0 } data ? JsonSerializer.Serialize(data, Json) : null);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static JobExecutionRecord Read(DbDataReader reader)
+    private JobExecutionRecord Read(DbDataReader reader)
     {
         string? Text(int i) => reader.IsDBNull(i) ? null : reader.GetString(i);
         long? Long(int i) => reader.IsDBNull(i) ? null : Convert.ToInt64(reader.GetValue(i));
         DateTimeOffset? Time(int i) => Long(i) is { } ticks ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
+        // Added columns follow the base ones, in the order present
+        int? Added(string column) => Array.IndexOf(addedColumns, column) is >= 0 and var i ? 16 + i : null;
 
         return new JobExecutionRecord
         {
@@ -231,7 +345,9 @@ internal sealed class AdoJobHistoryStore(
             DurationMs = Long(12),
             Status = Enum.Parse<JobExecutionStatus>(reader.GetString(13)),
             Error = Text(14),
-            RefireCount = Convert.ToInt32(reader.GetValue(15))
+            RefireCount = Convert.ToInt32(reader.GetValue(15)),
+            Attempt = Added(AttemptColumn) is { } a && Long(a) is { } attempt ? (int)attempt : 1,
+            Data = Added(DataColumn) is { } d && Text(d) is { } json ? JsonSerializer.Deserialize<Dictionary<string, string>>(json, Json) : null
         };
     }
 

@@ -1,5 +1,17 @@
-import { Coffee } from 'lucide-react'
+import { Coffee, OctagonX } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Table,
   TableBody,
@@ -9,10 +21,24 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { formatDateTime, formatDuration, shortType } from '@/lib/format'
-import type { RunningJobs } from '@/types'
+import { useRefreshInterval } from '@/hooks/use-polling'
+import { everySeconds, formatDateTime, formatDuration, shortType } from '@/lib/format'
+import type { RunningJob, RunningJobs } from '@/types'
 
-export function RunningTable({ running }: { running: RunningJobs }) {
+export function RunningTable({
+  running,
+  canManage = false,
+  localInstanceId,
+  onCancel,
+}: {
+  running: RunningJobs
+  canManage?: boolean
+  /** This node's scheduler instance id: Quartz can only cancel runs on the node serving the dashboard */
+  localInstanceId?: string
+  onCancel?: (job: RunningJob) => Promise<boolean>
+}) {
+  const showCancel = canManage && onCancel != null
+  const refreshMs = useRefreshInterval()
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -28,7 +54,7 @@ export function RunningTable({ running }: { running: RunningJobs }) {
               : 'In-memory store: only jobs running on this node are visible'}
           </TooltipContent>
         </Tooltip>
-        Refreshes every 10 seconds
+        Refreshes {everySeconds(refreshMs / 1000)}
       </div>
 
       <div className="rounded-lg border">
@@ -47,6 +73,7 @@ export function RunningTable({ running }: { running: RunningJobs }) {
                 <TableHead>Node</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead className="text-right">Running for</TableHead>
+                {showCancel && <TableHead className="w-0" />}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -67,6 +94,15 @@ export function RunningTable({ running }: { running: RunningJobs }) {
                       {formatDuration(job.runningForMs)}
                     </span>
                   </TableCell>
+                  {showCancel && (
+                    <TableCell>
+                      <CancelRun
+                        job={job}
+                        local={running.source === 'local' || job.instanceName === localInstanceId}
+                        onCancel={onCancel}
+                      />
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
@@ -74,5 +110,57 @@ export function RunningTable({ running }: { running: RunningJobs }) {
         )}
       </div>
     </div>
+  )
+}
+
+function CancelRun({
+  job,
+  local,
+  onCancel,
+}: {
+  job: RunningJob
+  local: boolean
+  onCancel: (job: RunningJob) => Promise<boolean>
+}) {
+  if (!local)
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {/* A span, since a disabled button gets no pointer events for the tooltip */}
+          <span tabIndex={0}>
+            <Button size="sm" variant="ghost" disabled aria-label={`Cancel ${job.name}`}>
+              <OctagonX /> Cancel
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          Runs on {job.instanceName}. Only that node can cancel it: open the dashboard there.
+        </TooltipContent>
+      </Tooltip>
+    )
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button size="sm" variant="ghost" aria-label={`Cancel ${job.name}`}>
+          <OctagonX /> Cancel
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Cancel this run of {job.name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            The job is asked to stop. It stops when it next checks for cancellation; a job that
+            never checks keeps running until it finishes.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep running</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={() => void onCancel(job)}>
+            Cancel run
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }

@@ -1,6 +1,8 @@
+using System.Collections.Specialized;
 using System.Data.Common;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Quartz;
@@ -9,29 +11,39 @@ using Quartz.Impl.AdoJobStore.Common;
 namespace Cronlight;
 
 /// <summary>
-/// Opens connections to the same database the host's ADO job store uses. Quartz 3 keeps its data
-/// sources inside the job store, so this rebuilds a provider from the settings given to AddQuartz().
+/// Opens connections to the same database an ADO job store uses. Quartz 3 keeps its data sources inside the job
+/// store, so this rebuilds a provider from the scheduler's settings: those given to AddQuartz() for the host's own
+/// scheduler, or the properties an added scheduler was built from.
 /// </summary>
 internal sealed partial class QuartzDataSource
 {
-    private readonly IOptions<QuartzOptions> quartzOptions;
+    private readonly Func<string, string?> settings;
     private readonly IConfiguration configuration;
     private readonly ILogger<QuartzDataSource> logger;
     private readonly Lazy<DbProvider?> provider;
 
     public QuartzDataSource(IOptions<QuartzOptions> quartzOptions, IConfiguration configuration, ILogger<QuartzDataSource> logger)
+        : this(key => quartzOptions.Value.GetValueOrDefault(key), configuration, logger)
     {
-        this.quartzOptions = quartzOptions;
+    }
+
+    private QuartzDataSource(Func<string, string?> settings, IConfiguration configuration, ILogger<QuartzDataSource> logger)
+    {
+        this.settings = settings;
         this.configuration = configuration;
         this.logger = logger;
         provider = new Lazy<DbProvider?>(CreateProvider);
     }
 
+    /// <summary>For a scheduler built from these Quartz properties, e.g. with StdSchedulerFactory.</summary>
+    public static QuartzDataSource ForProperties(NameValueCollection properties, IServiceProvider services) =>
+        new(key => properties[key], services.GetRequiredService<IConfiguration>(), services.GetRequiredService<ILogger<QuartzDataSource>>());
+
     [GeneratedRegex(@"^[A-Za-z0-9_.]*$")]
     private static partial Regex SafeIdentifier();
 
     /// <summary>Quartz's table prefix, e.g. QRTZ_. Validated so it can be concatenated into SQL.</summary>
-    public string TablePrefix => quartzOptions.Value.GetValueOrDefault("quartz.jobStore.tablePrefix") ?? "QRTZ_";
+    public string TablePrefix => settings("quartz.jobStore.tablePrefix") ?? "QRTZ_";
 
     /// <summary>Quartz provider name such as SqlServer, Npgsql, MySql or SQLite-Microsoft.</summary>
     public string? ProviderName => DataSourceSetting("provider");
@@ -59,13 +71,11 @@ internal sealed partial class QuartzDataSource
     }
 
     private string? DataSourceSetting(string setting) =>
-        quartzOptions.Value.GetValueOrDefault("quartz.jobStore.dataSource") is { } dataSource
-            ? quartzOptions.Value.GetValueOrDefault($"quartz.dataSource.{dataSource}.{setting}")
-            : null;
+        settings("quartz.jobStore.dataSource") is { } dataSource ? settings($"quartz.dataSource.{dataSource}.{setting}") : null;
 
     private DbProvider? CreateProvider()
     {
-        var dataSource = quartzOptions.Value.GetValueOrDefault("quartz.jobStore.dataSource");
+        var dataSource = settings("quartz.jobStore.dataSource");
         if (dataSource == null)
             return null; // RAM job store
 

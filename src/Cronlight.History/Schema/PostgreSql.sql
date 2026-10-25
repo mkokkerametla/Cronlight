@@ -17,9 +17,14 @@ CREATE TABLE {TABLE} (
     DURATION_MS BIGINT NULL,
     STATUS VARCHAR(16) NOT NULL,
     ERROR VARCHAR(4000) NULL,
-    REFIRE_COUNT INTEGER NOT NULL
+    REFIRE_COUNT INTEGER NOT NULL,
+    -- 1 for a first attempt, 2 for its first automatic retry, and so on; NULL in rows written before retries
+    ATTEMPT INTEGER NULL,
+    -- The run's own data (its trigger's, e.g. from a run with different data) as JSON, secrets masked; NULL when none
+    DATA TEXT NULL
 );
 CREATE INDEX IDX_{NAME}_ID ON {TABLE} (SCHED_NAME, ID);
 CREATE INDEX IDX_{NAME}_JOB ON {TABLE} (SCHED_NAME, JOB_GROUP, JOB_NAME, ID);
 CREATE INDEX IDX_{NAME}_ENTRY ON {TABLE} (SCHED_NAME, ENTRY_ID);
 CREATE INDEX IDX_{NAME}_FIRED ON {TABLE} (SCHED_NAME, FIRED_TIME);
+CREATE INDEX IDX_{NAME}_STATUS ON {TABLE} (SCHED_NAME, STATUS, ID);

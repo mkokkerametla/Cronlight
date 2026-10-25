@@ -2,19 +2,53 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Quartz;
-using Quartz.Impl.Matchers;
 
 namespace Cronlight.History;
 
+internal sealed class JobHistoryAttachment(
+    JobHistoryListener listener,
+    JobHistoryQueue queue,
+    MisfireLinks links,
+    ILogger<JobHistoryAttachment> logger) : ISchedulerAttachment
+{
+    public Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
+    {
+        scheduler.AddJobListenerOnce(listener);
+        scheduler.AddTriggerListenerOnce(new MisfireListener("Cronlight.History.Misfires", scheduler, Record, logger));
+        return Task.CompletedTask;
+    }
+
+    // A misfire is not a run, so it is written finished, under its own id: a misfire reported again after a
+    // rollback replaces its record rather than adding another
+    private void Record(Misfire misfire)
+    {
+        if (misfire.RunsNow)
+            links.Missed(misfire);
+        queue.Enqueue(HistoryEvent.Finished, new JobExecutionRecord
+        {
+            SchedulerName = misfire.SchedulerName,
+            InstanceName = misfire.InstanceName,
+            FireInstanceId = misfire.Id,
+            JobName = misfire.Job.Name,
+            JobGroup = misfire.Job.Group,
+            TriggerName = misfire.Trigger.Name,
+            TriggerGroup = misfire.Trigger.Group,
+            ScheduledFireTimeUtc = misfire.MissedFireTimeUtc,
+            FiredTimeUtc = misfire.DetectedUtc,
+            FinishedTimeUtc = misfire.DetectedUtc,
+            Status = JobExecutionStatus.Misfired,
+            Error = misfire.Description
+        });
+    }
+}
+
 /// <summary>
-/// Attaches the history listener to the host's scheduler, writes queued records to the store and
-/// applies retention. Registered ahead of Quartz's hosted service, so it starts before the scheduler
-/// runs anything and stops only after the scheduler has finished its last job.
+/// Writes queued records to the store and applies retention to every scheduler served. Registered ahead of
+/// Quartz's hosted service, so it stops only after the scheduler has finished its last job.
 /// </summary>
 internal sealed class JobHistoryWriter(
-    ISchedulerFactory schedulerFactory,
+    CronlightSchedulers schedulers,
     IJobHistoryStore store,
-    JobHistoryListener listener,
     JobHistoryQueue queue,
     IOptions<JobHistoryOptions> options,
     ILogger<JobHistoryWriter> logger) : IHostedService
@@ -22,19 +56,14 @@ internal sealed class JobHistoryWriter(
     private readonly CancellationTokenSource stopping = new();
     private Task? writing;
     private Task? cleaning;
-    private IScheduler? scheduler;
     private volatile bool initialized;
     private readonly TaskCompletionSource storeReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
-        scheduler = await schedulerFactory.GetScheduler(cancellationToken);
-        // GetJobListener(name) throws for unknown names in Quartz 3, so look through the list instead
-        if (scheduler.ListenerManager.GetJobListeners().All(l => l.Name != listener.Name))
-            scheduler.ListenerManager.AddJobListener(listener, GroupMatcher<JobKey>.AnyGroup());
-
         writing = Task.Run(() => Write(stopping.Token), CancellationToken.None);
         cleaning = Task.Run(() => Clean(stopping.Token), CancellationToken.None);
+        return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -76,10 +105,14 @@ internal sealed class JobHistoryWriter(
             return;
         }
 
-        await foreach (var (historyEvent, record) in queue.Reader.ReadAllAsync(CancellationToken.None))
+        await foreach (var (historyEvent, queued) in queue.Reader.ReadAllAsync(CancellationToken.None))
         {
+            var record = queued;
             try
             {
+                // The misfire listener cannot read the job store, so a misfired job's type is looked up here
+                if (record is { Status: JobExecutionStatus.Misfired, JobType: null })
+                    record = record with { JobType = await schedulers.JobType(record.SchedulerName, new JobKey(record.JobName, record.JobGroup)) };
                 if (historyEvent == HistoryEvent.Started)
                     await store.RecordStarted(record, CancellationToken.None);
                 else
@@ -127,7 +160,7 @@ internal sealed class JobHistoryWriter(
 
     private async Task Clean(CancellationToken cancellationToken)
     {
-        if (options.Value.Retention is not { } retention || scheduler == null)
+        if (options.Value.Retention is not { } retention)
             return;
 
         // On a new database the table only exists once initialization has created it
@@ -145,9 +178,13 @@ internal sealed class JobHistoryWriter(
         {
             try
             {
-                var removed = await store.DeleteFiredBefore(scheduler.SchedulerName, DateTimeOffset.UtcNow - retention, cancellationToken);
-                if (removed > 0)
-                    logger.LogInformation("Removed {Count} execution history records older than {Retention}", removed, retention);
+                foreach (var scheduler in await schedulers.All(cancellationToken))
+                {
+                    var removed = await store.DeleteFiredBefore(scheduler.SchedulerName, DateTimeOffset.UtcNow - retention, cancellationToken);
+                    if (removed > 0)
+                        logger.LogInformation("Removed {Count} execution history records of {Scheduler} older than {Retention}",
+                            removed, scheduler.SchedulerName, retention);
+                }
             }
             catch (OperationCanceledException)
             {
