@@ -3,7 +3,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Quartz;
-using Quartz.Impl.Matchers;
 
 namespace Cronlight;
 
@@ -117,9 +116,8 @@ internal sealed class SecretReferenceAttachment(SecretReferenceListener listener
 {
     public Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
-        if (SecretReferences.Enabled(options.Value)
-            && scheduler.ListenerManager.GetTriggerListeners().All(l => l.Name != listener.Name))
-            scheduler.ListenerManager.AddTriggerListener(listener, GroupMatcher<TriggerKey>.AnyGroup());
+        if (SecretReferences.Enabled(options.Value))
+            scheduler.AddTriggerListenerOnce(listener);
         return Task.CompletedTask;
     }
 }

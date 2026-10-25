@@ -27,6 +27,10 @@ These are listed so the roadmap below is read against them:
 - Several schedulers in one app: schedulers the host builds in code are added with `UseCronlight`, picked in
   the dashboard's header and with `?scheduler=` in the API. Each has its own jobs, history and failure
   streaks; audit events and alerts name the scheduler. See the [design notes](#design-several-schedulers-in-one-app).
+- Misfire visibility on Quartz 3.x: a trigger that missed its fire time is recorded in history as
+  `Misfired`, at the fire time missed, with how many were missed and what Quartz did (ran it once now,
+  skipped to the next fire time, or no fire times left). It shows in the History tab, its outcome filter and
+  the job's recent runs, and raises an alert when `NotifyOnMisfire` is on.
 
 ## How Cronlight compares
 
@@ -58,12 +62,11 @@ It lags on:
 
 - **Quartz 4 support.** Cronlight is built on Quartz 3.13 and does not run on 4.x, which is now the
   current line. Quartz 4 also brings its own retries and execution history, which overlap Cronlight's.
-- misfire visibility
 - which schedulers each visitor sees, and remote schedulers (HTTP, agent)
 - live updates, job progress and captured log lines
 - adoption
 
-Suggested order: misfire visibility on 3.x now; Quartz 4 support once 4.x settles (see
+Suggested order: Quartz 4 support once 4.x settles (see
 [Quartz 4 support](#quartz-4-support)), since it changes how retries, history and several schedulers should
 be built.
 
@@ -109,11 +112,18 @@ Left out of the first version:
   database settings, so its job list reads two queries instead of loading each job, and its Running tab
   shows every node.
 
-### Misfire visibility
+### Misfire follow-ups
 
-Show when a trigger missed its fire time (scheduler down, no free threads) and what Quartz did about it
-(fired late, skipped, rescheduled). Record misfires in history and show them on the job's page and in the
-history filter. Optionally alert on them.
+Left out of the first version of misfire visibility:
+
+- **Show and choose each trigger's misfire instruction** in the job's page and editor ("if missed: run once
+  now / skip"). Today it shows only in a misfire's description, and cron triggers made in the editor use
+  Quartz's default (run once now).
+- **Runs that start late but within the misfire threshold** (under 60 seconds by default) are not
+  misfires to Quartz and are not flagged. History has their scheduled and fired times, so a "started late"
+  marker could be added.
+- **Link a misfire to the late run that followed it.** The run is rescheduled to now, so its scheduled time
+  is not the missed one.
 
 ### Retry follow-ups
 

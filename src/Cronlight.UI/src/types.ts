@@ -176,6 +176,8 @@ export type ExecutionStatus =
   | 'Cancelled'
   /** Failed, and another attempt is scheduled */
   | 'Retried'
+  /** Not a run: the trigger missed its fire time (scheduledFireTimeUtc); error says what Quartz did */
+  | 'Misfired'
 
 export interface ExecutionRecord {
   id: number

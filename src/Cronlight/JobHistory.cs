@@ -14,7 +14,14 @@ public enum JobExecutionStatus
     Cancelled,
 
     /// <summary>Failed, and another attempt is scheduled by the job's retry policy.</summary>
-    Retried
+    Retried,
+
+    /// <summary>
+    /// Not a run: the trigger missed its fire time by more than Quartz's misfire threshold. The record's
+    /// scheduled time is the fire time missed, its fired time when Quartz noticed, and its error says what Quartz
+    /// did about it.
+    /// </summary>
+    Misfired
 }
 
 /// <summary>One execution of a job, as recorded by the Cronlight.History listener.</summary>

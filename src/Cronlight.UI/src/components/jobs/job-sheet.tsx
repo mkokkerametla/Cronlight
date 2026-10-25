@@ -46,12 +46,15 @@ import type { DashboardActions } from '@/hooks/use-dashboard'
 import { useHistory } from '@/hooks/use-history'
 import {
   describeRetry,
+  errorTone,
   formatDateTime,
   formatDuration,
   formatRelative,
   isPaused,
+  recordTime,
   shortType,
 } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import type { Job, JobType, UpdateJobRequest } from '@/types'
 
 interface Props {
@@ -495,9 +498,7 @@ function RecentRuns({
               <li key={r.id} className="space-y-1 px-3 py-2">
                 <div className="flex items-center gap-2">
                   <ExecutionStatusBadge status={r.status} />
-                  <span title={formatDateTime(r.firedTimeUtc)}>
-                    {formatRelative(r.firedTimeUtc)}
-                  </span>
+                  <span title={formatDateTime(recordTime(r))}>{formatRelative(recordTime(r))}</span>
                   {r.attempt > 1 && (
                     <span className="text-xs text-muted-foreground">attempt {r.attempt}</span>
                   )}
@@ -506,7 +507,10 @@ function RecentRuns({
                   </span>
                 </div>
                 {r.error && (
-                  <p className="line-clamp-2 text-xs break-words text-destructive" title={r.error}>
+                  <p
+                    className={cn('line-clamp-2 text-xs break-words', errorTone(r))}
+                    title={r.error}
+                  >
                     {r.error}
                   </p>
                 )}

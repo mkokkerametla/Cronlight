@@ -5,13 +5,32 @@ using Quartz;
 
 namespace Cronlight.History;
 
-internal sealed class JobHistoryAttachment(JobHistoryListener listener) : ISchedulerAttachment
+internal sealed class JobHistoryAttachment(JobHistoryListener listener, JobHistoryQueue queue, ILogger<JobHistoryAttachment> logger)
+    : ISchedulerAttachment
 {
     public Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
         scheduler.AddJobListenerOnce(listener);
+        scheduler.AddTriggerListenerOnce(new MisfireListener("Cronlight.History.Misfires", scheduler, Record, logger));
         return Task.CompletedTask;
     }
+
+    // A misfire is not a run, so it has no fire instance id of its own and is written finished
+    private void Record(Misfire misfire) => queue.Enqueue(HistoryEvent.Finished, new JobExecutionRecord
+    {
+        SchedulerName = misfire.SchedulerName,
+        InstanceName = misfire.InstanceName,
+        FireInstanceId = $"misfire-{Guid.NewGuid():N}",
+        JobName = misfire.Job.Name,
+        JobGroup = misfire.Job.Group,
+        TriggerName = misfire.Trigger.Name,
+        TriggerGroup = misfire.Trigger.Group,
+        ScheduledFireTimeUtc = misfire.MissedFireTimeUtc,
+        FiredTimeUtc = misfire.DetectedUtc,
+        FinishedTimeUtc = misfire.DetectedUtc,
+        Status = JobExecutionStatus.Misfired,
+        Error = misfire.Description
+    });
 }
 
 /// <summary>
@@ -77,10 +96,14 @@ internal sealed class JobHistoryWriter(
             return;
         }
 
-        await foreach (var (historyEvent, record) in queue.Reader.ReadAllAsync(CancellationToken.None))
+        await foreach (var (historyEvent, queued) in queue.Reader.ReadAllAsync(CancellationToken.None))
         {
+            var record = queued;
             try
             {
+                // The misfire listener cannot read the job store, so a misfired job's type is looked up here
+                if (record is { Status: JobExecutionStatus.Misfired, JobType: null })
+                    record = record with { JobType = await schedulers.JobType(record.SchedulerName, new JobKey(record.JobName, record.JobGroup)) };
                 if (historyEvent == HistoryEvent.Started)
                     await store.RecordStarted(record, CancellationToken.None);
                 else

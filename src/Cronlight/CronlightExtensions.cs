@@ -42,8 +42,9 @@ public static class CronlightExtensions
     /// <summary>
     /// Sends an alert when a job fails <see cref="CronlightAlertOptions.AfterConsecutiveFailures"/> times in a row,
     /// and when it recovers, to the configured webhooks (Slack, Teams or JSON), email and any registered
-    /// <see cref="ICronlightAlertSink"/>. Works without the dashboard being mapped. In a cluster with execution
-    /// history registered, failure streaks are counted across every node.
+    /// <see cref="ICronlightAlertSink"/>, and optionally when a trigger misfires
+    /// (<see cref="CronlightAlertOptions.NotifyOnMisfire"/>). Works without the dashboard being mapped. In a cluster
+    /// with execution history registered, failure streaks are counted across every node.
     /// </summary>
     public static IServiceCollection AddCronlightAlerts(
         this IServiceCollection services,

@@ -18,12 +18,21 @@ public enum CronlightAlertKind
     Failing,
 
     /// <summary>The job succeeded after a failure streak that was alerted.</summary>
-    Recovered
+    Recovered,
+
+    /// <summary>
+    /// A trigger of the job missed its fire time, because the scheduler was down or had no free thread. Sent only
+    /// with <see cref="CronlightAlertOptions.NotifyOnMisfire"/>.
+    /// </summary>
+    Misfired
 }
 
-/// <summary>A job started failing, or recovered.</summary>
-/// <param name="ConsecutiveFailures">For Failing, the streak that raised the alert; for Recovered, the streak that ended.</param>
-/// <param name="Error">The last failure's exception type and message; null for Recovered.</param>
+/// <summary>A job started failing, recovered, or missed a fire time.</summary>
+/// <param name="ConsecutiveFailures">For Failing, the streak that raised the alert; for Recovered, the streak that ended; 0 for Misfired.</param>
+/// <param name="Error">
+/// For Failing, the last failure's exception type and message; for Misfired, what was missed and what Quartz does
+/// about it; null for Recovered.
+/// </param>
 /// <param name="DashboardUrl">From <see cref="CronlightAlertOptions.DashboardUrl"/>.</param>
 public sealed record CronlightAlert(
     CronlightAlertKind Kind,
@@ -39,13 +48,19 @@ public sealed record CronlightAlert(
 )
 {
     /// <summary>One line describing the alert, as chat messages show it.</summary>
-    public string Title => Kind == CronlightAlertKind.Failing
-        ? ConsecutiveFailures == 1
+    public string Title => Kind switch
+    {
+        CronlightAlertKind.Failing => ConsecutiveFailures == 1
             ? $"Job {JobGroup}.{JobName} failed"
-            : $"Job {JobGroup}.{JobName} failed {ConsecutiveFailures} times in a row"
-        : ConsecutiveFailures == 1
+            : $"Job {JobGroup}.{JobName} failed {ConsecutiveFailures} times in a row",
+        CronlightAlertKind.Recovered => ConsecutiveFailures == 1
             ? $"Job {JobGroup}.{JobName} succeeded again after a failure"
-            : $"Job {JobGroup}.{JobName} succeeded again after {ConsecutiveFailures} failures in a row";
+            : $"Job {JobGroup}.{JobName} succeeded again after {ConsecutiveFailures} failures in a row",
+        _ => $"Job {JobGroup}.{JobName} missed its fire time",
+    };
+
+    /// <summary>What <see cref="Error"/> holds, as messages label it.</summary>
+    internal string ErrorLabel => Kind == CronlightAlertKind.Misfired ? "Details" : "Error";
 }
 
 /// <summary>
@@ -86,6 +101,13 @@ public class CronlightAlertOptions
     /// <summary>Send a Recovered alert when a job that was alerted succeeds again.</summary>
     public bool NotifyOnRecovery { get; set; } = true;
 
+    /// <summary>
+    /// Send a Misfired alert whenever a trigger misses its fire time by more than Quartz's misfire threshold
+    /// (because the scheduler was down or had no free thread). Off by default: a restart after downtime raises one
+    /// for every trigger that was due meanwhile.
+    /// </summary>
+    public bool NotifyOnMisfire { get; set; }
+
     /// <summary>The dashboard's address, e.g. https://ops.contoso.com/ops/jobs/, linked from alerts.</summary>
     public string? DashboardUrl { get; set; }
 
@@ -102,8 +124,9 @@ public class CronlightAlertOptions
     public Func<JobKey, bool>? Jobs { get; set; }
 }
 
-/// <summary>A finished run, handed from the job thread to the alert worker.</summary>
+/// <summary>A finished run, or a misfire, handed from the job thread to the alert worker.</summary>
 /// <param name="Clustered">The scheduler is clustered, so its other nodes run the job too.</param>
+/// <param name="Misfired">Not a run but a missed fire time, which leaves the failure streak alone.</param>
 internal sealed record AlertRun(
     string SchedulerName,
     string InstanceName,
@@ -112,7 +135,8 @@ internal sealed record AlertRun(
     string FireInstanceId,
     bool Succeeded,
     string? Error,
-    bool Clustered = false
+    bool Clustered = false,
+    bool Misfired = false
 )
 {
     /// <summary>Jobs in different schedulers may share a key, so streaks are kept per scheduler.</summary>
@@ -188,16 +212,31 @@ internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOpt
             error,
             clustered.ContainsKey(context.Scheduler.SchedulerName)));
     }
+
+    public void Misfired(Misfire misfire)
+    {
+        if (options.Value.Jobs?.Invoke(misfire.Job) == false)
+            return;
+        // The job's type is looked up by the worker: the job store must not be read where misfires are reported
+        queue.Enqueue(new AlertRun(misfire.SchedulerName, misfire.InstanceName, misfire.Job, null, "", Succeeded: false,
+            misfire.Description, Misfired: true));
+    }
 }
 
-/// <summary>Attaches <see cref="AlertListener"/>, noting whether the scheduler is clustered.</summary>
-internal sealed class AlertAttachment(AlertListener listener) : ISchedulerAttachment
+/// <summary>
+/// Attaches <see cref="AlertListener"/>, noting whether the scheduler is clustered, and a misfire listener when
+/// misfires raise alerts.
+/// </summary>
+internal sealed class AlertAttachment(AlertListener listener, IOptions<CronlightAlertOptions> options, ILogger<AlertAttachment> logger)
+    : ISchedulerAttachment
 {
     public async Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
         if ((await scheduler.GetMetaData(cancellationToken)).JobStoreClustered)
             listener.MarkClustered(scheduler.SchedulerName);
         scheduler.AddJobListenerOnce(listener);
+        if (options.Value.NotifyOnMisfire)
+            scheduler.AddTriggerListenerOnce(new MisfireListener("Cronlight.Alerts.Misfires", scheduler, listener.Misfired, logger));
     }
 }
 
@@ -289,6 +328,15 @@ internal sealed class AlertWorker(
     /// <summary>The alert this run raises, if any.</summary>
     private async Task<CronlightAlert?> Check(AlertRun run, CancellationToken cancellationToken)
     {
+        // Only one node handles each misfire, so each raises exactly one alert
+        if (run.Misfired)
+        {
+            var jobType = services.GetService<CronlightSchedulers>() is { } schedulers
+                ? await schedulers.JobType(run.SchedulerName, run.Job, cancellationToken)
+                : null;
+            return Alert(run with { JobType = jobType }, CronlightAlertKind.Misfired, 0, run.Error);
+        }
+
         var threshold = options.Value.AfterConsecutiveFailures;
         var before = await FailuresBefore(run, threshold, cancellationToken);
         streaks[run.StreakKey] = run.Succeeded ? 0 : before + 1;
@@ -432,7 +480,7 @@ internal static class WebhookPayload
 
         var lines = new List<string>
         {
-            $"{(alert.Kind == CronlightAlertKind.Failing ? ":x:" : ":white_check_mark:")} *{Escape(alert.Title)}*",
+            $"{alert.Kind switch { CronlightAlertKind.Failing => ":x:", CronlightAlertKind.Recovered => ":white_check_mark:", _ => ":warning:" }} *{Escape(alert.Title)}*",
             $"Node: {Escape(alert.InstanceName)} · Scheduler: {Escape(alert.SchedulerName)}",
         };
         if (alert.Error != null)
@@ -452,7 +500,7 @@ internal static class WebhookPayload
             new { title = "Scheduler", value = alert.SchedulerName },
         };
         if (alert.Error != null)
-            facts.Add(new { title = "Error", value = alert.Error });
+            facts.Add(new { title = alert.ErrorLabel, value = alert.Error });
 
         var body = new List<object>
         {
@@ -463,7 +511,7 @@ internal static class WebhookPayload
                 weight = "Bolder",
                 size = "Medium",
                 wrap = true,
-                color = alert.Kind == CronlightAlertKind.Failing ? "Attention" : "Good",
+                color = alert.Kind switch { CronlightAlertKind.Failing => "Attention", CronlightAlertKind.Recovered => "Good", _ => "Warning" },
             },
             new { type = "FactSet", facts },
         };

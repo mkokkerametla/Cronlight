@@ -57,6 +57,7 @@ const executionTone: Record<ExecutionStatus, string> = {
   Vetoed: 'text-muted-foreground',
   Cancelled: 'border-amber-500/40 text-amber-700 dark:text-amber-400',
   Retried: 'border-orange-500/40 text-orange-700 dark:text-orange-400',
+  Misfired: 'border-violet-500/40 text-violet-700 dark:text-violet-400',
 }
 
 export function ExecutionStatusBadge({ status }: { status: ExecutionStatus }) {

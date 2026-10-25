@@ -95,7 +95,7 @@ internal static class EmailAlerts
             .AppendLine($"Scheduler: {alert.SchedulerName}")
             .AppendLine($"Time:      {alert.TimeUtc:yyyy-MM-dd HH:mm:ss} UTC");
         if (alert.Error != null)
-            body.AppendLine().AppendLine("Error:").AppendLine(alert.Error);
+            body.AppendLine().AppendLine($"{alert.ErrorLabel}:").AppendLine(alert.Error);
         if (alert.DashboardUrl != null)
             body.AppendLine().AppendLine($"Open Cronlight: {alert.DashboardUrl}");
         return body.ToString();

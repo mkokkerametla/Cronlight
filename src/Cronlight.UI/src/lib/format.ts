@@ -1,4 +1,4 @@
-import type { Job, JobRetryPolicy, JobStatus } from '@/types'
+import type { ExecutionRecord, Job, JobRetryPolicy, JobStatus } from '@/types'
 
 export type { JobStatus }
 
@@ -25,6 +25,14 @@ export function formatRelative(iso: string | null | undefined): string {
   if (abs < 86_400) return relative.format(Math.round(seconds / 3600), 'hour')
   return relative.format(Math.round(seconds / 86_400), 'day')
 }
+
+/** A misfire is shown at the fire time it missed, a run at the time it fired */
+export const recordTime = (r: ExecutionRecord) =>
+  r.status === 'Misfired' ? (r.scheduledFireTimeUtc ?? r.firedTimeUtc) : r.firedTimeUtc
+
+/** A misfire's error says what Quartz did, which is not a failure */
+export const errorTone = (r: ExecutionRecord) =>
+  r.status === 'Misfired' ? 'text-muted-foreground' : 'text-destructive'
 
 export const shortType = (type: string | null | undefined) => type?.split('.').pop() ?? '-'
 

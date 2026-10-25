@@ -44,7 +44,8 @@ public sealed class TestHost : IAsyncDisposable
         Action<IServiceCollection>? services = null,
         bool ramJobStore = false,
         Dictionary<string, string?>? settings = null,
-        bool clustered = false)
+        bool clustered = false,
+        TimeSpan? misfireThreshold = null)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
         var schedulerName = $"test-{id}";
@@ -63,6 +64,8 @@ public sealed class TestHost : IAsyncDisposable
         builder.Services.AddQuartz(q =>
         {
             q.SchedulerName = schedulerName;
+            if (misfireThreshold is { } threshold)
+                q.MisfireThreshold = threshold;
             // Quartz's default in-memory store, as many hosts use: nothing Cronlight can read directly
             if (ramJobStore)
                 return;

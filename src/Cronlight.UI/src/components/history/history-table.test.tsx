@@ -109,6 +109,36 @@ describe('HistoryTable', () => {
     expect(screen.queryByRole('button', { name: /again/ })).toBeNull()
   })
 
+  it('shows a misfire at the fire time it missed, with what Quartz did, and filters by it', async () => {
+    const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
+    const note =
+      'Missed its fire time by 25m 0s; Quartz skips it and waits for the next fire time (misfire instruction DoNothing).'
+    pages.Misfired = {
+      records: [
+        execution(4, {
+          status: 'Misfired',
+          scheduledFireTimeUtc: minutesAgo(25),
+          firedTimeUtc: minutesAgo(0),
+          error: note,
+        }),
+      ],
+      nextBefore: null,
+    }
+    render(<Harness initial={all} onRetry={vi.fn(async () => true)} />)
+    await screen.findByText('Runs appear here as soon as jobs execute.')
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by outcome' }))
+    await userEvent.click(screen.getByRole('option', { name: 'Misfired' }))
+
+    const row = within((await screen.findByText(note)).closest('tr') as HTMLElement)
+    expect(query(1)).toMatchObject({ status: 'Misfired' })
+    expect(row.getByText('Misfired', { selector: '[data-slot=badge]' })).toBeInTheDocument()
+    expect(row.getByText('25 min. ago')).toBeInTheDocument()
+    // Not a failure, and not a run to repeat
+    expect(row.getByText(note)).not.toHaveClass('text-destructive')
+    expect(row.queryByRole('button', { name: /again/ })).toBeNull()
+  })
+
   it('opens the job from its name', async () => {
     pages.all = {
       records: [execution(1, { jobGroup: 'billing', jobName: 'invoices' })],

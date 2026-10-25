@@ -22,12 +22,15 @@ import { ExecutionStatusBadge } from '@/components/jobs/status-badge'
 import { useHistory } from '@/hooks/use-history'
 import { useRefreshInterval } from '@/hooks/use-polling'
 import {
+  errorTone,
   everySeconds,
   formatDateTime,
   formatDuration,
   formatRelative,
+  recordTime,
   shortType,
 } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import type { ExecutionRecord, ExecutionStatus, HistoryFilter } from '@/types'
 
 interface Props {
@@ -70,6 +73,7 @@ export function HistoryTable({
             <SelectItem value="Running">Running</SelectItem>
             <SelectItem value="Cancelled">Cancelled</SelectItem>
             <SelectItem value="Vetoed">Vetoed</SelectItem>
+            <SelectItem value="Misfired">Misfired</SelectItem>
           </SelectContent>
         </Select>
         {filter.job && (
@@ -147,7 +151,7 @@ export function HistoryTable({
                     </div>
                     {r.error && (
                       <p
-                        className="mt-1 line-clamp-2 text-xs break-words text-destructive"
+                        className={cn('mt-1 line-clamp-2 text-xs break-words', errorTone(r))}
                         title={r.error}
                       >
                         {r.error}
@@ -157,8 +161,8 @@ export function HistoryTable({
                   <TableCell>
                     <ExecutionStatusBadge status={r.status} />
                   </TableCell>
-                  <TableCell title={formatDateTime(r.firedTimeUtc)}>
-                    {formatRelative(r.firedTimeUtc)}
+                  <TableCell title={formatDateTime(recordTime(r))}>
+                    {formatRelative(recordTime(r))}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatDuration(r.durationMs)}

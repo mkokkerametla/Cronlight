@@ -237,6 +237,12 @@ builder.Services.AddCronlightHistory(o =>
 - **Jobs are never slowed down.** Listeners only queue records; a background writer stores them. If the
   database is unavailable, records beyond `QueueCapacity` are dropped and jobs carry on.
 - **Errors** are stored as exception type and message (truncated to `MaxErrorLength`), never stack traces.
+- **Misfires.** When a trigger misses its fire time by more than Quartz's misfire threshold (60 seconds by
+  default; the scheduler was down, paused or had no free thread), history records it as `Misfired`: at the
+  fire time it missed, with how many fire times were missed and what Quartz does about it, e.g. "Missed 3
+  fire times, the first by 2h 5m; Quartz runs it once now (misfire instruction FireOnceNow)." A run that
+  follows appears as a run of its own. Triggers with `IgnoreMisfirePolicy` fire every missed time instead
+  and are not reported as misfires. Filter the History tab by *Misfired* to see them all.
 - **Retention** is applied hourly by every node and only touches its own scheduler's rows, so apps sharing
   a database keep their own retention.
 - **Your own store:** register an `IJobHistoryStore` before calling `AddCronlightHistory`.
@@ -336,6 +342,10 @@ on by default). Every alert is also logged as a warning under the `Cronlight.Ale
   and will not run until it is fixed. The alert's error starts with "Not run:". Other vetoed runs are
   ignored, unless the host's trigger listener sets `CronlightContextKeys.VetoReason`.
 - `o.Jobs = job => job.Group != "experiments"` limits which jobs raise alerts.
+- **Misfires** (a trigger that missed its fire time, see [execution history](#execution-history-optional-package))
+  raise a `Misfired` alert when `NotifyOnMisfire` is on; it is off by default, since a restart after
+  downtime raises one for every trigger that was due meanwhile. The alert's error says what was missed and
+  what Quartz does about it. Misfires neither count as failures nor end a streak.
 - A single scheduler counts every run itself. In a cluster with
   [execution history](#execution-history-optional-package), the streak is read from history, so it counts
   runs on every node and normally one alert is sent per streak. In a cluster without history, each node

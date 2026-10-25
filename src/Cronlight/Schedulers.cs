@@ -54,6 +54,23 @@ internal sealed class CronlightSchedulers(ISchedulerFactory factory, IEnumerable
             return host;
         return extra.TryGetValue(name, out var scheduler) && !scheduler.IsShutdown ? scheduler : null;
     }
+
+    /// <summary>
+    /// The job's type, or null when it cannot be read, e.g. a type this app cannot load. For records made where the
+    /// job store must not be read, such as misfires.
+    /// </summary>
+    public async Task<string?> JobType(string schedulerName, JobKey job, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var scheduler = await Find(schedulerName, cancellationToken);
+            return scheduler == null ? null : (await scheduler.GetJobDetail(job, cancellationToken))?.JobType.FullName;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
 }
 
 public static class CronlightSchedulerExtensions
@@ -101,6 +118,12 @@ internal static class SchedulerAttachmentExtensions
         // GetJobListener(name) throws for unknown names in Quartz 3, so look through the list instead
         if (scheduler.ListenerManager.GetJobListeners().All(l => l.Name != listener.Name))
             scheduler.ListenerManager.AddJobListener(listener, GroupMatcher<JobKey>.AnyGroup());
+    }
+
+    public static void AddTriggerListenerOnce(this IScheduler scheduler, ITriggerListener listener)
+    {
+        if (scheduler.ListenerManager.GetTriggerListeners().All(l => l.Name != listener.Name))
+            scheduler.ListenerManager.AddTriggerListener(listener, GroupMatcher<TriggerKey>.AnyGroup());
     }
 }
 
