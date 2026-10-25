@@ -38,8 +38,8 @@ for tfm in net8.0 net10.0; do
 EOF
   dotnet new web -n SmokeApp -f "$tfm" -o . >/dev/null
   dotnet add package Quartz.Extensions.Hosting --version 3.13.1 >/dev/null
-  dotnet add package cronlight-quartz-scheduler --version "$version" >/dev/null
-  dotnet add package cronlight-quartz-scheduler-history --version "$version" >/dev/null
+  dotnet add package Cronlight.Quartz.Dashboard --version "$version" >/dev/null
+  dotnet add package Cronlight.Quartz.Dashboard.History --version "$version" >/dev/null
   cat > Program.cs <<'EOF'
 using Cronlight;
 using Quartz;

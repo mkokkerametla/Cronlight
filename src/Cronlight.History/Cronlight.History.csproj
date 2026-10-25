@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Cronlight.History</RootNamespace>
     <IsPackable>true</IsPackable>
-    <PackageId>cronlight-quartz-scheduler-history</PackageId>
+    <PackageId>Cronlight.Quartz.Dashboard.History</PackageId>
     <Description>Execution history for Cronlight: records every Quartz.NET job run in your Quartz database (SQL Server, PostgreSQL, MySQL, SQLite) or in memory.</Description>
   </PropertyGroup>
 

@@ -52,7 +52,9 @@ public record JobDto(
     IDictionary<string, string?> Data,
     IReadOnlyList<TriggerDto> Triggers,
     // The policy the job runs with, its own or its type's; null when failed runs are not retried
-    JobRetryPolicy? Retry = null
+    JobRetryPolicy? Retry = null,
+    // The [CronlightJob] description of the job's type, as opposed to Description, which is this job's own
+    string? TypeDescription = null
 );
 
 /// <summary>One page of the job list, with counts over every job for the dashboard's stat cards.</summary>
@@ -86,15 +88,18 @@ public record JobCountsDto(int All, int Active, int Paused, int Unloadable);
 public record TriggerRequest(string? Name, string? CronExpression, string? TimeZone, bool SkipMissed = false,
     string? Kind = null, DateTimeOffset? StartAtUtc = null, long? IntervalSeconds = null, int? RepeatCount = null);
 
+/// <param name="Type">The job's class, as listed by the job types endpoint. Required, unless JobType is sent.</param>
+/// <param name="JobType">The same as Type, under the name jobs are read back with.</param>
 public record CreateJobRequest(
-    string Type,
-    string Name,
+    string? Type,
+    string? Name,
     string? Group,
     string? Description,
     Dictionary<string, string>? Data,
     List<TriggerRequest>? Triggers,
     // Null follows the job type's [CronlightRetry], if any
-    JobRetryPolicy? Retry = null
+    JobRetryPolicy? Retry = null,
+    string? JobType = null
 );
 
 /// <summary>
@@ -388,8 +393,13 @@ internal static class DashboardApi
     {
         api.MapPost("/jobs", async (CreateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
-            if (!catalog.TryGet(request.Type, out var type, out var info))
-                return Results.BadRequest($"Unknown job type '{request.Type}'");
+            var typeName = string.IsNullOrWhiteSpace(request.Type) ? request.JobType : request.Type;
+            if (string.IsNullOrWhiteSpace(typeName))
+                return Results.BadRequest("A job type is required: set 'type' to one of the types listed by api/job-types");
+            if (string.IsNullOrWhiteSpace(request.Name))
+                return Results.BadRequest("A job name is required");
+            if (!catalog.TryGet(typeName, out var type, out var info))
+                return Results.BadRequest($"Unknown job type '{typeName}'");
 
             var data = request.Data ?? new();
             foreach (var p in info.Parameters.Where(p => p.DefaultValue != null && !data.ContainsKey(p.Key)))
@@ -998,7 +1008,7 @@ internal static class DashboardApi
         );
 
         return new JobDto(key.Name, key.Group, detail.Description, detail.JobType.FullName, info?.DisplayName,
-            detail.Durable, true, null, data, await LoadTriggers(scheduler, key), Retries.For(detail));
+            detail.Durable, true, null, data, await LoadTriggers(scheduler, key), Retries.For(detail), info?.Description);
     }
 
     private static async Task<IReadOnlyList<TriggerDto>> LoadTriggers(IScheduler scheduler, JobKey key)

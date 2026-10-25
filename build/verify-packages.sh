@@ -32,28 +32,28 @@ check_package() {
   echo "$id $version: $(grep -c . <<<"$listing") files"
 }
 
-check_package cronlight-quartz-scheduler
-check_package cronlight-quartz-scheduler-history
+check_package Cronlight.Quartz.Dashboard
+check_package Cronlight.Quartz.Dashboard.History
 
 # The dashboard UI must be embedded in the core assembly for every target framework
-core="$dir/cronlight-quartz-scheduler.$version.nupkg"
+core="$dir/Cronlight.Quartz.Dashboard.$version.nupkg"
 if [[ -f "$core" ]]; then
   for tfm in net8.0 net10.0; do
     # grep -c (not -q) reads all input: an early exit would kill unzip with SIGPIPE and trip pipefail
     unzip -p "$core" "lib/$tfm/Cronlight.dll" | grep -ac "Cronlight.wwwroot.index.html" >/dev/null \
-      || fail "cronlight-quartz-scheduler: UI not embedded in $tfm assembly"
+      || fail "Cronlight.Quartz.Dashboard: UI not embedded in $tfm assembly"
     # ManifestEmbeddedFileProvider throws at startup without it
     unzip -p "$core" "lib/$tfm/Cronlight.dll" | grep -ac "Microsoft.Extensions.FileProviders.Embedded.Manifest.xml" >/dev/null \
-      || fail "cronlight-quartz-scheduler: embedded files manifest missing from $tfm assembly"
+      || fail "Cronlight.Quartz.Dashboard: embedded files manifest missing from $tfm assembly"
   done
 fi
 
 # The history package must depend on the exact same core version
-history="$dir/cronlight-quartz-scheduler-history.$version.nupkg"
+history="$dir/Cronlight.Quartz.Dashboard.History.$version.nupkg"
 if [[ -f "$history" ]]; then
-  unzip -p "$history" cronlight-quartz-scheduler-history.nuspec \
-    | grep -c "id=\"cronlight-quartz-scheduler\" version=\"$version\"" >/dev/null \
-    || fail "cronlight-quartz-scheduler-history does not depend on cronlight-quartz-scheduler $version"
+  unzip -p "$history" Cronlight.Quartz.Dashboard.History.nuspec \
+    | grep -c "id=\"Cronlight.Quartz.Dashboard\" version=\"$version\"" >/dev/null \
+    || fail "Cronlight.Quartz.Dashboard.History does not depend on Cronlight.Quartz.Dashboard $version"
 fi
 
 if (( failures > 0 )); then

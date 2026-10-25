@@ -2,7 +2,7 @@ using Quartz;
 
 namespace Cronlight.Tests;
 
-[CronlightJob("Invoice job")]
+[CronlightJob("Invoice job", Description = "Sends the monthly invoices")]
 [JobParameter("customerId", Required = true, Type = JobParameterType.Int)]
 [JobParameter("smtpPassword", Type = JobParameterType.Secret)]
 public class InvoiceJob : IJob

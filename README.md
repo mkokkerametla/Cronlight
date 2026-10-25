@@ -15,14 +15,20 @@ and never starts a second scheduler.
 ## Install
 
 ```bash
-dotnet add package cronlight-quartz-scheduler --prerelease
-dotnet add package cronlight-quartz-scheduler-history --prerelease   # optional: execution history
+dotnet add package Cronlight.Quartz.Dashboard --prerelease
+dotnet add package Cronlight.Quartz.Dashboard.History --prerelease   # optional: execution history
 ```
 
 Cronlight is in beta: `--prerelease` is needed until 1.0, and options or endpoints may still change
 between betas.
 
-Requires ASP.NET Core 8 or 10 and Quartz.NET 3.x configured with `AddQuartz()`.
+Requires ASP.NET Core 8 or 10 and Quartz.NET 3.x configured with `AddQuartz()`. The setup below also calls
+`AddQuartzHostedService()`, which comes from the separate `Quartz.Extensions.Hosting` package (or
+`Quartz.AspNetCore`, which includes it); Cronlight does not install it for you, because the host owns scheduler setup.
+
+```bash
+dotnet add package Quartz.Extensions.Hosting
+```
 
 ## Setup
 

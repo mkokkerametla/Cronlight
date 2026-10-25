@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Cronlight</RootNamespace>
     <IsPackable>true</IsPackable>
-    <PackageId>cronlight-quartz-scheduler</PackageId>
+    <PackageId>Cronlight.Quartz.Dashboard</PackageId>
     <Description>Cronlight: an embeddable dashboard and API for Quartz.NET. List, create, edit, pause, trigger and monitor jobs from a UI served by your own ASP.NET Core app.</Description>
     <!-- Off when packing without building (NoBuild), which reuses the built assembly and has no UI items -->
     <GenerateEmbeddedFilesManifest Condition="'$(NoBuild)' != 'true'">true</GenerateEmbeddedFilesManifest>

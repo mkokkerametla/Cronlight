@@ -7,6 +7,43 @@ namespace Cronlight.Tests;
 
 public class ApiTests
 {
+    [Fact]
+    public async Task Creating_a_job_without_a_type_or_name_is_a_bad_request()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+
+        var noType = await client.PostJson("api/jobs", new { name = "x" });
+        Assert.Equal(HttpStatusCode.BadRequest, noType.StatusCode);
+        Assert.Contains("job type is required", await noType.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostJson("api/jobs", new { })).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_job_is_created_with_the_jobType_it_is_read_back_with()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+
+        var created = await client.PostJson("api/jobs", new { jobType = typeof(PlainJob).FullName, name = "alias" });
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_job_reports_the_description_of_its_type()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        await client.PostJson("api/jobs", new { type = typeof(InvoiceJob).FullName, name = "monthly", data = new { customerId = "1" } });
+
+        var job = await client.GetFromJsonAsync<JsonElement>("api/jobs/DEFAULT/monthly");
+
+        Assert.Equal("Invoice job", job.GetProperty("displayName").GetString());
+        Assert.Equal("Sends the monthly invoices", job.GetProperty("typeDescription").GetString());
+    }
+
     [Theory]
     [InlineData(null, false)]
     [InlineData(true, true)]
