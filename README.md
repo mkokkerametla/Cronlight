@@ -163,6 +163,7 @@ builder.Services.AddCronlightHistory(o =>
 | `assets` | Logo (`icon.svg`) and the 128px `icon.png` used as the NuGet package icon |
 | `build/verify-packages.sh` | Checks run on packed `.nupkg` files in CI |
 | `build/smoke-test.sh` | Installs the packed packages into new .NET 8 and .NET 10 apps and runs them |
+| `build/test-all.sh` | Runs every test suite: UI, .NET and end-to-end |
 | `.github/workflows` | CI and release pipelines |
 
 ## Development
@@ -181,6 +182,21 @@ cd src/Cronlight.UI && npm run dev
 ```
 
 `dotnet build -p:SkipDashboardUi=true` embeds an existing `wwwroot` without running npm.
+
+### Running every test
+
+`build/test-all.sh` runs the UI lint, type-check and unit tests, the .NET tests on .NET 8 and 10, and
+the end-to-end tests, installing npm packages and Chromium when missing. A failing suite does not stop
+the rest; a summary at the end lists each result.
+
+```bash
+build/test-all.sh                  # all suites; databases as configured below
+build/test-all.sh --databases      # also PostgreSQL, MySQL and SQL Server, in throwaway containers
+build/test-all.sh ui dotnet        # only some suites
+```
+
+`--databases` needs Docker or Podman. It starts the same images as CI on local ports 25432, 23306 and
+21433, and removes them afterwards. Connection strings already set (below) are used instead.
 
 ### Database tests
 
@@ -218,8 +234,12 @@ npm run test:coverage   # report in coverage/
 
 [Playwright](https://playwright.dev) tests in `tests/Cronlight.E2E` start the sample host on a fresh
 SQLite database and drive the dashboard in Chromium: creating, editing, pausing, running and deleting
-jobs, history (including a failing HTTP job), viewer and anonymous access, search, the theme switch and
-the schedule assistant.
+jobs (several triggers and time zones, manual-only jobs, secrets kept on edit), cron schedules firing on
+their own, bulk pause and resume, search and filters, the stat cards, the running jobs view, history
+(paging, job filter, failing and succeeding HTTP jobs), read-only jobs from other apps sharing the
+scheduler, server errors, changes made elsewhere, a lost connection, viewer and anonymous access, the
+scheduler details, the theme switch and the schedule assistant.
+They need Node.js 22.13 or later, for its built-in SQLite module.
 
 ```bash
 cd tests/Cronlight.E2E

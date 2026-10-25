@@ -87,13 +87,24 @@ public sealed class TestHost : IAsyncDisposable
             configure?.Invoke(o);
         });
 
-        var app = builder.Build();
-        app.UseAuthentication();
-        app.UseAuthorization();
-        app.MapCronlight("/cronlight");
-        await app.StartAsync();
-
-        return new TestHost(app, schedulerName, database);
+        WebApplication? app = null;
+        try
+        {
+            app = builder.Build();
+            app.UseAuthentication();
+            app.UseAuthorization();
+            app.MapCronlight("/cronlight");
+            await app.StartAsync();
+            return new TestHost(app, schedulerName, database);
+        }
+        catch
+        {
+            // Tests that expect startup to fail get no host to dispose, so clean up here
+            if (app != null)
+                await app.DisposeAsync();
+            database.Cleanup();
+            throw;
+        }
     }
 
     public HttpClient Client(string? role = null)

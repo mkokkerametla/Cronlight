@@ -179,7 +179,7 @@ public class ApiTests
         var scheduler = await host.Scheduler();
         var key = new JobKey("typed");
         await scheduler.AddJob(JobBuilder.Create<PlainJob>().WithIdentity(key).StoreDurably()
-            .SetJobData(new JobDataMap { ["count"] = 5, ["enabled"] = true, ["label"] = "a", ["items"] = new List<string> { "x", "y" } })
+            .SetJobData(new JobDataMap { ["count"] = 5, ["enabled"] = true, ["strict"] = false, ["label"] = "a", ["items"] = new List<string> { "x", "y" } })
             .Build(), replace: false);
         var before = (await scheduler.GetJobDetail(key))!.JobDataMap;
 
@@ -194,6 +194,9 @@ public class ApiTests
         Assert.Equal(before["count"].GetType(), after["count"].GetType());
         Assert.Equal(6L, Convert.ToInt64(after["count"]));
         Assert.Equal("sometimes", after["enabled"]);
+        // Sent back unchanged as "False", so it is still a bool
+        Assert.Equal(before["strict"].GetType(), after["strict"].GetType());
+        Assert.Equal(false, after["strict"]);
         Assert.Equal(before["items"].GetType(), after["items"].GetType());
         Assert.Equal("a", after["label"]);
     }

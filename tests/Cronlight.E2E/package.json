@@ -2,6 +2,9 @@
   "name": "cronlight-e2e",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "test": "playwright test",
     "report": "playwright show-report"

@@ -5,6 +5,7 @@ export const jobTypes = {
   plain: 'Cronlight.SampleHost.PlainJob',
   flaky: 'Cronlight.SampleHost.FlakyJob',
   http: 'Cronlight.SampleHost.HttpJob',
+  slow: 'Cronlight.SampleHost.SlowJob',
 } as const
 
 /** Job names are unique per test, since all tests share one scheduler. */
@@ -37,4 +38,23 @@ export const jobRow = (page: Page, name: string) =>
 export async function choose(page: Page, trigger: ReturnType<Page['locator']>, option: string | RegExp) {
   await trigger.click()
   await page.getByRole('option', { name: option }).click()
+}
+
+/** Starts a job once through the API. */
+export async function triggerJob(request: APIRequestContext, group: string, name: string) {
+  const response = await request.post(`api/jobs/${group}/${name}/trigger`)
+  expect(response.ok(), await response.text()).toBe(true)
+}
+
+/** A stat card, by its label. Its accessible name is the count followed by the label. */
+export const statCard = (page: Page, label: string) =>
+  page.getByRole('button', { name: new RegExp(`^\\d+\\s*${escapeRegExp(label)}`) })
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Number of recorded runs of a job, optionally only those with one outcome, read through the API. */
+export async function runCount(request: APIRequestContext, group: string, name: string, status?: string) {
+  const query = new URLSearchParams({ group, name, limit: '500', ...(status && { status }) })
+  const response = await request.get(`api/history?${query}`)
+  return ((await response.json()) as { records: unknown[] }).records.length
 }

@@ -6,7 +6,11 @@ import { defineConfig, devices } from '@playwright/test'
 // Each run starts it on its own SQLite file, with view/manage policies so permissions are exercised:
 // requests carry X-Demo-Role (admin by default), which the sample turns into a role claim.
 const port = Number(process.env.E2E_PORT ?? 5199)
-const database = path.join(os.tmpdir(), `cronlight-e2e-${process.pid}.db`)
+// The runner picks a new file for each run; workers (which load this config again) inherit its choice,
+// so tests can reach the same database as the sample host
+if (!process.env.TEST_WORKER_INDEX)
+  process.env.CRONLIGHT_E2E_DATABASE = path.join(os.tmpdir(), `cronlight-e2e-${process.pid}.db`)
+const database = process.env.CRONLIGHT_E2E_DATABASE!
 
 export default defineConfig({
   testDir: './tests',

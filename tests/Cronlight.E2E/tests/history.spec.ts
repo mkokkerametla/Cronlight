@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { createJob, jobRow, jobTypes, openDashboard, uniqueName } from './helpers'
+import { createJob, jobRow, jobTypes, openDashboard, runCount, triggerJob, uniqueName } from './helpers'
 
 test('a failed run shows in history with its error, and the outcome filter finds it', async ({ page, request }) => {
   const name = uniqueName('always-fails')
@@ -41,4 +41,35 @@ test('an HTTP job scheduled from the UI fails on an unexpected status code', asy
   const run = page.getByRole('row').filter({ hasText: name })
   await expect(run).toContainText('Failed', { timeout: 20_000 })
   await expect(run).toContainText('returned 500')
+})
+
+test('moves between a job and its runs, and pages back through older runs', async ({ page, request }) => {
+  const name = uniqueName('many-runs')
+  await createJob(request, { type: jobTypes.plain, name })
+  // One more run than a page holds
+  for (let i = 0; i < 51; i++) await triggerJob(request, 'DEFAULT', name)
+  await expect.poll(() => runCount(request, 'DEFAULT', name, 'Succeeded'), { timeout: 30_000 }).toBe(51)
+  await openDashboard(page)
+
+  await jobRow(page, name).click()
+  await page.getByRole('dialog', { name }).getByRole('button', { name: /All runs/ }).click()
+
+  await expect(page.getByRole('dialog')).toBeHidden()
+  await expect(page.getByRole('tab', { name: /History/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByText(`DEFAULT.${name}`)).toBeVisible()
+  const runs = page.getByRole('tabpanel').getByRole('row').filter({ hasText: name })
+  await expect(runs).toHaveCount(50)
+
+  await page.getByRole('button', { name: 'Load older runs' }).click()
+  await expect(runs).toHaveCount(51)
+  await expect(page.getByRole('button', { name: 'Load older runs' })).toBeHidden()
+
+  // A run's job name opens that job
+  await runs.first().getByRole('button', { name }).click()
+  await expect(page.getByRole('dialog', { name })).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  // Clearing the chip shows every job's runs again
+  await page.getByRole('button', { name: 'Show all jobs' }).click()
+  await expect(page.getByText(`DEFAULT.${name}`)).toBeHidden()
 })
