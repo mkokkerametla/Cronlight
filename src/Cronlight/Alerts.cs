@@ -213,14 +213,11 @@ internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOpt
             clustered.ContainsKey(context.Scheduler.SchedulerName)));
     }
 
-    public void Misfired(Misfire misfire)
-    {
-        if (options.Value.Jobs?.Invoke(misfire.Job) == false)
-            return;
-        // The job's type is looked up by the worker: the job store must not be read where misfires are reported
-        queue.Enqueue(new AlertRun(misfire.SchedulerName, misfire.InstanceName, misfire.Job, null, "", Succeeded: false,
+    // The worker applies the Jobs filter and looks up the job's type: this runs inside Quartz's misfire handling,
+    // which with a database store holds the trigger lock
+    public void Misfired(Misfire misfire) =>
+        queue.Enqueue(new AlertRun(misfire.SchedulerName, misfire.InstanceName, misfire.Job, null, misfire.Id, Succeeded: false,
             misfire.Description, Misfired: true));
-    }
 }
 
 /// <summary>
@@ -247,6 +244,7 @@ internal sealed class AlertAttachment(AlertListener listener, IOptions<Cronlight
 /// </summary>
 internal sealed class AlertWorker(
     AlertQueue queue,
+    CronlightSchedulers schedulers,
     IServiceProvider services,
     IHttpClientFactory httpClientFactory,
     IOptions<CronlightAlertOptions> options,
@@ -262,6 +260,10 @@ internal sealed class AlertWorker(
     private readonly Dictionary<(string, JobKey), int> streaks = new();
     // Jobs this node sent a Failing alert for, until they recover: history written behind the runs cannot repeat an alert
     private readonly HashSet<(string, JobKey)> alerted = new();
+    // Misfires alerted lately, oldest first: a database store reports a misfire again when its handling rolls back
+    private readonly HashSet<(string, string)> misfiresAlerted = new();
+    private readonly Queue<(string, string)> misfireOrder = new();
+    private const int MisfiresRemembered = 1000;
     // Registered by AddCronlightHistory; a clustered scheduler's streaks are read from it
     private IJobHistoryStore? history;
     private List<CronlightWebhook> webhooks = new();
@@ -328,12 +330,12 @@ internal sealed class AlertWorker(
     /// <summary>The alert this run raises, if any.</summary>
     private async Task<CronlightAlert?> Check(AlertRun run, CancellationToken cancellationToken)
     {
-        // Only one node handles each misfire, so each raises exactly one alert
+        // Only one node handles each misfire, so each raises one alert
         if (run.Misfired)
         {
-            var jobType = services.GetService<CronlightSchedulers>() is { } schedulers
-                ? await schedulers.JobType(run.SchedulerName, run.Job, cancellationToken)
-                : null;
+            if (options.Value.Jobs?.Invoke(run.Job) == false || !RememberMisfire((run.SchedulerName, run.FireInstanceId)))
+                return null;
+            var jobType = await schedulers.JobType(run.SchedulerName, run.Job, cancellationToken);
             return Alert(run with { JobType = jobType }, CronlightAlertKind.Misfired, 0, run.Error);
         }
 
@@ -355,6 +357,17 @@ internal sealed class AlertWorker(
         return null;
     }
 
+    /// <summary>False when this misfire was already alerted.</summary>
+    private bool RememberMisfire((string, string) id)
+    {
+        if (!misfiresAlerted.Add(id))
+            return false;
+        misfireOrder.Enqueue(id);
+        if (misfireOrder.Count > MisfiresRemembered)
+            misfiresAlerted.Remove(misfireOrder.Dequeue());
+        return true;
+    }
+
     /// <summary>
     /// How many times the job failed in a row before this run. In a cluster with history, read from history so
     /// runs on every node count; history is written in the background, so a run that just finished may not be
@@ -366,12 +379,13 @@ internal sealed class AlertWorker(
         if (!run.Clustered || history == null)
             return streaks.GetValueOrDefault(run.StreakKey);
 
-        // Newest first. Some slack beyond the threshold for runs still going, cancelled, retried or skipped, which do not count.
+        // Newest first. Slack beyond the threshold for records that do not count: runs still going, cancelled, retried
+        // or skipped, and misfires, of which a busy scheduler can record many between two runs.
         var records = await history.Query(run.SchedulerName, new JobHistoryQuery
         {
             JobGroup = run.Job.Group,
             JobName = run.Job.Name,
-            Limit = threshold + 20
+            Limit = threshold + 100
         }, cancellationToken);
 
         var failures = 0;

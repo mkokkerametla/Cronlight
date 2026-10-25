@@ -498,7 +498,10 @@ function RecentRuns({
               <li key={r.id} className="space-y-1 px-3 py-2">
                 <div className="flex items-center gap-2">
                   <ExecutionStatusBadge status={r.status} />
-                  <span title={formatDateTime(recordTime(r))}>{formatRelative(recordTime(r))}</span>
+                  <span title={formatDateTime(recordTime(r))}>
+                    {r.status === 'Misfired' && 'missed '}
+                    {formatRelative(recordTime(r))}
+                  </span>
                   {r.attempt > 1 && (
                     <span className="text-xs text-muted-foreground">attempt {r.attempt}</span>
                   )}

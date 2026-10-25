@@ -162,6 +162,7 @@ export function HistoryTable({
                     <ExecutionStatusBadge status={r.status} />
                   </TableCell>
                   <TableCell title={formatDateTime(recordTime(r))}>
+                    {r.status === 'Misfired' && 'missed '}
                     {formatRelative(recordTime(r))}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">

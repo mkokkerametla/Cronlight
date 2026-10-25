@@ -241,7 +241,8 @@ builder.Services.AddCronlightHistory(o =>
   default; the scheduler was down, paused or had no free thread), history records it as `Misfired`: at the
   fire time it missed, with how many fire times were missed and what Quartz does about it, e.g. "Missed 3
   fire times, the first by 2h 5m; Quartz runs it once now (misfire instruction FireOnceNow)." A run that
-  follows appears as a run of its own. Triggers with `IgnoreMisfirePolicy` fire every missed time instead
+  follows appears as a run of its own. The count ignores the trigger's calendar, so times a calendar
+  excludes are counted as missed too. Triggers with `IgnoreMisfirePolicy` fire every missed time instead
   and are not reported as misfires. Filter the History tab by *Misfired* to see them all.
 - **Retention** is applied hourly by every node and only touches its own scheduler's rows, so apps sharing
   a database keep their own retention.

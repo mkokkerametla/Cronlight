@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Quartz;
 using Quartz.Spi;
@@ -8,7 +10,12 @@ namespace Cronlight;
 /// <param name="MissedFireTimeUtc">The first fire time it missed.</param>
 /// <param name="DetectedUtc">When Quartz noticed: when the scheduler restarted, or when a thread came free.</param>
 /// <param name="Description">How many fire times it missed, by how long, and what Quartz does about it.</param>
+/// <param name="Id">
+/// The same for the same trigger and missed fire time. A database store whose misfire handling fails rolls it back
+/// and reports the misfire again on its next pass, so this keeps a repeat from being recorded or alerted twice.
+/// </param>
 internal sealed record Misfire(
+    string Id,
     string SchedulerName,
     string InstanceName,
     JobKey Job,
@@ -57,20 +64,25 @@ internal static class Misfires
 
     /// <summary>
     /// Quartz reports a trigger before applying its misfire instruction to it, so the trigger's next fire time is
-    /// still the first one it missed.
+    /// still the first one it missed. Fire times are counted without the trigger's calendar, which cannot be read
+    /// safely here, so a calendar's excluded times count as missed too.
     /// </summary>
+
     public static Misfire Describe(string schedulerName, string instanceName, ITrigger trigger, DateTimeOffset nowUtc)
     {
         var missed = trigger.GetNextFireTimeUtc() ?? nowUtc;
         var count = 1;
-        for (var next = trigger.GetFireTimeAfter(missed); next <= nowUtc && count < MaxCounted; next = trigger.GetFireTimeAfter(next))
+        // One past the cap, to tell exactly MaxCounted from more
+        for (var next = trigger.GetFireTimeAfter(missed); next <= nowUtc && count <= MaxCounted; next = trigger.GetFireTimeAfter(next))
             count++;
 
         var late = Duration(nowUtc - missed);
         var what = count == 1
             ? $"Missed its fire time by {late}"
-            : $"Missed {count}{(count == MaxCounted ? "+" : "")} fire times, the first by {late}";
-        return new Misfire(schedulerName, instanceName, trigger.JobKey, trigger.Key, missed, nowUtc,
+            : count > MaxCounted
+                ? $"Missed {MaxCounted}+ fire times, the first by {late}"
+                : $"Missed {count} fire times, the first by {late}";
+        return new Misfire(Id(trigger.Key, missed), schedulerName, instanceName, trigger.JobKey, trigger.Key, missed, nowUtc,
             $"{what}; {Outcome(trigger, nowUtc)} (misfire instruction {Instruction(trigger)}).");
     }
 
@@ -83,12 +95,19 @@ internal static class Misfires
         if (trigger.Clone() is not IOperableTrigger copy)
             return "Quartz applies its misfire instruction";
         copy.UpdateAfterMisfire(null);
-        return copy.GetNextFireTimeUtc() switch
-        {
-            null => "it has no fire times left, so it will not run again",
-            { } next when next <= nowUtc.AddSeconds(1) => "Quartz runs it once now",
-            _ => "Quartz skips it and waits for the next fire time",
-        };
+        // Running now puts the next fire time ahead of the trigger's own next one; skipping lands on that one or later
+        var next = copy.GetNextFireTimeUtc();
+        var regular = trigger.GetFireTimeAfter(nowUtc);
+        return next == null ? "it has no fire times left, so it will not run again"
+            : regular == null || next < regular ? "Quartz runs it once now"
+            : "Quartz skips it and waits for the next fire time";
+    }
+
+    // Short enough for the history table's entry id column with any trigger key
+    private static string Id(TriggerKey trigger, DateTimeOffset missed)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{trigger.Group}\n{trigger.Name}"));
+        return $"misfire-{missed.UtcTicks}-{Convert.ToHexString(hash, 0, 8)}";
     }
 
     /// <summary>The instruction's name, as the trigger builders spell it.</summary>

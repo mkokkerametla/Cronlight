@@ -15,12 +15,13 @@ internal sealed class JobHistoryAttachment(JobHistoryListener listener, JobHisto
         return Task.CompletedTask;
     }
 
-    // A misfire is not a run, so it has no fire instance id of its own and is written finished
+    // A misfire is not a run, so it is written finished, under its own id: a misfire reported again after a
+    // rollback replaces its record rather than adding another
     private void Record(Misfire misfire) => queue.Enqueue(HistoryEvent.Finished, new JobExecutionRecord
     {
         SchedulerName = misfire.SchedulerName,
         InstanceName = misfire.InstanceName,
-        FireInstanceId = $"misfire-{Guid.NewGuid():N}",
+        FireInstanceId = misfire.Id,
         JobName = misfire.Job.Name,
         JobGroup = misfire.Job.Group,
         TriggerName = misfire.Trigger.Name,

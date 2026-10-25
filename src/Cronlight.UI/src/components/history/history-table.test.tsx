@@ -133,7 +133,7 @@ describe('HistoryTable', () => {
     const row = within((await screen.findByText(note)).closest('tr') as HTMLElement)
     expect(query(1)).toMatchObject({ status: 'Misfired' })
     expect(row.getByText('Misfired', { selector: '[data-slot=badge]' })).toBeInTheDocument()
-    expect(row.getByText('25 min. ago')).toBeInTheDocument()
+    expect(row.getByText('missed 25 min. ago')).toBeInTheDocument()
     // Not a failure, and not a run to repeat
     expect(row.getByText(note)).not.toHaveClass('text-destructive')
     expect(row.queryByRole('button', { name: /again/ })).toBeNull()
