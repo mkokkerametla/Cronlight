@@ -1,4 +1,4 @@
-<img src="https://raw.githubusercontent.com/mkokkerametla/Cronlight/main/assets/icon.png" alt="" width="64" height="64" align="left">
+<img src="assets/icon.png" alt="" width="64" height="64" align="left">
 
 # Cronlight
 
