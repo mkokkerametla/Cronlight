@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -129,7 +130,8 @@ internal static class DashboardApi
                 // Lets the UI hide controls the user cannot use; the server still enforces it
                 CanManage = await CanManage(http, options.Value),
                 HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null,
-                options.Value.ShowScheduleAssistant
+                options.Value.ShowScheduleAssistant,
+                SecretReferences = SecretReferences.Enabled(options.Value)
             });
         });
 
@@ -238,6 +240,9 @@ internal static class DashboardApi
 
             if (ValidateParameters(info, data) is { } invalid)
                 return Results.BadRequest(invalid);
+            var secretKeys = SecretKeys(info);
+            if (CheckSecretReferences(http, data, secretKeys, options.Value) is { } unresolved)
+                return Results.BadRequest(unresolved);
 
             var key = new JobKey(request.Name, string.IsNullOrWhiteSpace(request.Group) ? "DEFAULT" : request.Group);
             if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
@@ -256,7 +261,7 @@ internal static class DashboardApi
                 .StoreDurably()
                 .Build();
 
-            var changes = DataChanges(new Dictionary<string, object>(), job.JobDataMap, SecretKeys(info), options.Value);
+            var changes = DataChanges(new Dictionary<string, object>(), job.JobDataMap, secretKeys, options.Value);
             AddChange(changes, "description", null, request.Description);
             AddChange(changes, "triggers", null, DescribeTriggers(triggers));
             Audit.RecordChanges(http, changes);
@@ -278,8 +283,12 @@ internal static class DashboardApi
                 return Results.Conflict($"Job {key} has a type that cannot be loaded here and cannot be edited.");
 
             // Validate everything before mutating anything
-            if (request.Data != null && catalog.Describe(existing.JobType) is { } info && ValidateParameters(info, request.Data) is { } invalid)
+            var info = catalog.Describe(existing.JobType);
+            var secretKeys = SecretKeys(info);
+            if (request.Data != null && info != null && ValidateParameters(info, request.Data) is { } invalid)
                 return Results.BadRequest(invalid);
+            if (request.Data != null && CheckSecretReferences(http, request.Data, secretKeys, options.Value) is { } unresolved)
+                return Results.BadRequest(unresolved);
 
             var requested = new List<ITrigger>();
             IReadOnlyCollection<ITrigger> current = [];
@@ -294,7 +303,7 @@ internal static class DashboardApi
             }
 
             var data = request.Data == null ? existing.JobDataMap : MergeJobData(existing.JobDataMap, request.Data);
-            var changes = DataChanges(existing.JobDataMap, data, SecretKeys(catalog.Describe(existing.JobType)), options.Value);
+            var changes = DataChanges(existing.JobDataMap, data, secretKeys, options.Value);
             if (request.Description != null)
                 AddChange(changes, "description", existing.Description, request.Description);
             if (request.Triggers != null)
@@ -523,7 +532,7 @@ internal static class DashboardApi
 
         var data = detail.JobDataMap.ToDictionary(
             kv => kv.Key,
-            kv => IsSensitive(kv.Key, secretKeys, options) ? Mask : kv.Value?.ToString()
+            kv => Display(kv.Key, kv.Value?.ToString(), secretKeys, options)
         );
 
         return new JobDto(key.Name, key.Group, detail.Description, detail.JobType.FullName, info?.DisplayName,
@@ -584,7 +593,7 @@ internal static class DashboardApi
     private static JobDataMap ToJobDataMap(Dictionary<string, string> data) =>
         new((IDictionary<string, object>)data.ToDictionary(kv => kv.Key, kv => (object)kv.Value));
 
-    private static HashSet<string> SecretKeys(JobTypeInfo? info) =>
+    internal static HashSet<string> SecretKeys(JobTypeInfo? info) =>
         info?.Parameters.Where(p => p.Type == nameof(JobParameterType.Secret)).Select(p => p.Key).ToHashSet() ?? new HashSet<string>();
 
     /// <summary>Job data that differs between two maps, by "data.&lt;key&gt;", for the audit log. Sensitive values are masked.</summary>
@@ -598,8 +607,7 @@ internal static class DashboardApi
             var @new = after.TryGetValue(key, out var n) ? n?.ToString() : null;
             if (old == @new)
                 continue;
-            var hide = IsSensitive(key, secretKeys, options);
-            changes[$"data.{key}"] = new(hide && old != null ? Mask : old, hide && @new != null ? Mask : @new);
+            changes[$"data.{key}"] = new(Display(key, old, secretKeys, options), Display(key, @new, secretKeys, options));
         }
         return changes;
     }
@@ -615,9 +623,23 @@ internal static class DashboardApi
             ? text
             : null;
 
-    private static bool IsSensitive(string key, HashSet<string> secretKeys, CronlightOptions options) =>
+    internal static bool IsSensitive(string key, HashSet<string> secretKeys, CronlightOptions options) =>
         secretKeys.Contains(key)
         || options.SensitiveKeyPatterns.Any(p => key.Contains(p, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// A job data value as the API and audit log show it: sensitive values are masked, except secret
+    /// references, which name a secret without revealing it and are shown so people can see which one is used.
+    /// </summary>
+    private static string? Display(string key, string? value, HashSet<string> secretKeys, CronlightOptions options) =>
+        value == null || !IsSensitive(key, secretKeys, options) ? value
+        : SecretReferences.Enabled(options) && SecretReferences.IsReference(value) ? value
+        : Mask;
+
+    /// <summary>Refuses secret references that would fail when the job runs, so the mistake shows when saving.</summary>
+    private static string? CheckSecretReferences(HttpContext http, Dictionary<string, string> data, HashSet<string> secretKeys, CronlightOptions options) =>
+        SecretReferences.Check(data, key => IsSensitive(key, secretKeys, options), options,
+            http.RequestServices.GetRequiredService<IConfiguration>());
 
     private static bool TryResolveTimeZone(string? id, out TimeZoneInfo tz)
     {

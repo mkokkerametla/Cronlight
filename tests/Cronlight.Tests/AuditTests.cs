@@ -155,7 +155,7 @@ public class AuditTests
         Assert.Contains(logs.Entries, e => e.Level == LogLevel.Error && e.Message.Contains("Audit sink ThrowingSink failed"));
     }
 
-    private sealed class RecordingSink : ICronlightAuditSink
+    internal sealed class RecordingSink : ICronlightAuditSink
     {
         private readonly ConcurrentQueue<CronlightAuditEvent> events = new();
         public List<CronlightAuditEvent> Events => events.ToList();

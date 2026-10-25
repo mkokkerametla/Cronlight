@@ -30,6 +30,11 @@ public static class CronlightExtensions
         services.AddSingleton<JobTypeCatalog>();
         services.TryAddSingleton<QuartzDataSource>();
         services.AddSingleton<RunningJobsReader>();
+        services.TryAddSingleton<SecretReferenceListener>();
+        // First in the collection: hosted services start in registration order, so the listener is
+        // attached before Quartz's hosted service starts running jobs
+        if (!services.Any(d => d.ImplementationType == typeof(SecretReferenceRegistration)))
+            services.Insert(0, ServiceDescriptor.Singleton<IHostedService, SecretReferenceRegistration>());
         return services;
     }
 

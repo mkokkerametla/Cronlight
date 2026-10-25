@@ -28,6 +28,7 @@ interface Props {
   onOpenChange: (open: boolean) => void
   jobTypes: JobType[]
   showScheduleAssistant: boolean
+  secretReferences: boolean
   onCreate: (request: CreateJobRequest) => Promise<boolean>
 }
 
@@ -36,6 +37,7 @@ export function CreateJobSheet({
   onOpenChange,
   jobTypes,
   showScheduleAssistant,
+  secretReferences,
   onCreate,
 }: Props) {
   return (
@@ -52,6 +54,7 @@ export function CreateJobSheet({
           <CreateJobForm
             jobTypes={jobTypes}
             showScheduleAssistant={showScheduleAssistant}
+            secretReferences={secretReferences}
             onCreate={onCreate}
             onDone={() => onOpenChange(false)}
           />
@@ -64,6 +67,7 @@ export function CreateJobSheet({
 function CreateJobForm({
   jobTypes,
   showScheduleAssistant,
+  secretReferences,
   onCreate,
   onDone,
 }: Omit<Props, 'open' | 'onOpenChange'> & { onDone: () => void }) {
@@ -168,7 +172,7 @@ function CreateJobForm({
         <Separator />
         <section className="space-y-2">
           <h3 className="text-sm font-medium">Job data</h3>
-          <DataEditor rows={data} onChange={setData} />
+          <DataEditor rows={data} onChange={setData} secretReferences={secretReferences} />
         </section>
       </div>
 

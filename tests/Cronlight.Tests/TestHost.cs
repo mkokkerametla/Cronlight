@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -41,7 +42,8 @@ public sealed class TestHost : IAsyncDisposable
         Action<JobHistoryOptions>? history = null,
         bool useProperties = true,
         Action<IServiceCollection>? services = null,
-        bool ramJobStore = false)
+        bool ramJobStore = false,
+        Dictionary<string, string?>? settings = null)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
         var schedulerName = $"test-{id}";
@@ -50,6 +52,8 @@ public sealed class TestHost : IAsyncDisposable
 
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = environment });
         builder.WebHost.UseTestServer();
+        if (settings != null)
+            builder.Configuration.AddInMemoryCollection(settings);
         // Quartz's LogProvider is process-static and captures the first host's ILoggerFactory.
         // A shared instance (which DI never disposes) keeps later hosts from hitting a disposed one.
         builder.Logging.ClearProviders();

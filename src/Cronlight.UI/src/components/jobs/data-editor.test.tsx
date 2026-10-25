@@ -17,11 +17,11 @@ const param = (key: string, overrides: Partial<JobParameter> = {}): JobParameter
 })
 
 /** Renders the editor with real state and shows what the form would send, as the job forms do. */
-function Editor({ initial }: { initial: DataRow[] }) {
+function Editor({ initial, secretReferences }: { initial: DataRow[]; secretReferences?: boolean }) {
   const [rows, setRows] = useState(initial)
   return (
     <>
-      <DataEditor rows={rows} onChange={setRows} />
+      <DataEditor rows={rows} onChange={setRows} secretReferences={secretReferences} />
       <output data-testid="data">{JSON.stringify(rowsToData(rows))}</output>
     </>
   )
@@ -54,6 +54,25 @@ describe('DataEditor', () => {
     expect(screen.getByLabelText('endpoint')).toHaveAttribute('type', 'url')
     expect(screen.getByLabelText('notes').tagName).toBe('TEXTAREA')
     expect(screen.getByText('Shown on the invoice')).toBeInTheDocument()
+    expect(screen.getByLabelText('smtpPassword')).toHaveAttribute('type', 'password')
+  })
+
+  it('shows secret references in secret fields, with a hint, when the server resolves them', async () => {
+    const secret = () => [
+      { key: 'smtpPassword', value: '', param: param('smtpPassword', { type: 'Secret' }) },
+    ]
+    const { unmount } = render(<Editor initial={secret()} secretReferences />)
+
+    expect(screen.getByText(/to use a secret stored in the server/)).toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText('smtpPassword'), 'secret:Smtp:Password')
+    expect(screen.getByLabelText('smtpPassword')).toHaveAttribute('type', 'text')
+    expect(sent()).toEqual({ smtpPassword: 'secret:Smtp:Password' })
+    unmount()
+
+    // Off: no hint, and a value that happens to start with secret: stays hidden
+    render(<Editor initial={secret()} />)
+    expect(screen.queryByText(/to use a secret stored in the server/)).not.toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText('smtpPassword'), 'secret:Smtp:Password')
     expect(screen.getByLabelText('smtpPassword')).toHaveAttribute('type', 'password')
   })
 

@@ -47,10 +47,16 @@ builder.Services.AddAuthorization(o =>
     o.AddPolicy("QuartzAdmins", p => p.RequireRole("admin"));
 });
 
+// Demo secret; real apps keep these in user secrets, environment variables or a key vault
+builder.Configuration["JobSecrets:Demo:OrdersToken"] ??= "Bearer demo-token";
+
 builder.Services.AddCronlight(o =>
 {
     // Off by default, since what users type goes to ChatGPT or Google; the demo shows it
     o.ShowScheduleAssistant = true;
+    // Secret parameters may name a secret from configuration instead of holding it, e.g.
+    // authorization = secret:Demo:OrdersToken for the HTTP job calling /demo/orders
+    o.SecretsSection = "JobSecrets";
     // Bound from config so the spike can flip modes without recompiling
     builder.Configuration.GetSection("Cronlight").Bind(o);
 });

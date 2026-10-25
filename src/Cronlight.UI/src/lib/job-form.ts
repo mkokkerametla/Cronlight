@@ -3,6 +3,8 @@ import type { JobParameter, JobType, Trigger, TriggerRequest } from '@/types'
 // Form state <-> API request conversion shared by the create and edit forms
 
 export const MASK = '********'
+/** Values starting with this name a secret in the server's configuration (see SecretsSection) */
+export const SECRET_PREFIX = 'secret:'
 
 /** A JobDataMap entry. Rows with a param come from [JobParameter] metadata and have a fixed key. */
 export interface DataRow {

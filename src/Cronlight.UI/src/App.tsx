@@ -38,6 +38,7 @@ export default function App() {
   const canManage = scheduler?.canManage ?? false
   const historyEnabled = scheduler?.historyEnabled ?? false
   const showScheduleAssistant = scheduler?.showScheduleAssistant ?? false
+  const secretReferences = scheduler?.secretReferences ?? false
 
   const changeTab = (next: Tab) => {
     setTab(next)
@@ -169,6 +170,7 @@ export default function App() {
         canManage={canManage}
         historyEnabled={historyEnabled}
         showScheduleAssistant={showScheduleAssistant}
+        secretReferences={secretReferences}
         actions={actions}
         onClose={() => setSelectedKey(null)}
         onViewHistory={showJobHistory}
@@ -178,6 +180,7 @@ export default function App() {
         onOpenChange={setCreating}
         jobTypes={jobTypes}
         showScheduleAssistant={showScheduleAssistant}
+        secretReferences={secretReferences}
         onCreate={actions.create}
       />
     </div>

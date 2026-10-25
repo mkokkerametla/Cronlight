@@ -41,6 +41,7 @@ export const scheduler = (overrides: Partial<SchedulerInfo> = {}): SchedulerInfo
   canManage: true,
   historyEnabled: true,
   showScheduleAssistant: true,
+  secretReferences: false,
   ...overrides,
 })
 

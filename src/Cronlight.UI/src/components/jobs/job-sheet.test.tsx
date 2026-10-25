@@ -32,6 +32,7 @@ function renderSheet(subject: Job, overrides: Partial<Parameters<typeof JobSheet
         canManage
         historyEnabled={false}
         showScheduleAssistant={false}
+        secretReferences={false}
         actions={actions}
         onClose={() => {
           onClose()

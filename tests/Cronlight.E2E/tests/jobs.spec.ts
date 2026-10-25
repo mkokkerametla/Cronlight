@@ -115,6 +115,36 @@ test('an HTTP job created from the form calls the API and succeeds', async ({ pa
   await expect(details.getByText('Succeeded')).toBeVisible({ timeout: 20_000 })
 })
 
+test('an HTTP job can name its token as a secret reference, resolved from configuration when it runs', async ({ page, baseURL }) => {
+  const name = uniqueName('http-secret-ref')
+  await openDashboard(page)
+  await page.getByRole('button', { name: 'New job' }).click()
+  const sheet = page.getByRole('dialog', { name: 'New job' })
+
+  await choose(page, sheet.locator('#job-type'), /HTTP request/)
+  await sheet.getByLabel('Name', { exact: true }).fill(name)
+  await sheet.locator('#param-url').fill(`${new URL(baseURL!).origin}/demo/orders`)
+  await choose(page, sheet.locator('#param-method'), 'POST')
+  await expect(sheet.getByText(/to use a secret stored in the server/)).toBeVisible()
+  // An unknown name is refused when saving, with the reason, and the form stays open
+  await sheet.locator('#param-authorization').fill('secret:Demo:Nope')
+  await expect(sheet.locator('#param-authorization')).toHaveAttribute('type', 'text')
+  await sheet.getByRole('button', { name: 'Create job' }).click()
+  await expect(page.getByText(/No secret named 'Demo:Nope' is configured/)).toBeVisible()
+  await expect(sheet).toBeVisible()
+
+  await sheet.locator('#param-authorization').fill('secret:Demo:OrdersToken')
+  await sheet.getByRole('button', { name: 'Create job' }).click()
+  await expect(sheet).toBeHidden()
+
+  await jobRow(page, name).click()
+  const details = page.getByRole('dialog', { name })
+  await expect(details).toContainText('secret:Demo:OrdersToken')
+  // The demo endpoint answers 202 only with the configured token
+  await details.getByRole('button', { name: 'Run now' }).click()
+  await expect(details.getByText('Succeeded')).toBeVisible({ timeout: 20_000 })
+})
+
 test('editing job data and description keeps a secret that was not retyped', async ({ page, request, baseURL }) => {
   const name = uniqueName('edit-data')
   await createJob(request, {

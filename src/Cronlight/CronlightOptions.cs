@@ -33,6 +33,17 @@ public class CronlightOptions
     /// </summary>
     public bool ShowScheduleAssistant { get; set; }
 
+    /// <summary>
+    /// Turns on secret references. A secret parameter (or one matching <see cref="SensitiveKeyPatterns"/>) set to
+    /// <c>secret:Smtp:Password</c> stores only that name, and the value is read from configuration key
+    /// <c>{SecretsSection}:Smtp:Password</c> just before each run, so the database never holds the secret.
+    /// Any configuration source works: appsettings, user secrets, environment variables or Azure Key Vault
+    /// (a vault secret named <c>JobSecrets--Smtp--Password</c> for section <c>JobSecrets</c>). Only keys in this
+    /// section can be referenced, so people who can edit jobs cannot read the rest of the configuration.
+    /// Null (the default) turns references off, and the API refuses to save them.
+    /// </summary>
+    public string? SecretsSection { get; set; }
+
     /// <summary>The Content-Security-Policy the dashboard sends unless changed.</summary>
     public const string DefaultContentSecurityPolicy =
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; " +

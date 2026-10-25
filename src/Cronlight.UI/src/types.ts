@@ -60,6 +60,7 @@ export interface SchedulerInfo {
   canManage: boolean
   historyEnabled: boolean
   showScheduleAssistant: boolean
+  secretReferences: boolean
 }
 
 export interface RunningJob {

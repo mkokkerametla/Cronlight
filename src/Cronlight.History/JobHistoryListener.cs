@@ -54,7 +54,8 @@ internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHist
         queue.Enqueue(HistoryEvent.Finished, Record(context, JobExecutionStatus.Vetoed) with
         {
             FinishedTimeUtc = context.FireTimeUtc,
-            DurationMs = 0
+            DurationMs = 0,
+            Error = context.Get(CronlightContextKeys.VetoReason) is string reason ? Truncate(reason) : null
         });
         return Task.CompletedTask;
     }
@@ -95,7 +96,11 @@ internal sealed class JobHistoryListener(JobHistoryQueue queue, IOptions<JobHist
         Exception cause = exception;
         while (cause is SchedulerException { InnerException: { } inner })
             cause = inner;
-        var text = $"{cause.GetType().Name}: {cause.Message}";
+        return Truncate($"{cause.GetType().Name}: {cause.Message}");
+    }
+
+    private string Truncate(string text)
+    {
         var max = options.Value.MaxErrorLength;
         return text.Length <= max ? text : text[..(max - 1)] + "…";
     }

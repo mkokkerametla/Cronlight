@@ -77,3 +77,20 @@ public class ExportJob : IJob
 {
     public Task Execute(IJobExecutionContext context) => Task.CompletedTask;
 }
+
+/// <summary>Records the smtpPassword and endpoint values each run sees, keyed by the "run" job data value.</summary>
+[CronlightJob("Secret echo")]
+[JobParameter("smtpPassword", Type = JobParameterType.Secret)]
+[JobParameter("endpoint")]
+public class SecretEchoJob : IJob
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string? Password, string? Endpoint)> Seen = new();
+
+    public Task Execute(IJobExecutionContext context)
+    {
+        var data = context.MergedJobDataMap;
+        string? Get(string key) => data.TryGetValue(key, out var value) ? value?.ToString() : null;
+        Seen[data.GetString("run")!] = (Get("smtpPassword"), Get("endpoint"));
+        return Task.CompletedTask;
+    }
+}

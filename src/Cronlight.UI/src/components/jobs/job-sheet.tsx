@@ -44,6 +44,7 @@ interface Props {
   canManage: boolean
   historyEnabled: boolean
   showScheduleAssistant: boolean
+  secretReferences: boolean
   actions: DashboardActions
   onClose: () => void
   onViewHistory: (group: string, name: string) => void
@@ -55,6 +56,7 @@ export function JobSheet({
   canManage,
   historyEnabled,
   showScheduleAssistant,
+  secretReferences,
   actions,
   onClose,
   onViewHistory,
@@ -97,6 +99,7 @@ export function JobSheet({
                 key={`${job.group}.${job.name}`}
                 job={job}
                 showScheduleAssistant={showScheduleAssistant}
+                secretReferences={secretReferences}
                 jobType={jobType}
                 onCancel={() => setEditing(false)}
                 onSave={async request => {
@@ -287,12 +290,14 @@ function EditJobForm({
   job,
   jobType,
   showScheduleAssistant,
+  secretReferences,
   onSave,
   onCancel,
 }: {
   job: Job
   jobType: JobType | undefined
   showScheduleAssistant: boolean
+  secretReferences: boolean
   onSave: (request: {
     description: string | null
     data: Record<string, string>
@@ -343,7 +348,7 @@ function EditJobForm({
         <Separator />
         <section className="space-y-2">
           <h3 className="text-sm font-medium">Job data</h3>
-          <DataEditor rows={data} onChange={setData} />
+          <DataEditor rows={data} onChange={setData} secretReferences={secretReferences} />
         </section>
       </div>
 

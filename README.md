@@ -68,6 +68,7 @@ Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
 | `JobAssemblies` | all loaded app assemblies | Where to look for `IJob` types offered in "New Job" |
 | `ShowScheduleAssistant` | `false` | Show the "describe your schedule" box that opens the question in ChatGPT or Google. What users type goes to that site, so turn it on only where staff may use external AI or search tools |
 | `SensitiveKeyPatterns` | password, secret, token, apikey, connectionstring | JobDataMap keys masked in responses |
+| `SecretsSection` | none | Configuration section that [secret references](#secret-references) are read from; none turns them off |
 | `ContentSecurityPolicy` | own files only, no framing | Content-Security-Policy for the dashboard. Change `frame-ancestors` to show it inside your own portal; `null` sends none |
 
 ## Describing your jobs (optional)
@@ -86,6 +87,35 @@ Parameter types are `String`, `Int`, `Bool`, `Url`, `Text` (multi-line) and `Sec
 `Choices = new[] { "csv", "json" }` turns a parameter into a dropdown and the API rejects other values.
 
 Only types discovered in your app can be created; the API never instantiates a type by an arbitrary name.
+
+### Secret references
+
+Secret values are masked in the UI but stored as plain text in the Quartz tables. To keep them out of the
+database, store a reference instead: set a secret parameter to `secret:Smtp:Password`, and Cronlight reads
+the value from configuration just before each run.
+
+```csharp
+builder.Services.AddCronlight(o => o.SecretsSection = "JobSecrets");
+```
+
+```json
+{ "JobSecrets": { "Smtp": { "Password": "…" } } }
+```
+
+Any configuration source works: user secrets, environment variables (`JobSecrets__Smtp__Password`) or
+Azure Key Vault through its configuration provider (a vault secret named `JobSecrets--Smtp--Password`).
+
+- Only keys inside `SecretsSection` can be referenced, so people who can edit jobs cannot read
+  connection strings or other configuration.
+- References are resolved only in secret parameters and keys matching `SensitiveKeyPatterns`. In other
+  parameters `secret:…` is plain text, so a secret cannot be copied into a URL or request body.
+- The API checks references when a job is saved and refuses unknown names. A run whose secret is missing
+  (removed from configuration later, or a job saved by code) is vetoed and history shows why.
+- References are not secret, so the UI and audit log show them as written.
+- The value replaces the reference in the run's `context.MergedJobDataMap`, which is where jobs should
+  read it. The stored job keeps the reference. `context.JobDetail.JobDataMap` holds the reference too.
+- Every app that runs these jobs (each cluster node) needs `AddCronlight` with the same `SecretsSection`
+  and the secrets in its configuration.
 
 ## Scheduling API calls (HTTP job)
 
@@ -179,7 +209,8 @@ A sink that throws is logged as an error; the change itself has already been mad
 
 ## Behaviour worth knowing
 
-- **Secrets** are shown as `********`. Saving a masked value back keeps the stored value.
+- **Secrets** are shown as `********`. Saving a masked value back keeps the stored value. To keep them
+  out of the database too, use [secret references](#secret-references).
 - **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.
@@ -282,7 +313,7 @@ npm run test:coverage   # report in coverage/
 
 [Playwright](https://playwright.dev) tests in `tests/Cronlight.E2E` start the sample host on a fresh
 SQLite database and drive the dashboard in Chromium: creating, editing, pausing, running and deleting
-jobs (several triggers and time zones, manual-only jobs, secrets kept on edit), cron schedules firing on
+jobs (several triggers and time zones, manual-only jobs, secrets kept on edit, secret references), cron schedules firing on
 their own, bulk pause and resume, search and filters, the stat cards, the running jobs view, history
 (paging, job filter, failing and succeeding HTTP jobs), read-only jobs from other apps sharing the
 scheduler, server errors, changes made elsewhere, a lost connection, viewer and anonymous access, the
