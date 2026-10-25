@@ -30,24 +30,56 @@ These are listed so the roadmap below is read against them:
 
 ## How Cronlight compares
 
+Checked on 2026-10-25. The big change since the first version of this table: Quartz.NET 4.0 was released
+(September 2026, `net10.0` only, breaking API changes and a mandatory schema migration), and the official
+dashboard left "work in progress" with it, with ten releases from 4.0 to 4.6 in about a month.
+
 | Product | What it is | Notable for |
 | --- | --- | --- |
-| Quartz.Dashboard (official) | Blazor dashboard, experimental | Several schedulers per app (Cronlight now has them too), authorization per scheduler, history, misfire tracking, read-only mode |
-| SilkierQuartz | Quartz dashboard, v10 | Successor to Quartzmin |
-| CrystalQuartz | Quartz dashboard | Last activity found June 2025 |
-| Hangfire | Full scheduler with its own dashboard | Retries (Cronlight now has them too), wide adoption |
-| TickerQ | Full scheduler with its own dashboard (v10.4) | Live SignalR dashboard, retries (Cronlight now has them too), multi-node, ABP integration |
+| Quartz.Dashboard 4.x (official) | Blazor dashboard for Quartz 4, released (4.6.0, 2026-10-19) | Misfires with reasons; history with charts and stats; several schedulers, including remote ones over HTTP, through an agent (`Quartz.Dashboard.Agent`) or from a store; which schedulers a visitor sees (`SchedulerAuthorizationPolicy`); read-only mode; live logs; job progress and captured log lines; interrupting a run; run now with job data overrides; in-memory action log (last 250) |
+| Quartz.Dashboard 3.x (official) | The same dashboard for Quartz 3.16+, still marked work in progress | Several schedulers, read-only mode, live event stream; access control is dashboard-wide |
+| Quartz.NET 4.x itself | The scheduler | Built-in retry policies (fixed, exponential with jitter, explicit; per trigger, per job type, or scheduler default; shared across a cluster), execution history, job outcomes (Succeeded, Skipped, Failed, Cancelled) |
+| SilkierQuartz | Quartz dashboard | 9.0.x; the newest version found is from September 2025 |
+| CrystalQuartz | Quartz dashboard | 7.x; the newest version found is from 2023 |
+| Hangfire | Full scheduler with its own dashboard | Retries, wide adoption; 1.8.x line |
+| TickerQ | Full scheduler with its own dashboard (10.4, May 2026) | Live SignalR dashboard, retries, multi-node, per-function concurrency limits, enabling and disabling cron jobs from the dashboard |
 
-Cronlight leads on security, governance and day-to-day operations. It lags on:
+Compared with the official 4.x dashboard, Cronlight still leads on:
 
-- permissions per scheduler
+- failure and recovery alerts (Slack, Teams, webhook, email), which the official dashboard does not describe;
+- a durable audit trail through sinks, where the official action log keeps the last 250 entries in memory
+  (plus the application log);
+- creating and editing jobs from a catalog of job types with typed, validated and secret parameters, and
+  secret references kept out of the database;
+- cross-site request protection and a Content-Security-Policy;
+- running on Quartz 3.x from 3.13, with no Blazor circuit or SignalR connection.
+
+It lags on:
+
+- **Quartz 4 support.** Cronlight is built on Quartz 3.13 and does not run on 4.x, which is now the
+  current line. Quartz 4 also brings its own retries and execution history, which overlap Cronlight's.
 - misfire visibility
-- live updates pushed to the dashboard instead of polling
+- which schedulers each visitor sees, and remote schedulers (HTTP, agent)
+- live updates, job progress and captured log lines
 - adoption
 
-Suggested order: misfire visibility comes first.
+Suggested order: decide on Quartz 4 support first, since it changes how retries, history and several
+schedulers should be built; then misfire visibility.
 
 ## Next (1.x)
+
+### Quartz 4 support
+
+Quartz.NET 4.0 targets `net10.0` only. Public `Task` members became `ValueTask`, `IJob.Execute` takes a
+cancellation token, the container builds the scheduler (no `quartz.config`, no process-global singletons) and
+the schema needs a migration. Cronlight's listeners, its table reads and its scheduler registry are all
+affected. To decide:
+
+- Support both lines (a 3.x package and a 4.x package), or move to 4.x only?
+- On 4.x, use Quartz's own retry policies and execution history instead of Cronlight's, and show them,
+  rather than run two of each?
+- Process-global singletons are gone in 4.x, so `UseCronlight`'s reason for being opt-in (the
+  process-wide scheduler registry) may not apply there.
 
 ### Several schedulers: follow-ups
 
