@@ -1,9 +1,12 @@
+# Version updates are paused: open-pull-requests-limit 0 stops new pull requests.
+# Remove those lines to turn them back on.
 version: 2
 updates:
   - package-ecosystem: nuget
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     groups:
       quartz:
         patterns: ["Quartz*"]
@@ -14,6 +17,7 @@ updates:
     directory: /src/Cronlight.UI
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     groups:
       ui:
         patterns: ["*"]
@@ -23,3 +27,4 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
