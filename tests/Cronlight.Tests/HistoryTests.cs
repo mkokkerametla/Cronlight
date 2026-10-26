@@ -267,8 +267,10 @@ internal static class HistoryScenarios
         while (true)
         {
             var records = await History(client, query);
-            if (records.Count > 0 && done(records) || DateTime.UtcNow > deadline)
-                return done(records) ? records : throw new TimeoutException($"History never matched; last saw {records.Count} records");
+            if (records.Count > 0 && done(records))
+                return records;
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"History never matched; last saw {records.Count} records");
             await Task.Delay(100);
         }
     }

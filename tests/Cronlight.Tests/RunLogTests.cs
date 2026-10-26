@@ -12,12 +12,12 @@ namespace Cronlight.Tests;
 public class RunLogTests
 {
     /// <summary>
-    /// A real logger factory, which TestHost otherwise replaces with a null one. Never disposed: Quartz's static logging
-    /// may hold on to it after this host has gone.
+    /// A real logger factory, which TestHost otherwise replaces with one that only writes errors to a file in CI. Never
+    /// disposed: Quartz's static logging may hold on to it after this host has gone.
     /// </summary>
     private sealed class KeptLoggerFactory(IEnumerable<ILoggerProvider> providers) : ILoggerFactory
     {
-        private readonly LoggerFactory inner = new(providers, new LoggerFilterOptions { MinLevel = LogLevel.Trace });
+        private readonly LoggerFactory inner = new(providers.Append(ErrorFileLoggerFactory.Instance), new LoggerFilterOptions { MinLevel = LogLevel.Trace });
         public ILogger CreateLogger(string categoryName) => inner.CreateLogger(categoryName);
         public void AddProvider(ILoggerProvider provider) => inner.AddProvider(provider);
         public void Dispose() { }

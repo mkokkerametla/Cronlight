@@ -91,9 +91,6 @@ public class MetricsTests
         await using var host = await TestHost.Start(services: s => s.AddHealthChecks().AddCronlight());
         var health = host.Services.GetRequiredService<HealthCheckService>();
         var scheduler = await host.Scheduler();
-        // Quartz's hosted service may start the scheduler a moment after the app; until then the check says degraded
-        for (var deadline = DateTime.UtcNow.AddSeconds(15); !scheduler.IsStarted && DateTime.UtcNow < deadline;)
-            await Task.Delay(50);
 
         var running = await health.CheckHealthAsync();
         Assert.Equal(HealthStatus.Healthy, running.Status);

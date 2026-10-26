@@ -133,7 +133,7 @@ jobs:
           --blame-hang-timeout 5m --blame-hang-dump-type mini
           --results-directory TestResults
         env:
-          # What the test hosts' servers logged as errors, to explain a 500 or a hang
+          # What the test hosts logged as warnings and errors, to explain a 500 or a hang
           CRONLIGHT_TEST_ERROR_LOG: ${{ github.workspace }}/TestResults/server-errors.log
 
       - name: Upload test results

@@ -21,12 +21,34 @@ public sealed class TestDatabase
 
     private static readonly ConcurrentDictionary<string, Lazy<Task>> SchemasCreated = new();
 
+    // Every SQLite file of a test run stays here until the run ends. A file deleted while a connection to it may still
+    // be open lets a later file reuse its inode, and SQLite tracks open files by inode, so a new database could be
+    // read through the deleted one's file handle.
+    private static readonly Lazy<string> SqliteDirectory = new(() =>
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cronlight-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Left for the system to clear from its temp folder
+            }
+        };
+        return directory;
+    });
+
     public string Name { get; }
     private readonly string connectionString;
     private readonly Action<SchedulerBuilder.PersistentStoreOptions, string, string> useStore;
     private readonly string? schemaScript;
     private readonly Func<string, DbConnection> connect;
-    private readonly string? temporaryFile;
+    // A database of its own, created with the Quartz tables, rather than one shared by the test run
+    private readonly bool perHost;
 
     private TestDatabase(
         string name,
@@ -34,23 +56,26 @@ public sealed class TestDatabase
         Action<SchedulerBuilder.PersistentStoreOptions, string, string> useStore,
         string? schemaScript,
         Func<string, DbConnection> connect,
-        string? temporaryFile = null)
+        bool perHost = false)
     {
         Name = name;
         this.connectionString = connectionString;
         this.useStore = useStore;
         this.schemaScript = schemaScript;
         this.connect = connect;
-        this.temporaryFile = temporaryFile;
+        this.perHost = perHost;
     }
 
-    /// <summary>A fresh SQLite file per host; always available.</summary>
+    /// <summary>
+    /// A fresh SQLite file per host; always available. Unpooled, so a connection closed by any host, Quartz's or
+    /// Cronlight's, closes the file, and a test run does not keep hundreds of files open.
+    /// </summary>
     public static TestDatabase Sqlite()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cronlight-{Guid.NewGuid():N}.db");
-        var database = new TestDatabase("SQLite", $"Data Source={path}",
+        var path = Path.Combine(SqliteDirectory.Value, $"{Guid.NewGuid():N}.db");
+        var database = new TestDatabase("SQLite", $"Data Source={path};Pooling=False",
             (store, cs, ds) => store.UseMicrosoftSQLite(o => o.ConnectionString = cs, ds),
-            "tables_sqlite.sql", cs => new SqliteConnection(cs), path);
+            "tables_sqlite.sql", cs => new SqliteConnection(cs), perHost: true);
         database.RunScript("tables_sqlite.sql").GetAwaiter().GetResult();
         return database;
     }
@@ -74,7 +99,7 @@ public sealed class TestDatabase
 
     /// <summary>Creates the Quartz tables once per test run. The scripts drop existing tables first.</summary>
     public Task EnsureQuartzSchema() =>
-        temporaryFile != null || schemaScript == null
+        perHost || schemaScript == null
             ? Task.CompletedTask
             : SchemasCreated.GetOrAdd(Name, _ => new Lazy<Task>(() => RunScript(schemaScript))).Value;
 
@@ -94,14 +119,6 @@ public sealed class TestDatabase
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         return await command.ExecuteScalarAsync();
-    }
-
-    public void Cleanup()
-    {
-        if (temporaryFile == null)
-            return;
-        SqliteConnection.ClearAllPools();
-        File.Delete(temporaryFile);
     }
 
     private async Task RunScript(string relativePath)

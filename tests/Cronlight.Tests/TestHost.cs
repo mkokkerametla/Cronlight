@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -22,6 +23,9 @@ namespace Cronlight.Tests;
 /// </summary>
 public sealed class TestHost : IAsyncDisposable
 {
+    // A host that never finishes starting or stopping fails its test, rather than holding up the whole run
+    private static readonly TimeSpan StartStopLimit = TimeSpan.FromSeconds(30);
+
     private readonly WebApplication app;
 
     public string SchedulerName { get; }
@@ -80,6 +84,8 @@ public sealed class TestHost : IAsyncDisposable
             });
         });
         builder.Services.AddQuartzHostedService();
+        // Hosted services that honour the stop token give up after this, well within StartStopLimit
+        builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(10));
         services?.Invoke(builder.Services);
         if (history != null)
             builder.Services.AddCronlightHistory(history);
@@ -104,16 +110,42 @@ public sealed class TestHost : IAsyncDisposable
             app.UseAuthentication();
             app.UseAuthorization();
             app.MapCronlight("/cronlight");
-            await app.StartAsync();
+            await Within(app.StartAsync(), $"Test host {schedulerName} did not start");
+            await WaitForScheduler(app, schedulerName);
             return new TestHost(app, schedulerName, database);
         }
         catch
         {
             // Tests that expect startup to fail get no host to dispose, so clean up here
             if (app != null)
-                await app.DisposeAsync();
-            database.Cleanup();
+                await Within(app.DisposeAsync().AsTask(), $"Test host {schedulerName} was not disposed");
             throw;
+        }
+    }
+
+    // Quartz's hosted service starts the scheduler in the background once the app has started. Tests begin when it
+    // runs, so that pausing it in a test holds and stopping the host never cuts its start short.
+    private static async Task WaitForScheduler(WebApplication app, string schedulerName)
+    {
+        var scheduler = await app.Services.GetRequiredService<ISchedulerFactory>().GetScheduler();
+        // IsStarted turns true as Start begins; the scheduler leaves standby as it ends
+        for (var deadline = DateTime.UtcNow + StartStopLimit; !scheduler.IsStarted || scheduler.InStandbyMode; await Task.Delay(10))
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException(
+                    $"The scheduler of test host {schedulerName} did not start within {StartStopLimit.TotalSeconds:0} seconds");
+        }
+    }
+
+    private static async Task Within(Task task, string failure)
+    {
+        try
+        {
+            await task.WaitAsync(StartStopLimit);
+        }
+        catch (TimeoutException) when (!task.IsCompleted)
+        {
+            throw new TimeoutException($"{failure} within {StartStopLimit.TotalSeconds:0} seconds");
         }
     }
 
@@ -144,17 +176,17 @@ public sealed class TestHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await app.StopAsync();
-        await app.DisposeAsync();
-        Database.Cleanup();
+        await Within(app.StopAsync(), $"Test host {SchedulerName} did not stop");
+        await Within(app.DisposeAsync().AsTask(), $"Test host {SchedulerName} was not disposed");
     }
 }
 
 /// <summary>
-/// Writes errors logged by every test host to the file named by CRONLIGHT_TEST_ERROR_LOG, as CI sets, so a 500 or a hang
-/// there shows what the server ran into. Without the variable nothing is logged. Many tests cause errors on purpose.
+/// Writes the warnings and errors every test host logs to the file named by CRONLIGHT_TEST_ERROR_LOG, as CI sets, so
+/// a 500 or a hang there shows what the server ran into. Without the variable nothing is logged. Many tests cause
+/// errors on purpose. Tests with their own logger factory add this as a provider.
 /// </summary>
-public sealed class ErrorFileLoggerFactory : ILoggerFactory
+public sealed class ErrorFileLoggerFactory : ILoggerFactory, ILoggerProvider
 {
     public static readonly ErrorFileLoggerFactory Instance = new(Environment.GetEnvironmentVariable("CRONLIGHT_TEST_ERROR_LOG"));
 
@@ -193,7 +225,7 @@ public sealed class ErrorFileLoggerFactory : ILoggerFactory
     private sealed class Category(ErrorFileLoggerFactory factory, string name) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
