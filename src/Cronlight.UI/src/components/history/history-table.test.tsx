@@ -268,5 +268,25 @@ describe('HistoryTable', () => {
 
       expect(screen.getByText('newer')).toBeInTheDocument()
     })
+
+    it('dims a run no longer listed where it is, and removes it once the pointer leaves', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      pages.all = {
+        records: [execution(2, { jobName: 'finished' }), execution(1, { jobName: 'older' })],
+        nextBefore: null,
+      }
+      render(<Harness initial={all} />)
+      await user.hover(await screen.findByText('older'))
+      pages.all = { records: [execution(1, { jobName: 'older' })], nextBefore: null }
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+
+      const row = screen.getByText('finished').closest('tr')
+      expect(row).toHaveClass('opacity-50')
+      expect(row).toHaveAttribute('title', expect.stringMatching(/No longer listed/))
+      await user.unhover(screen.getByText('older'))
+
+      expect(screen.queryByText('finished')).toBeNull()
+    })
   })
 })

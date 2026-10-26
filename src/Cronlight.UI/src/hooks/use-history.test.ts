@@ -161,9 +161,9 @@ describe('useHistory', () => {
       nextBefore: null,
     }
 
-    async function holdThenPoll() {
+    async function holdThenPoll(start = first, next = later) {
       vi.useFakeTimers()
-      mockApi.mockResolvedValueOnce(first).mockResolvedValue(later)
+      mockApi.mockResolvedValueOnce(start).mockResolvedValue(next)
       const hook = renderHook(({ filter }) => useHistory(filter), { initialProps: { filter: all } })
       await act(() => vi.advanceTimersByTimeAsync(0))
       act(() => hook.result.current.holdNewRuns(true))
@@ -214,6 +214,99 @@ describe('useHistory', () => {
 
       expect(ids(result.current.records)).toEqual([9])
       expect(result.current.newRuns).toBe(0)
+    })
+
+    it('does not offer the runs kept aside for the last filter while the new one loads', async () => {
+      const { result, rerender } = await holdThenPoll()
+      mockApi.mockReturnValue(deferred<HistoryPage>().promise)
+
+      rerender({ filter: { status: 'Failed', job: null } })
+      expect(result.current.newRuns).toBe(0)
+      act(() => result.current.holdNewRuns(false))
+
+      expect(ids(result.current.records)).toEqual([2, 1])
+    })
+
+    it('counts as new only runs newer than those shown, and marks runs no longer listed', async () => {
+      // Under the Running filter: 5 finishes and leaves the page, older 2 comes into it, and 6 starts
+      const { result } = await holdThenPoll(
+        page([5, 3], null, 'Running'),
+        page([6, 3, 2], null, 'Running')
+      )
+
+      expect(ids(result.current.records)).toEqual([5, 3])
+      expect(result.current.newRuns).toBe(1)
+      expect([...result.current.gone]).toEqual([5])
+
+      act(() => result.current.holdNewRuns(false))
+      expect(ids(result.current.records)).toEqual([6, 3, 2])
+      expect(result.current.gone.size).toBe(0)
+    })
+
+    it('keeps a run that leaves the page in its place, without new runs, until the hold ends', async () => {
+      const { result } = await holdThenPoll(
+        page([2, 1], null, 'Running'),
+        page([1], null, 'Running')
+      )
+
+      expect(ids(result.current.records)).toEqual([2, 1])
+      expect(result.current.newRuns).toBe(0)
+      expect([...result.current.gone]).toEqual([2])
+
+      act(() => result.current.holdNewRuns(false))
+      expect(ids(result.current.records)).toEqual([1])
+    })
+
+    it('keeps the runs "load more" added when it shows the runs kept aside', async () => {
+      // 2 moves past the end of the first page as 4 starts: it is further down, not gone
+      const { result } = await holdThenPoll(page([3, 2], 2), page([4, 3], 3))
+      expect(result.current.gone.size).toBe(0)
+      mockApi.mockResolvedValue(page([1], null))
+
+      await act(() => result.current.loadMore())
+      expect(ids(result.current.records)).toEqual([3, 2, 1])
+      act(() => result.current.holdNewRuns(false))
+
+      expect(ids(result.current.records)).toEqual([4, 3, 2, 1])
+      expect(result.current.hasMore).toBe(false)
+    })
+
+    it('shows a run asked for a second later, without keeping it aside', async () => {
+      const { result } = await holdThenPoll(first, first)
+      mockApi.mockResolvedValue(later)
+
+      act(() => result.current.showRunSoon())
+      await act(() => vi.advanceTimersByTimeAsync(1000))
+
+      expect(ids(result.current.records)).toEqual([3, 2, 1])
+      expect(result.current.newRuns).toBe(0)
+    })
+
+    it('shows a run asked for at the next refresh when history has not recorded it a second later', async () => {
+      const { result } = await holdThenPoll(first, first)
+
+      act(() => result.current.showRunSoon())
+      await act(() => vi.advanceTimersByTimeAsync(1000))
+      mockApi.mockResolvedValue(later)
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+
+      expect(ids(result.current.records)).toEqual([3, 2, 1])
+      expect(result.current.newRuns).toBe(0)
+    })
+
+    it('calls off every look asked for once it is gone, even one asked for after', async () => {
+      const { result, unmount } = await holdThenPoll(first, first)
+      const calls = () => mockApi.mock.calls.length
+
+      act(() => result.current.showRunSoon())
+      await act(() => vi.advanceTimersByTimeAsync(500))
+      act(() => result.current.showRunSoon())
+      const before = calls()
+      unmount()
+      result.current.showRunSoon()
+      await act(() => vi.advanceTimersByTimeAsync(2000))
+
+      expect(calls()).toBe(before)
     })
   })
 })

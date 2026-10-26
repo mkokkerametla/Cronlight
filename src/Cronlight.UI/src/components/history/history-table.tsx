@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useState } from 'react'
 import { ArrowUp, History, RotateCcw, ScrollText, X } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -60,14 +60,21 @@ export function HistoryTable({
 }: Props) {
   const typeName = (type: string | null) =>
     jobTypes.find(t => t.typeName === type)?.displayName ?? shortType(type)
-  const { records, hasMore, loadMore, error, loaded, refresh, newRuns, showNewRuns, holdNewRuns } =
-    useHistory(filter)
+  const {
+    records,
+    hasMore,
+    loadMore,
+    error,
+    loaded,
+    showRunSoon,
+    newRuns,
+    gone,
+    showNewRuns,
+    holdNewRuns,
+  } = useHistory(filter)
   const refreshMs = useRefreshInterval()
   const [openLog, setOpenLog] = useState<number | null>(null)
   const columns = canManage && onRetry ? 6 : 5
-  // Looking again a second after a run is started; called off when the table goes
-  const lookAgain = useRef<ReturnType<typeof setTimeout>>(undefined)
-  useEffect(() => () => clearTimeout(lookAgain.current), [])
 
   return (
     // New runs wait while the pointer is over the list, so a click lands on the run aimed at
@@ -161,7 +168,14 @@ export function HistoryTable({
             <TableBody>
               {records.map(r => (
                 <Fragment key={r.id}>
-                  <TableRow className="align-top">
+                  <TableRow
+                    className={cn('align-top', gone.has(r.id) && 'opacity-50')}
+                    title={
+                      gone.has(r.id)
+                        ? 'No longer listed: it goes when the pointer leaves the list'
+                        : undefined
+                    }
+                  >
                     <TableCell className="max-w-md whitespace-normal">
                       <button
                         type="button"
@@ -237,7 +251,7 @@ export function HistoryTable({
                             variant="outline"
                             aria-label={`Run ${r.jobName} again`}
                             onClick={async () => {
-                              if (await onRetry(r)) lookAgain.current = setTimeout(refresh, 1000)
+                              if (await onRetry(r)) showRunSoon()
                             }}
                           >
                             <RotateCcw /> Run again

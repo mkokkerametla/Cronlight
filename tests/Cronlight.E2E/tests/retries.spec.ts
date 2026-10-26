@@ -73,11 +73,7 @@ test('runs a failed run again from the History tab', async ({ page, request }) =
   await runs.getByRole('button', { name: `Run ${name} again` }).click()
 
   await expect(page.getByText(`${name}: triggered again`)).toBeVisible()
-  // The pointer is still over the list, so the new run waits behind a button rather than moving the rows under it
-  await expect(async () => {
-    await page.getByRole('button', { name: /^Show \d+ new runs?$/ }).click({ timeout: 1000 })
-    await expect(runs).toHaveCount(2, { timeout: 1000 })
-  }).toPass({ timeout: 20_000 })
+  await expect(runs).toHaveCount(2, { timeout: 20_000 })
 })
 
 test.describe('viewer role', () => {
