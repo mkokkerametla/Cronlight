@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { api, jobPath } from '@/api'
 import { usePolling } from '@/hooks/use-polling'
+import { isStopped } from '@/lib/format'
 import type {
   BulkAction,
   CreateJobRequest,
@@ -80,16 +81,18 @@ export function useDashboard(
         : null
       let summaryData: HistorySummary | null | undefined
       if (!schedulerData.historyEnabled) summaryData = null
-      else if (Date.now() - summaryAt.current >= SUMMARY_MS) {
+      else if (Date.now() - summaryAt.current >= SUMMARY_MS)
         summaryData = await api<HistorySummary>('history/summary?hours=24')
-        summaryAt.current = Date.now()
-      }
       if (current !== generation.current) return
       setPage(pageData)
       setSelectedJob(selectedData)
       setScheduler(schedulerData)
       setRunning(runningData)
-      if (summaryData !== undefined) setSummary(summaryData)
+      // Counted as fetched only once shown: a refresh set aside for a newer one leaves the summary to it
+      if (summaryData !== undefined) {
+        setSummary(summaryData)
+        summaryAt.current = Date.now()
+      }
       setError(null)
     } catch (err) {
       if (current === generation.current) setError((err as Error).message)
@@ -111,12 +114,14 @@ export function useDashboard(
 
   usePolling(() => void refresh(), refreshMs(scheduler))
 
-  // Runs a call, reports the outcome as a toast and refreshes. Resolves to true on success.
+  // Runs a call, reports the outcome as a toast (with Undo when the call can be undone) and refreshes. Resolves to true
+  // on success.
   const perform = useCallback(
-    async (call: () => Promise<unknown>, success: string) => {
+    async (call: () => Promise<unknown>, success: string, undo?: () => void) => {
       try {
         await call()
-        toast.success(success)
+        if (undo) toast.success(success, { action: { label: 'Undo', onClick: undo } })
+        else toast.success(success)
         await refresh()
         return true
       } catch (err) {
@@ -130,10 +135,14 @@ export function useDashboard(
   const actions = useMemo(
     () => ({
       run: async (job: Job, action: JobAction) => {
-        const ok = await perform(
-          () => api(`${jobPath(job)}/${action}`, { method: 'POST' }),
-          `${job.name}: ${pastTense[action]}`
-        )
+        const post = (a: JobAction) => api(`${jobPath(job)}/${a}`, { method: 'POST' })
+        // Pausing and resuming undo each other, except for a job Quartz stopped, which pausing would not stop again
+        const opposite = action === 'pause' ? 'resume' : action === 'resume' ? 'pause' : null
+        const undo =
+          opposite && !isStopped(job)
+            ? () => void perform(() => post(opposite), `${job.name}: ${pastTense[opposite]}`)
+            : undefined
+        const ok = await perform(() => post(action), `${job.name}: ${pastTense[action]}`, undo)
         // The scheduler starts a triggered job asynchronously; look again once it has picked it up
         if (ok && action === 'trigger') setTimeout(refresh, 1000)
         return ok

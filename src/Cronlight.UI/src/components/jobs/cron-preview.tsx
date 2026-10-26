@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { CircleAlert, CircleCheck, Loader2 } from 'lucide-react'
 import { api } from '@/api'
-import { formatDateTime, formatRelative } from '@/lib/format'
+import { describeCron, formatDateTime, formatRelative } from '@/lib/format'
 import type { CronPreview as Preview } from '@/types'
 
 const MIN_LENGTH = 6
@@ -77,7 +77,8 @@ export function CronPreview({
   return (
     <div className="space-y-1 text-xs">
       <p className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
-        <CircleCheck className="size-3.5" /> {preview.description ?? 'Valid cron expression'}
+        <CircleCheck className="size-3.5" />{' '}
+        {preview.description ?? describeCron(trimmed) ?? 'Valid cron expression'}
       </p>
       <p className="text-muted-foreground">
         Next (your local time):{' '}

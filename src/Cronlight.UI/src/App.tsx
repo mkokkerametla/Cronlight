@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RotateCw, WifiOff } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -13,12 +13,13 @@ import { JobsTable } from '@/components/jobs/jobs-table'
 import { RunningTable } from '@/components/running-table'
 import { Stats, type StatKey } from '@/components/stats'
 import { currentScheduler, selectScheduler } from '@/api'
-import { emptyQuery, refreshMs, useDashboard } from '@/hooks/use-dashboard'
+import { refreshMs, useDashboard } from '@/hooks/use-dashboard'
+import { useLayout } from '@/hooks/use-layout'
 import { RefreshInterval } from '@/hooks/use-polling'
 import { jobKey } from '@/lib/format'
+import { cn } from '@/lib/utils'
+import { defaultView, readView, showView, type Tab, type View } from '@/lib/view-state'
 import type { HistoryFilter, Job, JobQuery } from '@/types'
-
-type Tab = 'jobs' | 'running' | 'history'
 
 // The preset's active tab is a white pill on a near-white track; fill it with the accent instead
 const tabTrigger =
@@ -30,6 +31,8 @@ export default function App() {
   const [scheduler, setScheduler] = useState(currentScheduler)
   const changeScheduler = (name: string | null) => {
     selectScheduler(name)
+    // Its view (tab, filters, open job) belonged to the last scheduler
+    showView(defaultView, false)
     setScheduler(name)
   }
   // Another scheduler starts afresh, so no job, filter or open sheet carries over from the last one
@@ -38,11 +41,39 @@ export default function App() {
 
 /** The dashboard for one scheduler. Null names the host's own. */
 function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | null) => void }) {
-  const [tab, setTab] = useState<Tab>('jobs')
-  const [jobQuery, setJobQuery] = useState<JobQuery>(emptyQuery)
-  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>({ status: 'all', job: null })
-  const [selection, setSelection] = useState<Pick<Job, 'group' | 'name'> | null>(null)
+  // The view starts as the page's address names it, so links and reloads open where they were
+  const [initial] = useState(() => readView(window.location.search))
+  const [tab, setTab] = useState<Tab>(initial.tab)
+  const [jobQuery, setJobQuery] = useState<JobQuery>(initial.jobQuery)
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>(initial.historyFilter)
+  const [selection, setSelection] = useState<Pick<Job, 'group' | 'name'> | null>(initial.selection)
   const [creating, setCreating] = useState(false)
+  const [layout, changeLayout] = useLayout()
+
+  // The address follows the view. Another tab, or a job opened, is a step Back returns from; filters, paging and
+  // closing a job change the current step.
+  const shown = useRef<View>(initial)
+  useEffect(() => {
+    const view = { tab, jobQuery, historyFilter, selection }
+    const opened =
+      selection &&
+      (!shown.current.selection || jobKey(selection) !== jobKey(shown.current.selection))
+    showView(view, tab !== shown.current.tab || Boolean(opened))
+    shown.current = view
+  }, [tab, jobQuery, historyFilter, selection])
+  // Back and Forward show the view their address names
+  useEffect(() => {
+    const onPopState = () => {
+      const view = readView(window.location.search)
+      shown.current = view
+      setTab(view.tab)
+      setJobQuery(view.jobQuery)
+      setHistoryFilter(view.historyFilter)
+      setSelection(view.selection)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
   const dashboard = useDashboard(jobQuery, selection)
   const { jobs, page, jobTypes, scheduler, running, summary, error, loading, refresh, actions } =
     dashboard
@@ -55,6 +86,8 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
     (dashboard.selected && jobKey(dashboard.selected) === selectedKey ? dashboard.selected : null)
   const canManage = scheduler?.canManage ?? false
   const historyEnabled = scheduler?.historyEnabled ?? false
+  // A link to History, where history is off, shows the jobs
+  const shownTab = tab === 'history' && !historyEnabled ? 'jobs' : tab
   const showScheduleAssistant = scheduler?.showScheduleAssistant ?? false
   const secretReferences = scheduler?.secretReferences ?? false
 
@@ -93,9 +126,19 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
 
   return (
     <RefreshInterval.Provider value={refreshMs(scheduler)}>
-      <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
+      <div
+        className={cn(
+          'mx-auto space-y-5 p-4 sm:p-6',
+          layout.fullWidth ? 'max-w-none' : 'max-w-7xl',
+          layout.compact &&
+            '[&_[data-slot=table-cell]]:py-1 [&_[data-slot=table-head]]:h-8 [&_[data-slot=table-cell]]:text-[13px]'
+        )}
+        data-density={layout.compact ? 'compact' : undefined}
+      >
         <Header
           scheduler={scheduler}
+          layout={layout}
+          onLayoutChange={changeLayout}
           // The host's own scheduler, first in the list, needs no ?scheduler= in the URL
           onSchedulerChange={name =>
             onSchedulerChange(name === scheduler?.schedulers[0] ? null : name)
@@ -148,7 +191,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
                 onSelect={selectStat}
               />
 
-              <Tabs value={tab} onValueChange={v => changeTab(v as Tab)}>
+              <Tabs value={shownTab} onValueChange={v => changeTab(v as Tab)}>
                 <TabsList>
                   <TabsTrigger value="jobs" className={tabTrigger}>
                     Jobs

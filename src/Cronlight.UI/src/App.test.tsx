@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, currentScheduler, selectScheduler } from '@/api'
@@ -77,6 +77,79 @@ describe('App', () => {
 
   afterEach(() => {
     selectScheduler(null)
+    // The dashboard keeps its view in the address, which the next test must not inherit
+    window.history.replaceState(null, '', '/')
+    localStorage.removeItem('cronlight-layout')
+  })
+
+  it('uses the full width and compact rows when asked, and remembers it in this browser', async () => {
+    const { unmount } = renderApp()
+    await screen.findByRole('tabpanel')
+    const page = () => screen.getByRole('tablist').closest('div.mx-auto') as HTMLElement
+    expect(page()).toHaveClass('max-w-7xl')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Change layout' }))
+    await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Full width' }))
+    expect(page()).toHaveClass('max-w-none')
+    await userEvent.click(screen.getByRole('button', { name: 'Change layout' }))
+    await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Compact rows' }))
+    expect(page()).toHaveAttribute('data-density', 'compact')
+
+    unmount()
+    renderApp()
+    await screen.findByRole('tabpanel')
+    expect(page()).toHaveClass('max-w-none')
+    expect(page()).toHaveAttribute('data-density', 'compact')
+  })
+
+  it('opens the view a link names: tab, filter and job', async () => {
+    window.history.replaceState(null, '', '/?tab=history&outcome=Failed')
+    const { unmount } = renderApp()
+    await waitFor(() => expect(tab('History')).toHaveAttribute('aria-selected', 'true'))
+    await waitFor(() =>
+      expect(requested('history?')).toContainEqual(expect.stringContaining('status=Failed'))
+    )
+    unmount()
+
+    window.history.replaceState(null, '', '/?group=billing&job=invoices')
+    renderApp()
+    expect(await screen.findByRole('dialog', { name: 'invoices' })).toBeInTheDocument()
+  })
+
+  it('shows the jobs for a link to History when history is off', async () => {
+    responses.scheduler = scheduler({ historyEnabled: false })
+    window.history.replaceState(null, '', '/?tab=history')
+    renderApp()
+
+    expect(await screen.findByText('invoices', { selector: 'div' })).toBeInTheDocument()
+    expect(tab('Jobs')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('keeps the view in the address, so Back returns to the one before', async () => {
+    renderApp()
+    await screen.findByRole('tabpanel')
+
+    await userEvent.click(tab('History'))
+    expect(new URLSearchParams(window.location.search).get('tab')).toBe('history')
+
+    // The browser's Back button, back to the jobs
+    window.history.replaceState(null, '', '/')
+    act(() => window.dispatchEvent(new PopStateEvent('popstate')))
+    await waitFor(() => expect(tab('Jobs')).toHaveAttribute('aria-selected', 'true'))
+  })
+
+  it("starts another scheduler's dashboard without the view of the last one", async () => {
+    const schedulers = ['SampleHost', 'Reports']
+    responses.scheduler = scheduler({ schedulers })
+    window.history.replaceState(null, '', '/?tab=history')
+    renderApp()
+    await waitFor(() => expect(tab('History')).toHaveAttribute('aria-selected', 'true'))
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Scheduler' }))
+    await userEvent.click(screen.getByRole('option', { name: 'Reports' }))
+
+    expect(window.location.search).toBe('?scheduler=Reports')
+    await waitFor(() => expect(tab('Jobs')).toHaveAttribute('aria-selected', 'true'))
   })
 
   it('switches to another scheduler, starting afresh, and back to the host’s own', async () => {

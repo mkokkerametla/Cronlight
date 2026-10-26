@@ -62,12 +62,12 @@ describe('TriggersEditor', () => {
     expect(describeBoxes()[0]).toHaveValue('')
   })
 
-  it('previews a cron expression once it is long enough', async () => {
+  it('previews a cron expression once it is long enough, describing it in words', async () => {
     render(<Editor initial={[emptyTrigger()]} />)
 
     await userEvent.type(screen.getByLabelText('Cron expression'), '0 0 9 * * ?')
 
-    expect(await screen.findByText('Valid cron expression')).toBeInTheDocument()
+    expect(await screen.findByText('At 09:00')).toBeInTheDocument()
     expect(vi.mocked(api)).toHaveBeenCalledWith(
       expect.stringContaining('cron/preview?expression=0+0+9'),
       expect.anything()

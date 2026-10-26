@@ -8,8 +8,10 @@ import {
   formatRelative,
   isPaused,
   jobStatus,
+  describeCron,
   nextFire,
   nextFireText,
+  scheduleSummary,
   shortType,
   typeLabel,
 } from '@/lib/format'
@@ -154,6 +156,31 @@ describe('job status helpers', () => {
     expect(formatSeconds(90)).toBe('1m 30s')
     expect(formatSeconds(3600)).toBe('1h')
     expect(formatSeconds(5400)).toBe('1h 30m')
+  })
+})
+
+describe('schedules in words', () => {
+  it('describes Quartz cron expressions, with weekdays numbered from Sunday as 1', () => {
+    expect(describeCron('0/15 * * * * ?')).toBe('Every 15 seconds')
+    expect(describeCron('0 0 9 ? * MON-FRI')).toBe('At 09:00, Monday through Friday')
+    expect(describeCron('0 30 6 ? * 2')).toBe('At 06:30, only on Monday')
+    expect(describeCron('0 15 10 ? * 6#3')).toBe('At 10:15, on the third Friday of the month')
+  })
+
+  it('describes nothing it cannot read', () => {
+    expect(describeCron('every day please')).toBeNull()
+    expect(describeCron('')).toBeNull()
+  })
+
+  it("describes a job's schedule from the triggers that schedule it", () => {
+    const every15s = trigger({ name: 't2', cronExpression: '0/15 * * * * ?' })
+    expect(scheduleSummary(job({ triggers: [every15s] }))).toBe('Every 15 seconds')
+    expect(scheduleSummary(job({ triggers: [trigger(), every15s] }))).toBe('At 06:00, and 1 more')
+    expect(scheduleSummary(job({ triggers: [] }))).toBeNull()
+    // A waiting retry is not a schedule of the job
+    expect(
+      scheduleSummary(job({ triggers: [trigger({ kind: 'Retry', cronExpression: null })] }))
+    ).toBeNull()
   })
 })
 

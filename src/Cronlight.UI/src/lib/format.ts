@@ -1,3 +1,4 @@
+import cronstrue from 'cronstrue'
 import type { ExecutionRecord, Job, JobRetryPolicy, JobStatus, Trigger } from '@/types'
 
 export type { JobStatus }
@@ -128,10 +129,38 @@ export function formatSeconds(seconds: number): string {
 
 /** What a one-time or interval trigger does, e.g. "Every 5m, 10 runs in all"; null for other kinds */
 export function describeSchedule(t: Trigger): string | null {
+  if (t.kind === 'Cron') return t.cronExpression ? describeCron(t.cronExpression) : null
   if (t.kind === 'Once') return `Once, ${formatDateTime(t.startTimeUtc)}`
   if (t.kind !== 'Interval' || !t.intervalSeconds) return null
   const runs = t.repeatCount != null ? `, ${t.repeatCount + 1} runs in all` : ''
   return `Every ${formatSeconds(t.intervalSeconds)} from ${formatDateTime(t.startTimeUtc)}${runs}`
+}
+
+/**
+ * A Quartz cron expression in words: "Every 15 seconds", "At 09:00, Monday through Friday". Quartz numbers the days of
+ * the week from Sunday as 1. Null when it cannot be read.
+ */
+export function describeCron(expression: string): string | null {
+  if (!expression.trim()) return null
+  try {
+    return cronstrue.toString(expression, {
+      use24HourTimeFormat: true,
+      dayOfWeekStartIndexZero: false,
+      throwExceptionOnParseError: true,
+    })
+  } catch {
+    return null
+  }
+}
+
+/** A job's schedule in words: its first scheduling trigger's, and how many more it has */
+export function scheduleSummary(job: Job): string | null {
+  const schedules = job.triggers
+    .filter(t => t.kind === 'Cron' || t.kind === 'Once' || t.kind === 'Interval')
+    .map(describeSchedule)
+    .filter((s): s is string => s !== null)
+  if (schedules.length === 0) return null
+  return schedules.length === 1 ? schedules[0] : `${schedules[0]}, and ${schedules.length - 1} more`
 }
 
 /** "every 10 seconds", or "every second" */

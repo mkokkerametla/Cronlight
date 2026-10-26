@@ -32,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Kbd } from '@/components/ui/kbd'
 import {
   Select,
   SelectContent,
@@ -57,6 +58,7 @@ import {
   jobStatus,
   nextFire,
   nextFireTime,
+  scheduleSummary,
   typeLabel,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -95,6 +97,50 @@ export function JobsTable({
   const [search, setSearch] = useState(query.search)
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
+  const searchBox = useRef<HTMLInputElement>(null)
+  // The row j and k have moved to, which Enter opens; none once the page no longer has it
+  const [active, setActive] = useState<number | null>(null)
+  const current = active !== null && active < jobs.length ? active : null
+
+  // Keyboard: / to search, j and k to move through the jobs, Enter to open one, Esc to stop. Not while typing, or while
+  // a panel, dialog or menu has the keyboard.
+  const keys = useRef({ jobs, current, onSelect })
+  useEffect(() => {
+    keys.current = { jobs, current, onSelect }
+  })
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.defaultPrevented ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.altKey ||
+        typing(e.target) ||
+        overlayOpen()
+      )
+        return
+      const { jobs, current, onSelect } = keys.current
+      if (e.key === '/') {
+        e.preventDefault()
+        searchBox.current?.focus()
+      } else if ((e.key === 'j' || e.key === 'k') && jobs.length > 0) {
+        e.preventDefault()
+        const step = e.key === 'j' ? 1 : -1
+        setActive(current === null ? 0 : Math.min(Math.max(current + step, 0), jobs.length - 1))
+      } else if (e.key === 'Enter' && current !== null && e.target === document.body) {
+        e.preventDefault()
+        onSelect(jobs[current])
+      } else if (e.key === 'Escape') {
+        setActive(null)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
+  useEffect(() => {
+    if (current !== null)
+      document.querySelector('tr[data-active="true"]')?.scrollIntoView?.({ block: 'nearest' })
+  }, [current])
 
   // Changing what is listed also clears the selection, so bulk actions only touch jobs on screen
   const changeQuery = (next: Partial<JobQuery>) => {
@@ -139,12 +185,16 @@ export function JobsTable({
         <div className="relative min-w-48 flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            ref={searchBox}
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search name or group…"
-            className="pl-8"
+            className="pr-8 pl-8"
             aria-label="Search jobs"
           />
+          <Kbd className="absolute top-1/2 right-2 -translate-y-1/2" aria-hidden>
+            /
+          </Kbd>
         </div>
         <Select
           value={query.type ?? ALL}
@@ -271,16 +321,20 @@ export function JobsTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {jobs.map(job => {
+              {jobs.map((job, index) => {
                 const key = jobKey(job)
                 const next = nextFire(job)
+                const schedule = scheduleSummary(job)
                 return (
                   <TableRow
                     key={key}
                     data-state={selectedKey === key ? 'selected' : undefined}
+                    data-active={current === index ? 'true' : undefined}
                     className={cn(
                       // Tint plus an accent bar: the default bg-muted is too faint to spot
                       'cursor-pointer data-[state=selected]:bg-primary/10 data-[state=selected]:shadow-[inset_3px_0_0_var(--primary)]',
+                      // The row the keyboard is on
+                      'data-[active=true]:bg-muted data-[active=true]:shadow-[inset_3px_0_0_var(--muted-foreground)]',
                       jobStatus(job) === 'Paused' && 'text-muted-foreground'
                     )}
                     onClick={() => onSelect(job)}
@@ -314,7 +368,8 @@ export function JobsTable({
                       <StatusBadge job={job} />
                     </TableCell>
                     <TableCell title={next ? formatDateTime(next) : undefined}>
-                      {nextFireTime(next) ?? '-'}
+                      <div>{nextFireTime(next) ?? '-'}</div>
+                      {schedule && <div className="text-xs text-muted-foreground">{schedule}</div>}
                     </TableCell>
                     {canManage && (
                       <TableCell className="text-right" onClick={e => e.stopPropagation()}>
@@ -546,3 +601,14 @@ function SchedulerActions({ actions }: { actions: DashboardActions }) {
     </>
   )
 }
+
+/** The key goes to a field being typed in, not to a shortcut */
+const typing = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable ||
+    ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
+    target.closest('[role="combobox"], [role="listbox"], [role="menu"]') !== null)
+
+/** A panel, dialog or menu is open, and has the keyboard */
+const overlayOpen = () =>
+  document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]') !== null

@@ -57,12 +57,36 @@ const names = () =>
     .map(r => within(r).getAllByRole('cell')[1].firstChild?.textContent)
 
 describe('JobsTable', () => {
-  it('lists jobs with their type and status', () => {
+  it('lists jobs with their type, status and schedule in words', () => {
     renderTable()
 
+    expect(within(row('send-invoices')).getByText('At 06:00')).toBeInTheDocument()
     expect(within(row('send-invoices')).getByText('Send invoices')).toBeInTheDocument()
     expect(within(row('cleanup')).getByText('Paused')).toBeInTheDocument()
     expect(within(row('foreign')).getByText('Unloadable')).toBeInTheDocument()
+  })
+
+  it('moves to the search box with /, through the jobs with j and k, and opens one with Enter', async () => {
+    const { onSelect } = renderTable()
+    const active = () =>
+      screen
+        .queryAllByRole('row')
+        .filter(r => r.dataset.active === 'true')
+        .map(r => within(r).getAllByRole('cell')[1].firstChild?.textContent)
+
+    await userEvent.keyboard('j')
+    expect(active()).toEqual(['send-invoices'])
+    await userEvent.keyboard('jjk')
+    expect(active()).toEqual(['cleanup'])
+    await userEvent.keyboard('{Enter}')
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ name: 'cleanup' }))
+
+    // Keys typed into the search box are text, not shortcuts
+    await userEvent.keyboard('/')
+    expect(screen.getByRole('textbox', { name: 'Search jobs' })).toHaveFocus()
+    await userEvent.keyboard('jk')
+    expect(screen.getByRole('textbox', { name: 'Search jobs' })).toHaveValue('jk')
+    expect(active()).toEqual(['cleanup'])
   })
 
   it('searches on the server once typing pauses, from the first page', async () => {
