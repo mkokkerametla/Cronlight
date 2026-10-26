@@ -96,6 +96,10 @@ Parameter types are `String`, `Int`, `Bool`, `Url`, `Text` (multi-line) and `Sec
 
 Only types discovered in your app can be created; the API never instantiates a type by an arbitrary name.
 
+In the API a job carries its type as `jobType`, the attribute's name as `displayName` and its description as
+`typeDescription` (`description` is the job's own). Creating a job takes the type as `type` or `jobType`;
+without one, or without a `name`, the request is refused with 400.
+
 ### Secret references
 
 Secret values are masked in the UI but stored as plain text in the Quartz tables. To keep them out of the
@@ -237,8 +241,8 @@ Anyone who can create jobs chooses the URL, so the job only calls what you allow
 
 ## Execution history (optional package)
 
-`Cronlight.History` records every run (start, finish, duration, node, outcome, error message and what the job
-logged) and adds a History tab, a "Failed (24h)" card and recent runs per job to the dashboard.
+`Cronlight.Quartz.Dashboard.History` records every run (start, finish, duration, node, outcome, error message and
+what the job logged) and adds a History tab, a "Failed (24h)" card and recent runs per job to the dashboard.
 
 ```csharp
 builder.Services.AddCronlightHistory(o =>
@@ -283,7 +287,12 @@ builder.Services.AddCronlightHistory(o =>
   fire times, the first by 2h 5m; Quartz runs it once now (misfire instruction FireOnceNow)." A run that
   follows appears as a run of its own, scheduled at the fire time it makes up for, so it shows how late it
   started (when the misfire was handled on the node that runs it). The count ignores the trigger's calendar,
-  so times a calendar excludes are counted as missed too.
+  so times a calendar excludes are counted as missed too. Since Quartz 3.17, a repeating trigger that has never
+  fired starts now when it is scheduled with a start in the past, so it runs rather than misfires.
+- **Refires.** A job that fails with a `JobExecutionException` whose `RefireImmediately` is set runs again at
+  once; each attempt is a record of its own, with its refire count. Quartz 3.17 and later no longer tell
+  listeners when such an attempt ends, so Cronlight records it as failed when the next attempt begins, with
+  what it threw while it captures logs (`CaptureLogs`), and a generic message otherwise.
 - **Late starts.** Any run that started 5 seconds or more after its scheduled time is marked "started …
   late" in History and in the job's recent runs.
 - **What a trigger does when it misses a run** shows on the job's page. Cron triggers made in the dashboard
@@ -573,6 +582,11 @@ dotnet test
 
 The tests recreate the Quartz tables in these databases, so point them at throwaway instances only.
 
+Each test host gets a fresh SQLite file in a folder of its own for the run, removed when the run ends. The
+packages need Quartz 3.13.1, but the tests and the sample run on the latest 3.x (3.22.7). To see what the test
+hosts logged, set `CRONLIGHT_TEST_ERROR_LOG` to a file: their warnings and errors are written there (many
+tests cause errors on purpose). A test host that does not start or stop within 30 seconds fails its test.
+
 ### UI tests
 
 Unit and component tests for the UI use [Vitest](https://vitest.dev) and
@@ -625,9 +639,11 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
 1. UI: ESLint, TypeScript and Prettier checks, and the Vitest unit and component tests.
 2. Build in Release (which builds and embeds the UI).
 3. Tests against SQLite, in-memory, and PostgreSQL, MySQL and SQL Server service containers.
-   `CRONLIGHT_REQUIRE_DATABASES=true` makes a missing database fail the run rather than skip its tests.
-4. Pack both packages as `0.1.0-ci.<run>` and verify them with `build/verify-packages.sh` (both target
-   frameworks, UI embedded, README, license, symbols, matching dependency versions).
+   `CRONLIGHT_REQUIRE_DATABASES=true` makes a missing database fail the run rather than skip its tests. A test
+   stuck for 5 minutes fails the run and names the test, and what the test hosts logged as warnings and errors
+   is uploaded with the test results (`server-errors.log`).
+4. Pack both packages as `0.1.0-ci.<run>` and verify them with `build/verify-packages.sh` (net10.0 assembly,
+   UI embedded, README, license, symbols, matching dependency versions).
    `build/smoke-test.sh` then installs them into a new .NET 10 web app on Quartz 3.13.1, runs it and checks
    the dashboard, API and history respond.
 5. Upload the packages and test results as workflow artifacts.
@@ -637,16 +653,20 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
 **Release** ([`release.yml`](.github/workflows/release.yml)) runs when a `v*.*.*` tag is pushed:
 
 ```bash
-git tag v0.1.0-beta.1 && git push origin v0.1.0-beta.1   # a -suffix marks a prerelease
+git tag v0.1.0-beta.3 && git push origin v0.1.0-beta.3   # a -suffix marks a prerelease
 ```
 
-It runs the full CI pipeline with the tag's version, then (after approval on the `nuget` environment)
-pushes both packages and symbols to nuget.org and creates a GitHub release with generated notes.
+It runs the full CI pipeline with the tag's version, then, in the `nuget` environment, pushes both packages and
+symbols to nuget.org and creates a GitHub release with generated notes. A flaky test can fail the CI part; re-run
+the failed jobs and the release carries on.
 
 One-time setup for releases:
 
-1. On nuget.org, add a **Trusted Publishing** policy for this repository and the `release.yml` workflow.
-   No API key is stored in GitHub: each release gets a short-lived key via OIDC.
+1. On nuget.org, add a **Trusted Publishing** policy for this repository, the `release.yml` workflow and the
+   `nuget` environment, for packages matching `Cronlight.Quartz.Dashboard*` (dots, as in the package IDs: a
+   pattern that does not match makes the push fail with 403). No API key is stored in GitHub: each release
+   gets a short-lived key via OIDC.
 2. In the GitHub repo settings, add a variable `NUGET_USER` with the nuget.org username
    (`mkokkerametla`).
-3. Create an environment named `nuget` and add yourself as a required reviewer.
+3. Create an environment named `nuget` that only `v*.*.*` tags may deploy to. Add yourself as a required
+   reviewer if releases should wait for your approval; without one, a pushed tag publishes on its own.
