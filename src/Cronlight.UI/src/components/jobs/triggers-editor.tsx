@@ -1,5 +1,5 @@
 import { Plus, X } from 'lucide-react'
-import { useId } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -27,6 +27,8 @@ interface Props {
   triggers: TriggerDraft[]
   onChange: (triggers: TriggerDraft[]) => void
   showScheduleAssistant: boolean
+  /** Told whether a cron expression is shown as invalid, so the form can refuse to save */
+  onInvalidChange?: (invalid: boolean) => void
 }
 
 const kindLabels: Record<EditableTriggerKind, string> = {
@@ -42,10 +44,33 @@ const skipLabels: Record<EditableTriggerKind, string> = {
     'Skip missed runs (when the scheduler was down or busy) instead of running once when it can',
 }
 
-export function TriggersEditor({ triggers, onChange, showScheduleAssistant }: Props) {
+export function TriggersEditor({
+  triggers,
+  onChange,
+  showScheduleAssistant,
+  onInvalidChange,
+}: Props) {
   const id = useId()
   const update = (index: number, patch: Partial<TriggerDraft>) =>
     onChange(triggers.map((t, i) => (i === index ? { ...t, ...patch } : t)))
+
+  // Triggers whose cron expression is shown as invalid, by id
+  const [invalid, setInvalid] = useState<ReadonlySet<number>>(() => new Set())
+  const markInvalid = useCallback(
+    (triggerId: number, value: boolean) =>
+      setInvalid(current => {
+        if (current.has(triggerId) === value) return current
+        const next = new Set(current)
+        if (value) next.add(triggerId)
+        else next.delete(triggerId)
+        return next
+      }),
+    []
+  )
+  const anyInvalid = triggers.some(t => t.kind === 'Cron' && invalid.has(t.id))
+  useEffect(() => {
+    onInvalidChange?.(anyInvalid)
+  }, [anyInvalid, onInvalidChange])
 
   return (
     <div className="space-y-3">
@@ -161,7 +186,11 @@ export function TriggersEditor({ triggers, onChange, showScheduleAssistant }: Pr
             </div>
           )}
           {trigger.kind === 'Cron' && (
-            <CronPreview expression={trigger.cronExpression} timeZone={trigger.timeZone} />
+            <CronPreview
+              expression={trigger.cronExpression}
+              timeZone={trigger.timeZone}
+              onInvalidChange={value => markInvalid(trigger.id, value)}
+            />
           )}
           {trigger.kind !== 'Cron' && <SchedulePreview trigger={trigger} />}
           <div className="flex items-center gap-2">

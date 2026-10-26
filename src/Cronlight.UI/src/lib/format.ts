@@ -20,7 +20,8 @@ export function formatRelative(iso: string | null | undefined): string {
   if (!iso) return '-'
   const seconds = (new Date(iso).getTime() - Date.now()) / 1000
   const abs = Math.abs(seconds)
-  if (abs < 45) return seconds < 0 ? 'just now' : 'now'
+  // Seconds under a minute: jobs that run every few seconds are told apart
+  if (abs < 60) return relative.format(Math.round(seconds), 'second')
   if (abs < 3600) return relative.format(Math.round(seconds / 60), 'minute')
   if (abs < 86_400) return relative.format(Math.round(seconds / 3600), 'hour')
   return relative.format(Math.round(seconds / 86_400), 'day')
@@ -90,11 +91,30 @@ export const jobStatus = (job: Job): JobStatus =>
 export const typeLabel = (job: Job) =>
   job.loadable ? (job.displayName ?? shortType(job.jobType)) : 'Unloadable'
 
+/** A paused trigger, or one Quartz stopped, keeps its next fire time but will not fire at it */
+const willFire = (trigger: Trigger) => trigger.state !== 'Paused' && trigger.state !== 'Error'
+
+/** When the job next fires: the soonest next fire time of its triggers that will fire */
 export const nextFire = (job: Job) =>
   job.triggers
+    .filter(willFire)
     .map(t => t.nextFireTimeUtc)
     .filter((t): t is string => t !== null)
     .sort()[0] ?? null
+
+/**
+ * When a trigger next fires, as its job's page shows it: Paused or Stopped when it will not fire, Due now when its time
+ * has passed (until Quartz fires it, or deals with the missed time), or null when it has no next fire time.
+ */
+export function nextFireText(trigger: Trigger): string | null {
+  if (trigger.state === 'Paused') return 'Paused'
+  if (trigger.state === 'Error') return 'Stopped'
+  return nextFireTime(trigger.nextFireTimeUtc)
+}
+
+/** A next fire time: relative, or Due now when it has passed; null when there is none */
+export const nextFireTime = (iso: string | null) =>
+  !iso ? null : new Date(iso).getTime() <= Date.now() ? 'Due now' : formatRelative(iso)
 
 /** A wait in whole seconds: 45s, 2m, 1h 30m */
 export function formatSeconds(seconds: number): string {

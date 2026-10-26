@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CircleAlert, CircleCheck, Loader2 } from 'lucide-react'
 import { api } from '@/api'
 import { formatDateTime, formatRelative } from '@/lib/format'
@@ -6,10 +6,32 @@ import type { CronPreview as Preview } from '@/types'
 
 const MIN_LENGTH = 6
 
-export function CronPreview({ expression, timeZone }: { expression: string; timeZone: string }) {
+export function CronPreview({
+  expression,
+  timeZone,
+  onInvalidChange,
+}: {
+  expression: string
+  timeZone: string
+  /** Told whether the expression is shown as invalid, so the form can refuse to save it */
+  onInvalidChange?: (invalid: boolean) => void
+}) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const trimmed = expression.trim()
   const zone = timeZone.trim()
+  const invalid =
+    trimmed.length >= MIN_LENGTH && preview?.expression === trimmed && !preview.isValid
+
+  // The latest callback, so a caller passing a new function each render is not told again
+  const report = useRef(onInvalidChange)
+  useEffect(() => {
+    report.current = onInvalidChange
+  })
+  useEffect(() => {
+    report.current?.(invalid)
+  }, [invalid])
+  // A removed trigger no longer holds the form back
+  useEffect(() => () => report.current?.(false), [])
 
   useEffect(() => {
     if (trimmed.length < MIN_LENGTH) return

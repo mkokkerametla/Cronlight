@@ -9,6 +9,7 @@ import {
   isPaused,
   jobStatus,
   nextFire,
+  nextFireText,
   shortType,
   typeLabel,
 } from '@/lib/format'
@@ -43,9 +44,21 @@ describe('formatRelative', () => {
     vi.useRealTimers()
   })
 
-  it('says now or just now within 45 seconds', () => {
-    expect(formatRelative(at(30))).toBe('now')
-    expect(formatRelative(at(-30))).toBe('just now')
+  it('counts seconds under a minute, so runs seconds apart can be told apart', () => {
+    expect(formatRelative(at(12))).toBe(relative.format(12, 'second'))
+    expect(formatRelative(at(-30))).toBe(relative.format(-30, 'second'))
+    expect(formatRelative(at(59))).toBe(relative.format(59, 'second'))
+    expect(formatRelative(at(0))).toBe(relative.format(0, 'second'))
+  })
+
+  it('says a paused or stopped trigger will not fire, and an overdue one is due now', () => {
+    expect(nextFireText(trigger({ state: 'Paused', nextFireTimeUtc: at(30) }))).toBe('Paused')
+    expect(nextFireText(trigger({ state: 'Error', nextFireTimeUtc: at(30) }))).toBe('Stopped')
+    expect(nextFireText(trigger({ nextFireTimeUtc: at(-60) }))).toBe('Due now')
+    expect(nextFireText(trigger({ nextFireTimeUtc: at(5 * 60) }))).toBe(
+      relative.format(5, 'minute')
+    )
+    expect(nextFireText(trigger({ nextFireTimeUtc: null }))).toBeNull()
   })
 
   it('picks minutes, hours or days by distance', () => {
@@ -107,6 +120,18 @@ describe('job status helpers', () => {
     })
     expect(nextFire(j)).toBe('2030-02-01T00:00:00Z')
     expect(nextFire(job({ triggers: [] }))).toBeNull()
+  })
+
+  it('leaves paused and stopped triggers out of the next fire, since they will not fire', () => {
+    const j = job({
+      triggers: [
+        trigger({ state: 'Paused', nextFireTimeUtc: '2030-01-01T00:00:00Z' }),
+        trigger({ name: 't2', state: 'Error', nextFireTimeUtc: '2030-01-15T00:00:00Z' }),
+        trigger({ name: 't3', nextFireTimeUtc: '2030-02-01T00:00:00Z' }),
+      ],
+    })
+    expect(nextFire(j)).toBe('2030-02-01T00:00:00Z')
+    expect(nextFire(job({ triggers: [trigger({ state: 'Paused' })] }))).toBeNull()
   })
 
   it('describes retry policies', () => {

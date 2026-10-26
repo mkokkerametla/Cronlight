@@ -53,10 +53,10 @@ import type { DashboardActions } from '@/hooks/use-dashboard'
 import {
   canResume,
   formatDateTime,
-  formatRelative,
   jobKey,
   jobStatus,
   nextFire,
+  nextFireTime,
   typeLabel,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -314,12 +314,17 @@ export function JobsTable({
                       <StatusBadge job={job} />
                     </TableCell>
                     <TableCell title={next ? formatDateTime(next) : undefined}>
-                      {next ? formatRelative(next) : '-'}
+                      {nextFireTime(next) ?? '-'}
                     </TableCell>
                     {canManage && (
                       <TableCell className="text-right" onClick={e => e.stopPropagation()}>
                         {job.loadable && (
-                          <RowActions job={job} actions={actions} onOpen={() => onSelect(job)} />
+                          <RowActions
+                            job={job}
+                            group={jobs.filter(j => j.group === job.group && j.loadable)}
+                            actions={actions}
+                            onOpen={() => onSelect(job)}
+                          />
                         )}
                       </TableCell>
                     )}
@@ -375,15 +380,20 @@ function Pagination({
 
 function RowActions({
   job,
+  group,
   actions,
   onOpen,
 }: {
   job: Job
+  /** The jobs of its group on this page, which say whether pausing or resuming the group would change anything */
+  group: Job[]
   actions: DashboardActions
   onOpen: () => void
 }) {
   // A job Quartz stopped is resumed too
   const paused = canResume(job)
+  const groupRuns = group.some(j => !canResume(j))
+  const groupWaits = group.some(canResume)
   const [confirming, setConfirming] = useState<BulkTarget | null>(null)
   return (
     <div className="flex justify-end gap-1">
@@ -423,12 +433,18 @@ function RowActions({
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={onOpen}>Open details</DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setConfirming({ group: job.group, action: 'pause' })}>
-            <Pause /> Pause group {job.group}
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setConfirming({ group: job.group, action: 'resume' })}>
-            <PlayCircle /> Resume group {job.group}
-          </DropdownMenuItem>
+          {groupRuns && (
+            <DropdownMenuItem onSelect={() => setConfirming({ group: job.group, action: 'pause' })}>
+              <Pause /> Pause group {job.group}
+            </DropdownMenuItem>
+          )}
+          {groupWaits && (
+            <DropdownMenuItem
+              onSelect={() => setConfirming({ group: job.group, action: 'resume' })}
+            >
+              <PlayCircle /> Resume group {job.group}
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       <ConfirmBulk target={confirming} onClose={() => setConfirming(null)} actions={actions} />

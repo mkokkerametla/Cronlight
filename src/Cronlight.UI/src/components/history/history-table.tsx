@@ -34,7 +34,7 @@ import {
   startedLate,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { ExecutionRecord, ExecutionStatus, HistoryFilter } from '@/types'
+import type { ExecutionRecord, ExecutionStatus, HistoryFilter, JobType } from '@/types'
 
 interface Props {
   filter: HistoryFilter
@@ -43,6 +43,8 @@ interface Props {
   canManage?: boolean
   /** Runs the job again; resolves to true when it was started */
   onRetry?: (record: ExecutionRecord) => Promise<boolean>
+  /** The job types the dashboard describes, so a run shows its type's name as the job list does */
+  jobTypes?: JobType[]
 }
 
 // Runs that ended without succeeding and will not be retried automatically
@@ -54,7 +56,10 @@ export function HistoryTable({
   onOpenJob,
   canManage = false,
   onRetry,
+  jobTypes = [],
 }: Props) {
+  const typeName = (type: string | null) =>
+    jobTypes.find(t => t.typeName === type)?.displayName ?? shortType(type)
   const { records, hasMore, loadMore, error, loaded, refresh } = useHistory(filter)
   const refreshMs = useRefreshInterval()
   const [openLog, setOpenLog] = useState<number | null>(null)
@@ -151,7 +156,7 @@ export function HistoryTable({
                         {r.jobName}
                       </button>
                       <div className="text-xs text-muted-foreground">
-                        {r.jobGroup} · {shortType(r.jobType)}
+                        {r.jobGroup} · {typeName(r.jobType)}
                         {r.refireCount > 0 && ` · refire ${r.refireCount}`}
                         {r.attempt > 1 && ` · attempt ${r.attempt}`}
                         {startedLate(r) && (

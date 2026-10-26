@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,6 +28,7 @@ const jobTypes: JobType[] = [
     parameters: [
       param('customerId', { type: 'Int', required: true }),
       param('currency', { defaultValue: 'EUR' }),
+      param('note', { type: 'Text' }),
     ],
     retry: { maxRetries: 3, delaySeconds: 30, exponential: true },
   },
@@ -104,6 +105,24 @@ describe('CreateJobSheet', () => {
       retry: { maxRetries: 3, delaySeconds: 30, exponential: true },
     })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('cannot be created while a cron expression is shown as invalid', async () => {
+    vi.mocked(api).mockImplementation(async path => ({
+      isValid: false,
+      expression: new URLSearchParams((path as string).split('?')[1]).get('expression'),
+      description: null,
+      nextFireTimes: [],
+      errorMessage: 'Unexpected end of expression',
+    }))
+    render(<Harness onCreate={vi.fn()} />)
+    const form = within(sheet())
+
+    await userEvent.type(form.getByLabelText('Name'), 'invoices')
+    await userEvent.type(form.getByLabelText('Cron expression'), '0/30 * * * *')
+
+    expect(await form.findByText('Unexpected end of expression')).toBeInTheDocument()
+    await waitFor(() => expect(form.getByRole('button', { name: 'Create job' })).toBeDisabled())
   })
 
   it("starts with the job type's retry policy and describes it", async () => {

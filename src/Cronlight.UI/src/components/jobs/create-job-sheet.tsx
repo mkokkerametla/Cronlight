@@ -87,6 +87,7 @@ function CreateJobForm({
   const [triggers, setTriggers] = useState([emptyTrigger()])
   const [retry, setRetry] = useState(() => retryDraft(jobTypes[0]?.retry))
   const [submitting, setSubmitting] = useState(false)
+  const [cronInvalid, setCronInvalid] = useState(false)
   const jobType = jobTypes.find(t => t.typeName === typeName)
 
   const changeType = (value: string) => {
@@ -104,7 +105,8 @@ function CreateJobForm({
       name: name.trim(),
       group: group.trim() || null,
       description: description.trim() || null,
-      data: rowsToData(data),
+      // An optional field left empty is left out, rather than saved as an empty value
+      data: rowsToData(data.filter(row => row.value !== '')),
       triggers: draftsToRequest(triggers),
       retry: draftToRetry(retry),
     })
@@ -114,7 +116,7 @@ function CreateJobForm({
 
   return (
     <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
-      <div className="flex-1 space-y-5 overflow-y-auto p-4">
+      <div className="flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]">
         <div className="space-y-1.5">
           <Label htmlFor="job-type">Job type</Label>
           <Select value={typeName} onValueChange={changeType}>
@@ -173,6 +175,7 @@ function CreateJobForm({
             triggers={triggers}
             onChange={setTriggers}
             showScheduleAssistant={showScheduleAssistant}
+            onInvalidChange={setCronInvalid}
           />
         </section>
 
@@ -193,7 +196,7 @@ function CreateJobForm({
         <Button type="button" variant="outline" onClick={onDone}>
           Cancel
         </Button>
-        <Button type="submit" disabled={submitting || !typeName}>
+        <Button type="submit" disabled={submitting || !typeName || cronInvalid}>
           {submitting ? 'Creating…' : 'Create job'}
         </Button>
       </SheetFooter>

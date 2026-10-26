@@ -66,6 +66,7 @@ import {
   formatDuration,
   formatRelative,
   isStopped,
+  nextFireText,
   recordTime,
   shortType,
   startedLate,
@@ -230,8 +231,7 @@ function JobActions({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {job.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              The job {job.group}.{job.name} and all {job.triggers.length} of its triggers are
-              removed from the scheduler. This cannot be undone.
+              {deleteText(job)} This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -263,7 +263,7 @@ function JobDetails({
   const data = Object.entries(job.data)
 
   return (
-    <div className="flex-1 space-y-5 overflow-y-auto p-4">
+    <div className="flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]">
       {!job.loadable && (
         <Alert variant="destructive">
           <Lock />
@@ -351,7 +351,7 @@ function JobDetails({
                 )}
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
                   <Field label="Next fire">
-                    <FireTime iso={t.nextFireTimeUtc} empty="Not scheduled" />
+                    <NextFire trigger={t} />
                   </Field>
                   <Field label="Previous fire">
                     <FireTime iso={t.previousFireTimeUtc} empty="Never" />
@@ -425,6 +425,7 @@ function EditJobForm({
   const [triggers, setTriggers] = useState(() => draftsFromTriggers(job.triggers))
   const [retry, setRetry] = useState(() => retryDraft(job.retry))
   const [saving, setSaving] = useState(false)
+  const [cronInvalid, setCronInvalid] = useState(false)
   // Waiting retries, and kinds the editor does not handle, are kept as they are
   const otherTriggers = job.triggers.filter(t => !isEditable(t)).length
 
@@ -449,7 +450,7 @@ function EditJobForm({
 
   return (
     <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
-      <div className="flex-1 space-y-5 overflow-y-auto p-4">
+      <div className="flex-1 space-y-5 overflow-y-auto p-4 [scrollbar-gutter:stable]">
         <div className="space-y-1.5">
           <Label htmlFor="edit-description">Description</Label>
           <Input
@@ -466,6 +467,7 @@ function EditJobForm({
             triggers={triggers}
             onChange={setTriggers}
             showScheduleAssistant={showScheduleAssistant}
+            onInvalidChange={setCronInvalid}
           />
           {otherTriggers > 0 && (
             <p className="text-xs text-muted-foreground">
@@ -491,7 +493,7 @@ function EditJobForm({
         <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>
-        <Button type="submit" disabled={saving}>
+        <Button type="submit" disabled={saving || cronInvalid}>
           {saving ? 'Saving…' : 'Save changes'}
         </Button>
       </SheetFooter>
@@ -628,6 +630,31 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <dd className="truncate">{children}</dd>
     </div>
   )
+}
+
+function NextFire({ trigger }: { trigger: Trigger }) {
+  const text = nextFireText(trigger)
+  if (!text) return <span className="text-muted-foreground">Not scheduled</span>
+  const waiting = trigger.state === 'Paused' || trigger.state === 'Error'
+  return (
+    <span
+      className={cn(waiting && 'text-muted-foreground')}
+      title={trigger.nextFireTimeUtc ? formatDateTime(trigger.nextFireTimeUtc) : undefined}
+    >
+      {text}
+    </span>
+  )
+}
+
+/** What deleting the job removes, with its triggers counted */
+function deleteText(job: Job) {
+  const count = job.triggers.length
+  const name = `${job.group}.${job.name}`
+  return count === 0
+    ? `The job ${name} is removed from the scheduler.`
+    : count === 1
+      ? `The job ${name} and its trigger are removed from the scheduler.`
+      : `The job ${name} and all ${count} of its triggers are removed from the scheduler.`
 }
 
 function FireTime({ iso, empty }: { iso: string | null; empty: string }) {

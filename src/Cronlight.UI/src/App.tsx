@@ -198,6 +198,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
                       onOpenJob={(group, name) => setSelection({ group, name })}
                       canManage={canManage}
                       onRetry={actions.retry}
+                      jobTypes={jobTypes}
                     />
                   </TabsContent>
                 )}
