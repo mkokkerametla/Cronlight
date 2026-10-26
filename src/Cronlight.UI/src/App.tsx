@@ -11,7 +11,7 @@ import { CreateJobSheet } from '@/components/jobs/create-job-sheet'
 import { JobSheet } from '@/components/jobs/job-sheet'
 import { JobsTable } from '@/components/jobs/jobs-table'
 import { RunningTable } from '@/components/running-table'
-import { Stats, type StatKey } from '@/components/stats'
+import { Stats, StatsSkeleton, type StatKey } from '@/components/stats'
 import { currentScheduler, selectScheduler } from '@/api'
 import { refreshMs, useDashboard } from '@/hooks/use-dashboard'
 import { useLayout } from '@/hooks/use-layout'
@@ -170,11 +170,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
 
         {loading ? (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              {Array.from({ length: 4 }, (_, i) => (
-                <Skeleton key={i} className="h-[74px]" />
-              ))}
-            </div>
+            <StatsSkeleton />
             <Skeleton className="h-80" />
           </div>
         ) : (

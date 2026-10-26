@@ -1,5 +1,5 @@
-import { Fragment, useState } from 'react'
-import { History, RotateCcw, ScrollText, X } from 'lucide-react'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { ArrowUp, History, RotateCcw, ScrollText, X } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -60,13 +60,22 @@ export function HistoryTable({
 }: Props) {
   const typeName = (type: string | null) =>
     jobTypes.find(t => t.typeName === type)?.displayName ?? shortType(type)
-  const { records, hasMore, loadMore, error, loaded, refresh } = useHistory(filter)
+  const { records, hasMore, loadMore, error, loaded, refresh, newRuns, showNewRuns, holdNewRuns } =
+    useHistory(filter)
   const refreshMs = useRefreshInterval()
   const [openLog, setOpenLog] = useState<number | null>(null)
   const columns = canManage && onRetry ? 6 : 5
+  // Looking again a second after a run is started; called off when the table goes
+  const lookAgain = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(lookAgain.current), [])
 
   return (
-    <div className="space-y-3">
+    // New runs wait while the pointer is over the list, so a click lands on the run aimed at
+    <div
+      className="space-y-3"
+      onPointerEnter={() => holdNewRuns(true)}
+      onPointerLeave={() => holdNewRuns(false)}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <Select
           value={filter.status}
@@ -99,9 +108,15 @@ export function HistoryTable({
             </button>
           </Badge>
         )}
-        <span className="ml-auto text-sm text-muted-foreground">
-          Newest first · refreshes {everySeconds(refreshMs / 1000)}
-        </span>
+        {newRuns > 0 ? (
+          <Button variant="secondary" size="sm" className="ml-auto" onClick={showNewRuns}>
+            <ArrowUp /> Show {newRuns} new {newRuns === 1 ? 'run' : 'runs'}
+          </Button>
+        ) : (
+          <span className="ml-auto text-sm text-muted-foreground">
+            Newest first · refreshes {everySeconds(refreshMs / 1000)}
+          </span>
+        )}
       </div>
 
       {error && (
@@ -222,7 +237,7 @@ export function HistoryTable({
                             variant="outline"
                             aria-label={`Run ${r.jobName} again`}
                             onClick={async () => {
-                              if (await onRetry(r)) setTimeout(refresh, 1000)
+                              if (await onRetry(r)) lookAgain.current = setTimeout(refresh, 1000)
                             }}
                           >
                             <RotateCcw /> Run again

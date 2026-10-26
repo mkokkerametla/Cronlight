@@ -76,7 +76,9 @@ export QUARTZ_TEST_MYSQL='Server=127.0.0.1;Port=13306;Database=quartz;User Id=ro
 dotnet test
 ```
 
-The tests recreate the Quartz tables in these databases, so point them at throwaway instances only.
+The tests recreate the Quartz tables in these databases, so point them at throwaway instances only. In Git Bash
+on Windows, run the `exec ... sqlcmd` line with `MSYS_NO_PATHCONV=1` in front, or Git Bash turns the container's
+`/opt/...` path into a Windows path.
 
 Each test host gets a fresh SQLite file in a folder of its own for the run, removed when the run ends. The
 packages need Quartz 3.13.1, but the tests and the sample run on the latest 3.x (3.22.7). To see what the test

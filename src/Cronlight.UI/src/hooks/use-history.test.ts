@@ -150,4 +150,70 @@ describe('useHistory', () => {
     })
     expect(ids(result.current.records)).toEqual([5, 4, 3, 2])
   })
+
+  describe('held', () => {
+    const first: HistoryPage = {
+      records: [execution(2, { status: 'Running' }), execution(1)],
+      nextBefore: null,
+    }
+    const later: HistoryPage = {
+      records: [execution(3), execution(2, { status: 'Succeeded' }), execution(1)],
+      nextBefore: null,
+    }
+
+    async function holdThenPoll() {
+      vi.useFakeTimers()
+      mockApi.mockResolvedValueOnce(first).mockResolvedValue(later)
+      const hook = renderHook(({ filter }) => useHistory(filter), { initialProps: { filter: all } })
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      act(() => hook.result.current.holdNewRuns(true))
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+      return hook
+    }
+
+    it('keeps new runs aside, and updates the runs shown in place', async () => {
+      const { result } = await holdThenPoll()
+
+      // Nothing moves: the run that finished shows it where it is, and the new one waits
+      expect(ids(result.current.records)).toEqual([2, 1])
+      expect(result.current.records[0].status).toBe('Succeeded')
+      expect(result.current.newRuns).toBe(1)
+
+      act(() => result.current.showNewRuns())
+      expect(ids(result.current.records)).toEqual([3, 2, 1])
+      expect(result.current.newRuns).toBe(0)
+    })
+
+    it('counts the runs of every refresh while held, still without moving the runs shown', async () => {
+      const { result } = await holdThenPoll()
+      mockApi.mockResolvedValue({ records: [execution(4), ...later.records], nextBefore: null })
+
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+
+      expect(ids(result.current.records)).toEqual([2, 1])
+      expect(result.current.newRuns).toBe(2)
+      act(() => result.current.showNewRuns())
+      expect(ids(result.current.records)).toEqual([4, 3, 2, 1])
+    })
+
+    it('shows the runs kept aside once the hold ends', async () => {
+      const { result } = await holdThenPoll()
+
+      act(() => result.current.holdNewRuns(false))
+
+      expect(ids(result.current.records)).toEqual([3, 2, 1])
+      expect(result.current.newRuns).toBe(0)
+    })
+
+    it('does not hold back a filter just chosen', async () => {
+      const { result, rerender } = await holdThenPoll()
+      mockApi.mockResolvedValue(page([9], null, 'Failed'))
+
+      rerender({ filter: { status: 'Failed', job: null } })
+      await act(() => vi.advanceTimersByTimeAsync(0))
+
+      expect(ids(result.current.records)).toEqual([9])
+      expect(result.current.newRuns).toBe(0)
+    })
+  })
 })

@@ -192,6 +192,24 @@ describe('App', () => {
     expect(card('Total jobs')).toHaveAttribute('aria-pressed', 'true')
   })
 
+  it('keeps the stat row in place as the dashboard loads, with history on', async () => {
+    let answer!: () => void
+    const answered = new Promise<void>(resolve => (answer = resolve))
+    const respond = vi.mocked(api).getMockImplementation()!
+    vi.mocked(api).mockImplementation(async (path, options) => {
+      if (path === 'scheduler') await answered
+      return respond(path, options)
+    })
+    const { container } = renderApp()
+    const placeholders = container.querySelector('[data-slot="skeleton"]')!.parentElement!
+    const loading = { columns: placeholders.className, cards: placeholders.childElementCount }
+
+    act(answer)
+
+    const row = (await screen.findByRole('button', { name: /Total jobs/ })).parentElement!
+    expect({ columns: row.className, cards: row.childElementCount }).toEqual(loading)
+  })
+
   it('filters the jobs from the Paused card, on the server', async () => {
     renderApp()
     await userEvent.click(await screen.findByRole('button', { name: /Paused/ }))

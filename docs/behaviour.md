@@ -27,6 +27,9 @@ headers and cross-site requests.
   details, for scripts and small schedulers.
 - **Polling** happens every 10 seconds (`RefreshSeconds`) only while the dashboard is visible: a tab in the background asks
   nothing, and refreshes as soon as it is shown again. The 24-hour failure count is refreshed once a minute.
+- **History holds still under the pointer.** While the pointer is over History, a refresh updates the runs listed
+  where they are and keeps new runs aside behind **Show 3 new runs**, so a click lands on the run aimed at. They
+  appear when that is clicked or the pointer moves away.
 - **The address keeps the view.** The tab, the job list's search, filters and page, the History filter and the open
   job are in the page's URL (`?tab=history&outcome=Failed`, `?group=billing&job=nightly`), so a link opens the same
   view and Back returns to the one before. Choosing another scheduler starts its dashboard afresh.

@@ -1,7 +1,7 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { HistoryTable } from '@/components/history/history-table'
 import { execution } from '@/test/fixtures'
@@ -53,6 +53,9 @@ describe('HistoryTable', () => {
         }
       )
     })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it("names each run's job type as the job list does", async () => {
@@ -212,5 +215,58 @@ describe('HistoryTable', () => {
     render(<Harness initial={all} />)
 
     expect(await screen.findByText('History table is missing')).toBeInTheDocument()
+  })
+
+  it('looks again a second after running a job again, unless the table is gone by then', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    pages.all = { records: [execution(3, { status: 'Failed' })], nextBefore: null }
+    const { unmount } = render(<Harness initial={all} onRetry={vi.fn(async () => true)} />)
+    const runAgain = await screen.findByRole('button', { name: /Run .* again/ })
+    const calls = () => vi.mocked(api).mock.calls.length
+
+    await user.click(runAgain)
+    const before = calls()
+    await act(() => vi.advanceTimersByTimeAsync(1000))
+    expect(calls()).toBe(before + 1)
+
+    await user.click(runAgain)
+    unmount()
+    await act(() => vi.advanceTimersByTimeAsync(1000))
+    expect(calls()).toBe(before + 1)
+  })
+
+  describe('while the pointer is over it', () => {
+    async function pointAtThenPoll() {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      pages.all = { records: [execution(1, { jobName: 'older' })], nextBefore: null }
+      render(<Harness initial={all} />)
+      await user.hover(await screen.findByText('older'))
+      pages.all = {
+        records: [execution(2, { jobName: 'newer' }), execution(1, { jobName: 'older' })],
+        nextBefore: null,
+      }
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+      return user
+    }
+
+    it('keeps new runs aside, so a click lands on the run aimed at', async () => {
+      const user = await pointAtThenPoll()
+
+      expect(screen.queryByText('newer')).toBeNull()
+      await user.click(screen.getByRole('button', { name: 'Show 1 new run' }))
+
+      expect(screen.getByText('newer')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /new run/ })).toBeNull()
+    })
+
+    it('shows the new runs once the pointer leaves', async () => {
+      const user = await pointAtThenPoll()
+
+      await user.unhover(screen.getByText('older'))
+
+      expect(screen.getByText('newer')).toBeInTheDocument()
+    })
   })
 })
