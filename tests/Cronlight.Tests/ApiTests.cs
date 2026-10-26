@@ -226,6 +226,47 @@ public class ApiTests
         await EditScenarios.HostRegisteredJobSurvivesTriggerEdits(host);
     }
 
+    private static async Task CreateInvoice(HttpClient client) =>
+        Assert.Equal(HttpStatusCode.Created, (await client.PostJson("api/jobs", new
+        {
+            type = typeof(InvoiceJob).FullName,
+            name = "inv",
+            data = new { customerId = "7", smtpPassword = "hunter2", region = "eu" }
+        })).StatusCode);
+
+    [Fact]
+    public async Task Updating_some_job_data_keeps_the_rest()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        await CreateInvoice(client);
+
+        // A script changing one value sends only that one
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PutJson("api/jobs/DEFAULT/inv", new { data = new { customerId = "8" } })).StatusCode);
+
+        var data = (await (await host.Scheduler()).GetJobDetail(new JobKey("inv")))!.JobDataMap;
+        Assert.Equal(("8", "hunter2", "eu"), (data.GetString("customerId"), data.GetString("smtpPassword"), data.GetString("region")));
+    }
+
+    [Fact]
+    public async Task Updating_job_data_with_null_removes_that_key_and_still_checks_required_parameters()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        await CreateInvoice(client);
+
+        Assert.Equal(HttpStatusCode.NoContent,
+            (await client.PutJson("api/jobs/DEFAULT/inv", new { data = new Dictionary<string, string?> { ["region"] = null } })).StatusCode);
+        var data = (await (await host.Scheduler()).GetJobDetail(new JobKey("inv")))!.JobDataMap;
+        Assert.False(data.ContainsKey("region"));
+        Assert.Equal("7", data.GetString("customerId"));
+
+        var removeRequired = await client.PutJson("api/jobs/DEFAULT/inv", new { data = new Dictionary<string, string?> { ["customerId"] = null } });
+        Assert.Equal(HttpStatusCode.BadRequest, removeRequired.StatusCode);
+        Assert.Contains("Missing required parameters: customerId", await removeRequired.Content.ReadAsStringAsync());
+        Assert.Equal("7", (await (await host.Scheduler()).GetJobDetail(new JobKey("inv")))!.JobDataMap.GetString("customerId"));
+    }
+
     [Fact]
     public async Task Editing_keeps_the_type_of_job_data_values()
     {

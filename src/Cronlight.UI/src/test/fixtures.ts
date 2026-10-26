@@ -100,6 +100,7 @@ export function jobPage(jobs: Job[], path = 'jobs/search?'): JobPage {
       active: count('Active'),
       paused: count('Paused'),
       unloadable: count('Unloadable'),
+      error: count('Error'),
     },
     types: [...new Set(jobs.map(typeLabel))].sort(),
   }

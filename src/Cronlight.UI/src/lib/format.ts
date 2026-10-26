@@ -75,8 +75,17 @@ export const jobKey = (job: Pick<Job, 'group' | 'name'>) => `${job.group}.${job.
 export const isPaused = (job: Job) =>
   job.triggers.length > 0 && job.triggers.every(t => t.state === 'Paused')
 
+/**
+ * Quartz has stopped the job: a trigger is in its Error state, as every trigger of a job Quartz could not create is. It
+ * does not run again until it is resumed.
+ */
+export const isStopped = (job: Job) => job.triggers.some(t => t.state === 'Error')
+
+/** Resuming the job would start it again: it is paused, or stopped by Quartz. */
+export const canResume = (job: Job) => isPaused(job) || isStopped(job)
+
 export const jobStatus = (job: Job): JobStatus =>
-  !job.loadable ? 'Unloadable' : isPaused(job) ? 'Paused' : 'Active'
+  !job.loadable ? 'Unloadable' : isStopped(job) ? 'Error' : isPaused(job) ? 'Paused' : 'Active'
 
 export const typeLabel = (job: Job) =>
   job.loadable ? (job.displayName ?? shortType(job.jobType)) : 'Unloadable'

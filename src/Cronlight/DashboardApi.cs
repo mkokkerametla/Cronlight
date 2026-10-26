@@ -70,7 +70,8 @@ public record JobPageDto(
 );
 
 /// <summary>Counts over every job, whatever the search and filters.</summary>
-public record JobCountsDto(int All, int Active, int Paused, int Unloadable);
+/// <param name="Error">Jobs Quartz stopped because it could not create them to run (a trigger in its Error state).</param>
+public record JobCountsDto(int All, int Active, int Paused, int Unloadable, int Error = 0);
 
 /// <param name="CronExpression">For Cron triggers.</param>
 /// <param name="TimeZone">For Cron triggers: the zone the expression is read in; UTC when left out.</param>
@@ -107,11 +108,15 @@ public record CreateJobRequest(
 /// pending manual runs and other kinds of trigger are always kept. Retry with MaxRetries 0 turns retries off, even when
 /// the job type has a [CronlightRetry] policy.
 /// </summary>
+/// <param name="Data">
+/// The job data to change: each key it holds is set to its value, or removed when the value is null, and keys it does not
+/// hold are kept. A masked secret (********) keeps the saved value.
+/// </param>
 /// <param name="TriggerKinds">
 /// The kinds of trigger Triggers replaces: Cron, Once and/or Interval. Left out, it replaces cron triggers and the kinds
 /// Triggers holds, so a client that only sends cron triggers keeps the job's others. The dashboard sends all three.
 /// </param>
-public record UpdateJobRequest(string? Description, Dictionary<string, string>? Data, List<TriggerRequest>? Triggers,
+public record UpdateJobRequest(string? Description, Dictionary<string, string?>? Data, List<TriggerRequest>? Triggers,
     JobRetryPolicy? Retry = null, IReadOnlyList<string>? TriggerKinds = null);
 
 /// <summary>Runs a job now. Data overrides the saved job data for this run (and its retries) only.</summary>
@@ -295,7 +300,7 @@ internal static class DashboardApi
             }
 
             var counts = new JobCountsDto(all.Count, all.Count(j => j.Status == "Active"), all.Count(j => j.Status == "Paused"),
-                all.Count(j => j.Status == "Unloadable"));
+                all.Count(j => j.Status == "Unloadable"), all.Count(j => j.Status == "Error"));
             var types = all.Select(j => j.TypeLabel).Distinct().Order().ToList();
             return Results.Ok(new JobPageDto(jobs, matching.Count, current, size, counts, types));
         });
@@ -405,7 +410,7 @@ internal static class DashboardApi
             foreach (var p in info.Parameters.Where(p => p.DefaultValue != null && !data.ContainsKey(p.Key)))
                 data[p.Key] = p.DefaultValue!;
 
-            if (ReservedKey(data) is { } reserved)
+            if (ReservedKey(data.Keys) is { } reserved)
                 return Results.BadRequest(reserved);
             if (ValidateParameters(info, data) is { } invalid)
                 return Results.BadRequest(invalid);
@@ -460,13 +465,15 @@ internal static class DashboardApi
             // Validate everything before mutating anything
             var info = catalog.Describe(existing.JobType);
             var secretKeys = SecretKeys(info);
-            if (request.Data != null && ReservedKey(request.Data) is { } reserved)
+            var setValues = request.Data?.Where(kv => kv.Value != null).ToDictionary(kv => kv.Key, kv => kv.Value!);
+            if (request.Data != null && ReservedKey(request.Data.Keys) is { } reserved)
                 return Results.BadRequest(reserved);
-            if (request.Data != null && info != null && ValidateParameters(info, request.Data) is { } invalid)
+            // The data the job will have, so a required parameter cannot be removed either
+            if (request.Data != null && info != null && ValidateParameters(info, Merged(existing.JobDataMap, request.Data)) is { } invalid)
                 return Results.BadRequest(invalid);
             if (request.Retry?.Problem() is { } badRetry)
                 return Results.BadRequest(badRetry);
-            if (request.Data != null && CheckSecretReferences(http, request.Data, secretKeys, options.Value) is { } unresolved)
+            if (setValues != null && CheckSecretReferences(http, setValues, secretKeys, options.Value) is { } unresolved)
                 return Results.BadRequest(unresolved);
 
             var requested = new List<ITrigger>();
@@ -520,7 +527,7 @@ internal static class DashboardApi
         api.MapPost("/jobs/{group}/{name}/pause", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
             OnJob(http, o.Value, group, name, (s, k) => s.PauseJob(k)));
         api.MapPost("/jobs/{group}/{name}/resume", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
-            OnJob(http, o.Value, group, name, (s, k) => s.ResumeJob(k)));
+            OnJob(http, o.Value, group, name, ResumeJob));
         api.MapPost("/jobs/{group}/{name}/trigger", RunJob);
         api.MapDelete("/jobs/{group}/{name}", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
             OnJob(http, o.Value, group, name, DeleteJob));
@@ -529,23 +536,23 @@ internal static class DashboardApi
         api.MapPost("/jobs/{group}/{name}/retries/{trigger}/cancel-retry", CancelRetry);
 
         api.MapPost("/groups/{group}/pause", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, group, (s, m) => s.PauseJobs(m, ct), ct));
+            OnJobs(http, index, o.Value, group, (s, m) => s.PauseJobs(m, ct), resume: false, ct));
         api.MapPost("/groups/{group}/resume", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, group, (s, m) => s.ResumeJobs(m, ct), ct));
+            OnJobs(http, index, o.Value, group, (s, m) => s.ResumeJobs(m, ct), resume: true, ct));
         api.MapPost("/scheduler/pause", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, null, (s, _) => s.PauseAll(ct), ct));
+            OnJobs(http, index, o.Value, null, (s, _) => s.PauseAll(ct), resume: false, ct));
         api.MapPost("/scheduler/resume", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, null, (s, _) => s.ResumeAll(ct), ct));
+            OnJobs(http, index, o.Value, null, (s, _) => s.ResumeAll(ct), resume: true, ct));
     }
 
     /// <summary>
     /// Pauses or resumes every job in a group, or with a null group every job in the scheduler. Quartz does it in the
     /// job store, so it reaches every node. Jobs another app owns (their type cannot be loaded here) are not this
     /// dashboard's to change, so unless AllowManagingUnloadableJobs is on, a group or scheduler holding any is refused
-    /// rather than half done.
+    /// rather than half done. Resuming also brings back jobs in Error, as resuming one job does.
     /// </summary>
     private static async Task<IResult> OnJobs(HttpContext http, JobIndexReader index, CronlightOptions options, string? group,
-        Func<IScheduler, GroupMatcher<JobKey>, Task> action, CancellationToken cancellationToken)
+        Func<IScheduler, GroupMatcher<JobKey>, Task> action, bool resume, CancellationToken cancellationToken)
     {
         var scheduler = await Scheduler(http, cancellationToken);
         var jobs = (await index.Read(scheduler, cancellationToken)).Where(j => group == null || j.Group == group).ToList();
@@ -562,8 +569,57 @@ internal static class DashboardApi
                 statusCode: StatusCodes.Status409Conflict);
 
         Audit.RecordChanges(http, new Dictionary<string, CronlightAuditChange> { ["jobs"] = new(null, jobs.Count.ToString()) });
+        // Before resuming, which wakes the scheduler to look for triggers due
+        if (resume)
+            foreach (var job in jobs.Where(j => j.Error))
+                await ResetErrors(scheduler, job.Key, cancellationToken);
         await action(scheduler, GroupMatcher<JobKey>.GroupEquals(group ?? ""));
         return Results.NoContent();
+    }
+
+    /// <summary>
+    /// Resumes the job's paused triggers, and sets those in Quartz's Error state back to normal: Quartz puts every trigger
+    /// of a job it could not create in Error, and they never fire again until reset. Once the cause is fixed (a missing
+    /// dependency registered, say), resuming the job lets it run.
+    /// </summary>
+    private static async Task ResumeJob(IScheduler scheduler, JobKey key)
+    {
+        // Resetting does not wake the scheduler, which could sleep for 30 seconds before it sees the triggers; resuming does
+        await ResetErrors(scheduler, key, CancellationToken.None);
+        await scheduler.ResumeJob(key);
+    }
+
+    private static async Task ResetErrors(IScheduler scheduler, JobKey key, CancellationToken cancellationToken)
+    {
+        var triggers = await scheduler.GetTriggersOfJob(key, cancellationToken);
+        var left = triggers.Count;
+        foreach (var trigger in triggers)
+        {
+            if (await scheduler.GetTriggerState(trigger.Key, cancellationToken) != TriggerState.Error)
+                continue;
+            // A one-off trigger that has fired (Run now's, a retry's) has nothing left to fire, and reset it would wait
+            // forever: it goes, as after a run, unless it would take a job that is not durable with it
+            if (trigger.GetNextFireTimeUtc() == null && (left > 1 || await IsDurable(scheduler, key, cancellationToken)))
+            {
+                await scheduler.UnscheduleJob(trigger.Key, cancellationToken);
+                left--;
+            }
+            else
+                await scheduler.ResetTriggerFromErrorState(trigger.Key, cancellationToken);
+        }
+    }
+
+    private static async Task<bool> IsDurable(IScheduler scheduler, JobKey key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await scheduler.GetJobDetail(key, cancellationToken))?.Durable == true;
+        }
+        catch (JobPersistenceException)
+        {
+            // Its type cannot be loaded here
+            return false;
+        }
     }
 
     /// <summary>
@@ -613,7 +669,7 @@ internal static class DashboardApi
         {
             if (existing == null)
                 return Results.Conflict($"Job {key} has a type that cannot be loaded here and cannot be run with different data.");
-            if (ReservedKey(requested) is { } reserved)
+            if (ReservedKey(requested.Keys) is { } reserved)
                 return Results.BadRequest(reserved);
 
             var saved = existing.JobDataMap;
@@ -624,14 +680,8 @@ internal static class DashboardApi
 
             var info = catalog.Describe(existing.JobType);
             var secretKeys = SecretKeys(info);
-            if (info != null)
-            {
-                var merged = saved.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? "");
-                foreach (var (k, v) in overrides)
-                    merged[k] = v;
-                if (ValidateParameters(info, merged) is { } invalid)
-                    return Results.BadRequest(invalid);
-            }
+            if (info != null && ValidateParameters(info, Merged(saved, overrides!)) is { } invalid)
+                return Results.BadRequest(invalid);
             if (CheckSecretReferences(http, overrides, secretKeys, options.Value) is { } unresolved)
                 return Results.BadRequest(unresolved);
 
@@ -826,20 +876,20 @@ internal static class DashboardApi
     }
 
     /// <summary>
-    /// The edit form sends back every value as the text it was shown (ToString(), secrets masked).
-    /// Values that come back unchanged keep their original object, and changed values keep the
-    /// original primitive type when they convert to it, so non-string job data survives an edit.
+    /// The saved job data with the requested changes: keys requested are set, or removed when requested as null, and the
+    /// rest are kept. Values come as the text the dashboard showed (ToString(), secrets masked): a masked value or one that
+    /// comes back unchanged keeps its original object, and a changed value keeps the original primitive type when it
+    /// converts to it, so non-string job data survives an edit.
     /// </summary>
-    private static JobDataMap MergeJobData(JobDataMap existing, Dictionary<string, string> requested)
+    private static JobDataMap MergeJobData(JobDataMap existing, Dictionary<string, string?> requested)
     {
-        var data = new JobDataMap();
-        // The form never shows Cronlight's own keys, so they are kept rather than read as removed
-        foreach (var (k, v) in existing.Where(kv => Retries.IsReserved(kv.Key)))
-            data[k] = v;
+        var data = new JobDataMap((IDictionary<string, object>)existing);
         foreach (var (k, v) in requested)
         {
             var known = existing.TryGetValue(k, out var old);
-            if (known && (v == Mask || (old is not (null or string) && v == old.ToString())))
+            if (v == null)
+                data.Remove(k);
+            else if (known && (v == Mask || (old is not (null or string) && v == old.ToString())))
                 data[k] = old;
             else if (known && old is not (null or string))
                 data[k] = TryConvert(v, old.GetType()) ?? v;
@@ -847,6 +897,20 @@ internal static class DashboardApi
                 data[k] = v;
         }
         return data;
+    }
+
+    /// <summary>The job data as text, as [JobParameter] rules check it, with the requested values set or (null) removed.</summary>
+    private static Dictionary<string, string> Merged(JobDataMap saved, IReadOnlyDictionary<string, string?> changes)
+    {
+        var merged = saved.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? "");
+        foreach (var (k, v) in changes)
+        {
+            if (v == null)
+                merged.Remove(k);
+            else
+                merged[k] = v;
+        }
+        return merged;
     }
 
     private static object? TryConvert(string value, Type type)
@@ -1002,7 +1066,7 @@ internal static class DashboardApi
         return null;
     }
 
-    private static readonly string[] JobStatuses = ["Active", "Paused", "Unloadable"];
+    private static readonly string[] JobStatuses = ["Active", "Paused", "Unloadable", "Error"];
 
     /// <summary>The job as the dashboard shows it, or null when it does not exist (e.g. deleted meanwhile).</summary>
     private static async Task<JobDto?> LoadJob(IScheduler scheduler, JobKey key, JobTypeCatalog catalog, CronlightOptions options)
@@ -1162,8 +1226,8 @@ internal static class DashboardApi
         : $"{policy.MaxRetries} {(policy.MaxRetries == 1 ? "retry" : "retries")}, {policy.DelaySeconds}s {(policy.Exponential ? "doubling" : "apart")}"
           + (policy.RetryOn is { Count: > 0 } types ? $", only on {string.Join(", ", types)}" : "");
 
-    private static string? ReservedKey(Dictionary<string, string> data) =>
-        data.Keys.FirstOrDefault(Retries.IsReserved) is { } key
+    private static string? ReservedKey(IEnumerable<string> keys) =>
+        keys.FirstOrDefault(Retries.IsReserved) is { } key
             ? $"'{key}' is reserved: job data keys starting with '{Retries.ReservedPrefix}' are Cronlight's own"
             : null;
 

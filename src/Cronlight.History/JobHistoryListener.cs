@@ -27,6 +27,9 @@ internal sealed class JobHistoryQueue(IOptions<JobHistoryOptions> options, ILogg
 
     public ChannelReader<(HistoryEvent Event, JobExecutionRecord Record)> Reader => channel.Reader;
 
+    /// <summary>Records dropped so far, because the queue was full or closed.</summary>
+    public long Dropped => Interlocked.Read(ref dropped);
+
     public void Enqueue(HistoryEvent historyEvent, JobExecutionRecord record)
     {
         if (channel.Writer.TryWrite((historyEvent, record)))
@@ -70,7 +73,7 @@ internal sealed class JobHistoryListener(
     JobHistoryQueue queue,
     MisfireLinks links,
     IOptions<JobHistoryOptions> options,
-    IServiceProvider services) : IJobListener
+    IServiceProvider services) : IJobListener, IJobNotCreatedHandler
 {
     // Registered by AddCronlight; without it, nothing is retried and no job type says which values are secret
     private readonly RetryPlanner? retries = services.GetService<RetryPlanner>();
@@ -126,6 +129,22 @@ internal sealed class JobHistoryListener(
             Log = (context.Get(RunLog.ContextKey) as RunLog)?.Close()
         });
     }
+
+    /// <summary>A job Quartz could not create never started: recorded as a failed run, so history says why the job stopped.</summary>
+    public void JobNotCreated(JobNotCreated failure) => queue.Enqueue(HistoryEvent.Finished, new JobExecutionRecord
+    {
+        SchedulerName = failure.SchedulerName,
+        InstanceName = failure.InstanceName,
+        FireInstanceId = failure.Id,
+        JobName = failure.Job.Name,
+        JobGroup = failure.Job.Group,
+        JobType = failure.JobType,
+        FiredTimeUtc = failure.TimeUtc,
+        FinishedTimeUtc = failure.TimeUtc,
+        DurationMs = 0,
+        Status = JobExecutionStatus.Failed,
+        Error = Truncate(failure.Error)
+    });
 
     /// <summary>
     /// The run's trigger data, masked as the API masks job data, so Run again can repeat the run without secrets

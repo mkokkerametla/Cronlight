@@ -142,6 +142,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
                 running={running.jobs.length}
                 paused={page?.counts.paused ?? 0}
                 unloadable={page?.counts.unloadable ?? 0}
+                error={page?.counts.error ?? 0}
                 failed={summary?.failed ?? null}
                 active={activeStat}
                 onSelect={selectStat}

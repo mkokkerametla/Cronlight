@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  dataChanges,
   dataRows,
   draftsFromTriggers,
   draftsToRequest,
@@ -63,6 +64,36 @@ describe('rowsToData', () => {
 
   it('sends a masked secret back unchanged, so the server keeps the stored value', () => {
     expect(rowsToData([{ key: 'apiKey', value: MASK }])).toEqual({ apiKey: MASK })
+  })
+})
+
+describe('dataChanges', () => {
+  const saved = { region: 'eu', cursor: '400', constructor: 'x' }
+  const opened = dataRows(undefined, saved)
+
+  it('sends entries changed or added, and removed ones as null, but none left as they were', () => {
+    const rows = [
+      { key: 'region', value: 'us' },
+      { key: 'cursor', value: '400' },
+      { key: 'batch', value: '10' },
+    ]
+    expect(dataChanges(rows, opened, saved)).toEqual({
+      region: 'us',
+      batch: '10',
+      constructor: null,
+    })
+  })
+
+  it('takes keys named like object properties as plain keys', () => {
+    expect(dataChanges([{ key: 'toString', value: 'y' }], [], {})).toEqual({ toString: 'y' })
+    expect(dataChanges(opened, opened, saved)).toEqual({})
+  })
+
+  it('sends a parameter default the saved data does not hold, so a required one is not missing', () => {
+    const type = jobType([param('batch', { required: true, defaultValue: '50' })])
+    const rows = dataRows(type, { region: 'eu' })
+
+    expect(dataChanges(rows, rows, { region: 'eu' })).toEqual({ batch: '50' })
   })
 })
 

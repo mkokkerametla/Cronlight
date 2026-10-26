@@ -51,9 +51,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { StatusBadge } from '@/components/jobs/status-badge'
 import type { DashboardActions } from '@/hooks/use-dashboard'
 import {
+  canResume,
   formatDateTime,
   formatRelative,
-  isPaused,
   jobKey,
   jobStatus,
   nextFire,
@@ -174,6 +174,7 @@ export function JobsTable({
             <SelectItem value="Active">Active</SelectItem>
             <SelectItem value="Paused">Paused</SelectItem>
             <SelectItem value="Unloadable">Unloadable</SelectItem>
+            <SelectItem value="Error">Error</SelectItem>
           </SelectContent>
         </Select>
         {filtered && (
@@ -381,7 +382,8 @@ function RowActions({
   actions: DashboardActions
   onOpen: () => void
 }) {
-  const paused = isPaused(job)
+  // A job Quartz stopped is resumed too
+  const paused = canResume(job)
   const [confirming, setConfirming] = useState<BulkTarget | null>(null)
   return (
     <div className="flex justify-end gap-1">

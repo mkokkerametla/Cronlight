@@ -91,6 +91,20 @@ describe('JobsTable', () => {
     await userEvent.click(screen.getByRole('combobox', { name: 'Filter by status' }))
     await userEvent.click(screen.getByRole('option', { name: 'Paused' }))
     expect(onQueryChange).toHaveBeenLastCalledWith({ ...emptyQuery, status: 'Paused' })
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by status' }))
+    await userEvent.click(screen.getByRole('option', { name: 'Error' }))
+    expect(onQueryChange).toHaveBeenLastCalledWith({ ...emptyQuery, status: 'Error' })
+  })
+
+  it('shows a job Quartz stopped as Error, and resumes it from its row', async () => {
+    const { actions } = renderTable({
+      jobs: [job({ name: 'stuck', triggers: [trigger({ state: 'Error' })] })],
+    })
+
+    expect(within(row('stuck')).getByText('Error')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Resume stuck' }))
+    expect(actions.run).toHaveBeenCalledWith(expect.objectContaining({ name: 'stuck' }), 'resume')
   })
 
   it('says when no jobs match, and clears the filters', async () => {

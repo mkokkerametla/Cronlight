@@ -206,6 +206,28 @@ export const draftToRetry = (draft: RetryDraft): JobRetryPolicy => {
   }
 }
 
+/**
+ * What an edit changes in the job data, compared with the form as it opened (and the data it was opened from): entries
+ * added or changed, and entries removed, as null. Entries left as they were are not sent, so the job keeps what it has
+ * now, even if it changed meanwhile (a job that saves its own data as it runs, say). A parameter's default the job does
+ * not hold yet is sent, so a required parameter is not missing.
+ */
+export function dataChanges(
+  rows: DataRow[],
+  opened: DataRow[],
+  saved: Record<string, string | null>
+): Record<string, string | null> {
+  const before = rowsToData(opened)
+  const after = rowsToData(rows)
+  const changes: Record<string, string | null> = {}
+  // Own keys only: job data can hold a key such as "constructor"
+  for (const [key, value] of Object.entries(after))
+    if (!Object.hasOwn(saved, key) || !Object.hasOwn(before, key) || before[key] !== value)
+      changes[key] = value
+  for (const key of Object.keys(before)) if (!Object.hasOwn(after, key)) changes[key] = null
+  return changes
+}
+
 /** Values that differ from the saved job data, for a run with different data. Masked secrets are unchanged. */
 export const changedData = (
   rows: DataRow[],

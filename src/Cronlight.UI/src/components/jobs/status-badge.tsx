@@ -14,6 +14,12 @@ export function StatusBadge({ job }: { job: Job }) {
           <Lock className="size-3" /> Read-only
         </Badge>
       )
+    case 'Error':
+      return (
+        <Badge variant="outline" className="gap-1.5 border-destructive/50 text-destructive">
+          <span className={cn(dot, 'bg-destructive')} /> Error
+        </Badge>
+      )
     case 'Paused':
       return (
         <Badge

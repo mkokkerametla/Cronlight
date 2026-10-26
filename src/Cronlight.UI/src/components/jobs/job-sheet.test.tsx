@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { JobSheet } from '@/components/jobs/job-sheet'
@@ -23,10 +23,15 @@ function renderSheet(subject: Job, overrides: Partial<Parameters<typeof JobSheet
   } as unknown as DashboardActions
   const onClose = vi.fn()
   const onViewHistory = vi.fn()
+  // Shows the job as the next poll returns it
+  const handle: { show: (next: Job) => void } = { show: () => {} }
 
   // Open state lives with the caller, as in App
   function Harness() {
     const [selected, setSelected] = useState<Job | null>(subject)
+    useEffect(() => {
+      handle.show = setSelected
+    }, [])
     return (
       <JobSheet
         job={selected}
@@ -46,7 +51,8 @@ function renderSheet(subject: Job, overrides: Partial<Parameters<typeof JobSheet
     )
   }
   render(<Harness />)
-  return { actions, onClose, onViewHistory }
+  const poll = (next: Job) => act(() => handle.show(next))
+  return { actions, onClose, onViewHistory, poll }
 }
 
 const sheet = (name = 'nightly') => within(screen.getByRole('dialog', { name }))
@@ -152,6 +158,15 @@ describe('JobSheet', () => {
     expect(actions.run).toHaveBeenCalledWith(expect.anything(), 'resume')
   })
 
+  it('explains a job Quartz stopped, and offers Resume instead of Pause', async () => {
+    const { actions } = renderSheet(job({ triggers: [trigger({ state: 'Error' })] }))
+
+    expect(sheet().getByText('Stopped by Quartz')).toBeInTheDocument()
+    expect(sheet().queryByRole('button', { name: /Pause/ })).toBeNull()
+    await userEvent.click(sheet().getByRole('button', { name: /Resume/ }))
+    expect(actions.run).toHaveBeenCalledWith(expect.anything(), 'resume')
+  })
+
   it('shows the retry policy and changes it when editing', async () => {
     const { actions } = renderSheet(
       job({ retry: { maxRetries: 2, delaySeconds: 90, exponential: false } })
@@ -183,6 +198,20 @@ describe('JobSheet', () => {
       region: 'us',
     })
     expect(sheet().getByRole('button', { name: /Run with different data/ })).toBeInTheDocument()
+  })
+
+  it('runs with what was changed in the form, not values the job saved meanwhile', async () => {
+    const { actions, poll } = renderSheet(job({ data: { cursor: '400', region: 'eu' } }))
+    await userEvent.click(sheet().getByRole('button', { name: /Run with different data/ }))
+
+    // The job ran and saved a new cursor while the form was open
+    poll(job({ data: { cursor: '500', region: 'eu' } }))
+    expect(sheet().getByText('Nothing changed')).toBeInTheDocument()
+    await userEvent.clear(sheet().getByLabelText('Value for region'))
+    await userEvent.type(sheet().getByLabelText('Value for region'), 'us')
+    await userEvent.click(sheet().getByRole('button', { name: /Run now/ }))
+
+    expect(actions.runWithData).toHaveBeenCalledWith(expect.anything(), { region: 'us' })
   })
 
   it('has no controls without permission to manage jobs', () => {
@@ -224,17 +253,42 @@ describe('JobSheet', () => {
     await userEvent.type(sheet().getByLabelText('Value for region'), 'us-east')
     await userEvent.click(sheet().getByRole('button', { name: 'Save changes' }))
 
+    // The retry policy was left as it was, so it is not sent
     expect(actions.update).toHaveBeenCalledWith(expect.objectContaining({ name: 'nightly' }), {
       description: 'new',
       data: { region: 'us-east' },
       // A UTC trigger is edited with an empty zone, which the server reads as UTC
       triggers: [{ name: 'daily', cronExpression: '0 30 7 * * ?', timeZone: null }],
-      retry: { maxRetries: 0, delaySeconds: 60, exponential: false },
       // So a one-time or interval trigger removed in the editor is removed from the job too
       triggerKinds: ['Cron', 'Once', 'Interval'],
     })
     expect(sheet().queryByRole('button', { name: 'Save changes' })).toBeNull()
     expect(sheet().getByRole('button', { name: /Edit/ })).toBeInTheDocument()
+  })
+
+  it('saves only what was edited, so what changed meanwhile is kept', async () => {
+    const { actions, poll } = renderSheet(
+      job({ description: 'old', data: { cursor: '400', region: 'eu' } })
+    )
+    await userEvent.click(sheet().getByRole('button', { name: /Edit/ }))
+
+    // The job ran and saved a new cursor while the form was open
+    poll(job({ description: 'old', data: { cursor: '500', region: 'eu' } }))
+    await userEvent.clear(sheet().getByLabelText('Description'))
+    await userEvent.type(sheet().getByLabelText('Description'), 'new')
+    await userEvent.click(sheet().getByRole('button', { name: 'Save changes' }))
+
+    expect(actions.update).toHaveBeenCalledWith(expect.anything(), { description: 'new' })
+  })
+
+  it('removes a data entry deleted in the form', async () => {
+    const { actions } = renderSheet(job({ data: { region: 'eu', legacy: 'x' } }))
+    await userEvent.click(sheet().getByRole('button', { name: /Edit/ }))
+
+    await userEvent.click(sheet().getByRole('button', { name: 'Remove legacy' }))
+    await userEvent.click(sheet().getByRole('button', { name: 'Save changes' }))
+
+    expect(actions.update).toHaveBeenCalledWith(expect.anything(), { data: { legacy: null } })
   })
 
   it('keeps editing when the save fails, and Cancel discards the changes', async () => {

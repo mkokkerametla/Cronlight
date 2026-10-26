@@ -26,7 +26,7 @@ public static class CronlightMetrics
 }
 
 /// <summary>Records every run and misfire of the schedulers it is attached to on the Cronlight meter.</summary>
-internal sealed class MetricsListener : IJobListener
+internal sealed class MetricsListener : IJobListener, IJobNotCreatedHandler
 {
     private readonly RetryPlanner retries;
     private readonly Counter<long> runs;
@@ -81,6 +81,9 @@ internal sealed class MetricsListener : IJobListener
         runs.Add(1, tags);
         duration.Record(context.JobRunTime.TotalSeconds, tags);
     }
+
+    // Never started, so never active, and without a duration
+    public void JobNotCreated(JobNotCreated failure) => runs.Add(1, Tags(failure.SchedulerName, failure.Job, "failed"));
 
     // A database store whose misfire handling is rolled back reports the misfire again on its next pass, so a counter
     // can count one twice; history keeps one record per misfire

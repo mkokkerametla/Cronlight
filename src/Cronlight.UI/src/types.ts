@@ -105,6 +105,8 @@ export interface JobCounts {
   active: number
   paused: number
   unloadable: number
+  /** Jobs Quartz stopped because it could not create them to run (a trigger in its Error state) */
+  error: number
 }
 
 /** One page of the job list, from jobs/search */
@@ -119,7 +121,7 @@ export interface JobPage {
   types: string[]
 }
 
-export type JobStatus = 'Active' | 'Paused' | 'Unloadable'
+export type JobStatus = 'Active' | 'Paused' | 'Unloadable' | 'Error'
 
 export interface JobQuery {
   search: string
@@ -181,14 +183,16 @@ export interface CreateJobRequest {
   retry: JobRetryPolicy
 }
 
+/** What to change in a job; anything left out stays as it is */
 export interface UpdateJobRequest {
-  description: string | null
-  data: Record<string, string>
-  triggers: TriggerRequest[]
+  description?: string
+  /** Keys to set, or to remove (null); keys left out are kept */
+  data?: Record<string, string | null>
+  triggers?: TriggerRequest[]
   /** The kinds triggers replaces; left out, cron and the kinds it holds */
   triggerKinds?: EditableTriggerKind[]
   /** maxRetries 0 turns retries off, even when the job type has a policy */
-  retry: JobRetryPolicy
+  retry?: JobRetryPolicy
 }
 
 /** Runs a job now; data replaces saved values for this run and its retries only */

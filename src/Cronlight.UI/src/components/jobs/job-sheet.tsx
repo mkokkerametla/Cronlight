@@ -1,5 +1,15 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { History, ListRestart, Lock, Pause, Pencil, Play, PlayCircle, Trash2 } from 'lucide-react'
+import {
+  History,
+  ListRestart,
+  Lock,
+  OctagonAlert,
+  Pause,
+  Pencil,
+  Play,
+  PlayCircle,
+  Trash2,
+} from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -35,6 +45,7 @@ import { RetryEditor } from '@/components/jobs/retry-editor'
 import { TriggersEditor } from '@/components/jobs/triggers-editor'
 import {
   changedData,
+  dataChanges,
   dataRows,
   draftsFromTriggers,
   draftsToRequest,
@@ -42,11 +53,11 @@ import {
   editableKinds,
   isEditable,
   retryDraft,
-  rowsToData,
 } from '@/lib/job-form'
 import type { DashboardActions } from '@/hooks/use-dashboard'
 import { useHistory } from '@/hooks/use-history'
 import {
+  canResume,
   describeMisfire,
   describeRetry,
   describeSchedule,
@@ -54,7 +65,7 @@ import {
   formatDateTime,
   formatDuration,
   formatRelative,
-  isPaused,
+  isStopped,
   recordTime,
   shortType,
   startedLate,
@@ -182,7 +193,8 @@ function JobActions({
   onRunWithData: () => void
   onDeleted: () => void
 }) {
-  const paused = isPaused(job)
+  // A job Quartz stopped is resumed too
+  const paused = canResume(job)
   return (
     <div className="flex flex-wrap gap-2 pt-2">
       <Button size="sm" onClick={() => actions.run(job, 'trigger')}>
@@ -262,6 +274,20 @@ function JobDetails({
               another app that shares the scheduler.
             </p>
             <p className="font-mono text-xs">{job.loadError}</p>
+          </AlertDescription>
+        </Alert>
+      )}
+      {job.loadable && isStopped(job) && (
+        <Alert variant="destructive">
+          <OctagonAlert />
+          <AlertTitle>Stopped by Quartz</AlertTitle>
+          <AlertDescription>
+            <p>
+              Quartz could not run this job, usually because it could not create it (a dependency
+              that is not registered, or a constructor that throws), and stopped its triggers. It
+              does not run again until it is resumed. History and the app&apos;s log say why; fix
+              the cause, then choose Resume.
+            </p>
           </AlertDescription>
         </Alert>
       )}
@@ -385,8 +411,17 @@ function EditJobForm({
   onSave: (request: UpdateJobRequest) => Promise<void>
   onCancel: () => void
 }) {
-  const [description, setDescription] = useState(job.description ?? '')
-  const [data, setData] = useState(() => dataRows(jobType, job.data))
+  // The job as the form opened, which polling does not change. Only what differs from it is saved, so a change made
+  // meanwhile, by someone else or by the job itself, is not undone.
+  const [opened] = useState(() => ({
+    description: job.description ?? '',
+    saved: job.data,
+    data: dataRows(jobType, job.data),
+    triggers: JSON.stringify(draftsToRequest(draftsFromTriggers(job.triggers))),
+    retry: JSON.stringify(draftToRetry(retryDraft(job.retry))),
+  }))
+  const [description, setDescription] = useState(opened.description)
+  const [data, setData] = useState(opened.data)
   const [triggers, setTriggers] = useState(() => draftsFromTriggers(job.triggers))
   const [retry, setRetry] = useState(() => retryDraft(job.retry))
   const [saving, setSaving] = useState(false)
@@ -395,15 +430,20 @@ function EditJobForm({
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    setSaving(true)
-    await onSave({
-      description,
-      data: rowsToData(data),
-      triggers: draftsToRequest(triggers),
-      retry: draftToRetry(retry),
+    const request: UpdateJobRequest = {}
+    if (description !== opened.description) request.description = description
+    const changes = dataChanges(data, opened.data, opened.saved)
+    if (Object.keys(changes).length > 0) request.data = changes
+    const triggerRequest = draftsToRequest(triggers)
+    if (JSON.stringify(triggerRequest) !== opened.triggers) {
+      request.triggers = triggerRequest
       // Every kind the editor shows, so a trigger removed here is removed from the job
-      triggerKinds: editableKinds,
-    })
+      request.triggerKinds = editableKinds
+    }
+    const retryPolicy = draftToRetry(retry)
+    if (JSON.stringify(retryPolicy) !== opened.retry) request.retry = retryPolicy
+    setSaving(true)
+    await onSave(request)
     setSaving(false)
   }
 
@@ -473,14 +513,16 @@ function RunWithDataForm({
   onRun: (data: Record<string, string>) => Promise<void>
   onCancel: () => void
 }) {
-  const [data, setData] = useState(() => dataRows(jobType, job.data))
+  // Compared with the data as the form opened: a value the job saved since is not a change made here
+  const [saved] = useState(() => job.data)
+  const [data, setData] = useState(() => dataRows(jobType, saved))
   const [running, setRunning] = useState(false)
-  const changed = Object.keys(changedData(data, job.data)).length
+  const changed = Object.keys(changedData(data, saved)).length
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setRunning(true)
-    await onRun(changedData(data, job.data))
+    await onRun(changedData(data, saved))
     setRunning(false)
   }
 

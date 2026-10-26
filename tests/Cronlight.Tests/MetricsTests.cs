@@ -106,6 +106,25 @@ public class MetricsTests
     }
 
     [Fact]
+    public async Task A_job_that_cannot_be_created_counts_as_failed()
+    {
+        string? name = null;
+        using var recorder = new Recorder(() => name!);
+        await using var host = await TestHost.Start();
+        name = host.SchedulerName;
+        await JobErrorTests.CreateBroken(host, "broken");
+
+        for (var deadline = DateTime.UtcNow.AddSeconds(15);
+             !recorder.Measurements.Any(m => m.Instrument == "cronlight.job.runs") && DateTime.UtcNow < deadline;)
+            await Task.Delay(50);
+
+        var run = Assert.Single(recorder.Measurements, m => m.Instrument == "cronlight.job.runs");
+        Assert.Equal(("broken", "failed"), (run.Tags["cronlight.job.name"], run.Tags["cronlight.run.outcome"]));
+        // It never started, so it was never active
+        Assert.DoesNotContain(recorder.Measurements, m => m.Instrument == "cronlight.job.runs.active");
+    }
+
+    [Fact]
     public async Task The_health_check_reports_each_scheduler()
     {
         await using var host = await TestHost.Start(services: s => s.AddHealthChecks().AddCronlight());
