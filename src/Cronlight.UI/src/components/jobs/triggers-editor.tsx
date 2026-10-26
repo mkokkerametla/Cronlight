@@ -189,6 +189,13 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
               onInvalidChange={value => markInvalid(trigger.id, value)}
             />
           )}
+          {/* Where someone is stuck on cron, not only in the help text below */}
+          {trigger.kind === 'Cron' &&
+            (!trigger.cronExpression.trim() || invalid.has(trigger.id)) && (
+              <p className="text-xs text-muted-foreground">
+                Not sure? See <CronSyntaxLink />
+              </p>
+            )}
           {trigger.kind !== 'Cron' && <SchedulePreview trigger={trigger} />}
           <div className="flex items-center gap-2">
             <Checkbox
@@ -211,19 +218,24 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
         <Plus /> Add trigger
       </Button>
       <p className="text-xs text-muted-foreground">
-        Cron: Quartz cron, with seconds (
-        <a
-          href={cronSyntax}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-0.5 underline hover:text-foreground"
-        >
-          Quartz cron syntax <ExternalLink className="size-3" />
-        </a>
+        Cron: Quartz cron, with seconds (<CronSyntaxLink />
         ), and an IANA time zone such as America/Chicago. One time and interval: times in your local
         time. Names are optional. No triggers means the job only runs when triggered manually.
       </p>
     </div>
+  )
+}
+
+function CronSyntaxLink() {
+  return (
+    <a
+      href={cronSyntax}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-0.5 underline hover:text-foreground"
+    >
+      Quartz cron syntax <ExternalLink className="size-3" />
+    </a>
   )
 }
 
