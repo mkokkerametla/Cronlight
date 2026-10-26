@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A host's job types in an assembly whose name starts with "Quartz", as many apps' do, for the tests of job type
+    discovery: only Quartz.NET's own assemblies are left out, not every name that starts the same way.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cronlight\Cronlight.csproj" />
+  </ItemGroup>
+
+</Project>

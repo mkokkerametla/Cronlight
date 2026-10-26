@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Quartz;
 using Quartz.Listener;
@@ -30,8 +31,9 @@ internal interface IJobNotCreatedHandler
 /// Hears one scheduler's errors and picks out the jobs it could not create. Quartz reports those only as a scheduler
 /// error naming the job in its message, then sets the job's triggers to Error.
 /// </summary>
-internal sealed class JobCreationListener(IScheduler scheduler, IReadOnlyList<IJobNotCreatedHandler> handlers, ILogger logger)
-    : SchedulerListenerSupport
+/// <param name="appStopping">Cancelled when the app starts to stop, after which failures to create jobs are expected.</param>
+internal sealed class JobCreationListener(IScheduler scheduler, IReadOnlyList<IJobNotCreatedHandler> handlers,
+    CancellationToken appStopping, ILogger logger) : SchedulerListenerSupport
 {
     // Quartz 3 says "An error occurred instantiating job to be executed. job= '{key}'" before 3.17 and "job='{key}'" since,
     // either followed by the exception's message
@@ -41,7 +43,7 @@ internal sealed class JobCreationListener(IScheduler scheduler, IReadOnlyList<IJ
     public override Task SchedulerError(string msg, SchedulerException cause, CancellationToken cancellationToken = default)
     {
         // Quartz's scheduler thread calls this, and sets the triggers to Error once it returns: work it out in the background
-        if (msg.StartsWith(Prefix, StringComparison.Ordinal) && !ShuttingDown(cause))
+        if (msg.StartsWith(Prefix, StringComparison.Ordinal) && !ShuttingDown())
             _ = Task.Run(() => Report(msg, cause, DateTimeOffset.UtcNow));
         return Task.CompletedTask;
     }
@@ -131,14 +133,9 @@ internal sealed class JobCreationListener(IScheduler scheduler, IReadOnlyList<IJ
         }
     }
 
-    // A job factory whose container is being disposed fails like this while the app stops; Quartz does not stop the job then
-    private bool ShuttingDown(Exception? exception)
-    {
-        for (; exception != null; exception = exception.InnerException)
-            if (exception is ObjectDisposedException or OperationCanceledException)
-                return true;
-        return scheduler.IsShutdown;
-    }
+    // While the app stops, a job factory whose container is being disposed fails to create jobs, and Quartz does not stop
+    // them for it. Otherwise any failure counts, a timeout or a disposed service included.
+    private bool ShuttingDown() => appStopping.IsCancellationRequested || scheduler.IsShutdown;
 
     // What the factory or constructor threw, inside Quartz's and reflection's wrapping
     private static string Describe(SchedulerException cause)
@@ -158,14 +155,15 @@ internal sealed class JobCreationListener(IScheduler scheduler, IReadOnlyList<IJ
 }
 
 /// <summary>Attaches <see cref="JobCreationListener"/>, when anything listens for jobs that could not be created.</summary>
-internal sealed class JobCreationAttachment(IEnumerable<IJobNotCreatedHandler> handlers, ILogger<JobCreationAttachment> logger)
-    : ISchedulerAttachment
+internal sealed class JobCreationAttachment(IEnumerable<IJobNotCreatedHandler> handlers, IServiceProvider services,
+    ILogger<JobCreationAttachment> logger) : ISchedulerAttachment
 {
     public Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
         var all = handlers.ToList();
+        var appStopping = services.GetService<IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
         if (all.Count > 0 && scheduler.ListenerManager.GetSchedulerListeners().All(l => l is not JobCreationListener))
-            scheduler.ListenerManager.AddSchedulerListener(new JobCreationListener(scheduler, all, logger));
+            scheduler.ListenerManager.AddSchedulerListener(new JobCreationListener(scheduler, all, appStopping, logger));
         return Task.CompletedTask;
     }
 }

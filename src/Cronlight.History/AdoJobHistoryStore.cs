@@ -50,6 +50,9 @@ internal sealed class AdoJobHistoryStore(
 
     private bool NotReadyYet => !ready && !initializationFailed;
 
+    /// <summary>A column or index could not be added at the last start (a lock timeout, say): the writer tries again later.</summary>
+    public bool UpgradePending { get; private set; }
+
     public string Description => $"{dialect.Name} table {tableName}";
 
     public async Task Initialize(CancellationToken cancellationToken)
@@ -71,6 +74,7 @@ internal sealed class AdoJobHistoryStore(
         await using var connection = await dataSource.OpenConnection(cancellationToken);
         if (await TableExists(connection, cancellationToken))
         {
+            UpgradePending = false;
             await AddMissingColumns(connection, cancellationToken);
             await AddMissingIndexes(connection, cancellationToken);
             return;
@@ -268,8 +272,11 @@ internal sealed class AdoJobHistoryStore(
                 if (await HasColumn(connection, column, cancellationToken))
                     present.Add(column);
                 else
-                    logger.LogWarning(ex, "Could not add column {Column} to history table {Table}, so {Purpose}. Add it with: {Statement}",
-                        column, tableName, purpose, statement);
+                {
+                    UpgradePending = true;
+                    logger.LogWarning(ex, "Could not add column {Column} to history table {Table}, so {Purpose} until it is added; " +
+                        "it is tried again every CleanupInterval. Add it with: {Statement}", column, tableName, purpose, statement);
+                }
             }
         }
         addedColumns = present.ToArray();
@@ -329,8 +336,11 @@ internal sealed class AdoJobHistoryStore(
             catch (DbException ex) when (!cancellationToken.IsCancellationRequested)
             {
                 if (!await IndexExists(connection, index, cancellationToken))
-                    logger.LogWarning(ex, "Could not add index {Index} to history table {Table}, so filtering runs by outcome is slow on large tables. Add it with: {Statement}",
-                        index, tableName, statement);
+                {
+                    UpgradePending = true;
+                    logger.LogWarning(ex, "Could not add index {Index} to history table {Table}, so filtering runs by outcome is slow on large tables; " +
+                        "it is tried again every CleanupInterval. Add it with: {Statement}", index, tableName, statement);
+                }
             }
         }
     }

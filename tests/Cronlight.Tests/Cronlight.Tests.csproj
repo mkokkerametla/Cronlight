@@ -33,6 +33,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Cronlight\Cronlight.csproj" />
     <ProjectReference Include="..\..\src\Cronlight.History\Cronlight.History.csproj" />
+    <ProjectReference Include="..\QuartzSample.Jobs\QuartzSample.Jobs.csproj" />
   </ItemGroup>
 
   <ItemGroup>

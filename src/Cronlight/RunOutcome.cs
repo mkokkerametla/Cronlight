@@ -6,6 +6,12 @@ namespace Cronlight;
 internal static class RunOutcome
 {
     /// <summary>
+    /// Starts the error of a run history recorded as failed because it never recorded its end: the app stopped while it
+    /// ran, or the node running it crashed. The run raised no alert, so a failure streak neither counts it nor ends at it.
+    /// </summary>
+    public const string DidNotFinish = "Did not finish: ";
+
+    /// <summary>
     /// A run whose cancellation token was cancelled counts as cancelled however it ended: Quartz swallows the
     /// OperationCanceledException a cancelled job throws, so it cannot be told apart from a job that returned
     /// early because it was asked to stop.

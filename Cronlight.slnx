@@ -9,5 +9,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/Cronlight.SampleHost.Tests/Cronlight.SampleHost.Tests.csproj" />
     <Project Path="tests/Cronlight.Tests/Cronlight.Tests.csproj" />
+    <Project Path="tests/QuartzSample.Jobs/QuartzSample.Jobs.csproj" />
   </Folder>
 </Solution>

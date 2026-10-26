@@ -29,7 +29,9 @@ public record JobTypeInfo(
 /// </summary>
 public class JobTypeCatalog
 {
-    private static readonly string[] FrameworkPrefixes = { "System", "Microsoft", "Quartz", "netstandard" };
+    // Framework and Quartz.NET assemblies: these names, and names under them ("System.Text.Json"). A host's own assembly
+    // whose name only starts the same way ("QuartzJobs", "SystemSync") is scanned.
+    private static readonly string[] FrameworkNames = { "System", "Microsoft", "Quartz", "netstandard", "mscorlib" };
 
     private readonly Lazy<Dictionary<string, (Type Type, JobTypeInfo Info)>> types;
 
@@ -60,7 +62,7 @@ public class JobTypeCatalog
         var assemblies = options.JobAssemblies.Count > 0
             ? options.JobAssemblies
             : AppDomain.CurrentDomain.GetAssemblies()
-                .Where(a => !a.IsDynamic && !FrameworkPrefixes.Any(p => a.GetName().Name!.StartsWith(p)))
+                .Where(a => !a.IsDynamic && !IsFramework(a.GetName().Name!))
                 .ToList();
 
         return assemblies
@@ -70,6 +72,9 @@ public class JobTypeCatalog
             .DistinctBy(t => t.FullName)
             .ToDictionary(t => t.FullName!, t => (t, ToInfo(t)));
     }
+
+    private static bool IsFramework(string assemblyName) =>
+        FrameworkNames.Any(name => assemblyName == name || assemblyName.StartsWith(name + ".", StringComparison.Ordinal));
 
     private static IEnumerable<Type> LoadableTypes(Assembly assembly)
     {

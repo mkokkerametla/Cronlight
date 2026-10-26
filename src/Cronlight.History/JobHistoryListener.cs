@@ -24,24 +24,42 @@ internal sealed class JobHistoryQueue(IOptions<JobHistoryOptions> options, ILogg
         });
 
     private long dropped;
+    private long overflowed;
+    private long pending;
+    private volatile bool completed;
 
     public ChannelReader<(HistoryEvent Event, JobExecutionRecord Record)> Reader => channel.Reader;
 
-    /// <summary>Records dropped so far, because the queue was full or closed.</summary>
-    public long Dropped => Interlocked.Read(ref dropped);
+    /// <summary>Records dropped so far because the queue was full, rather than closed.</summary>
+    public long Overflowed => Interlocked.Read(ref overflowed);
+
+    /// <summary>Records queued and not yet written. The writer calls <see cref="Written"/> for each.</summary>
+    public long Pending => Interlocked.Read(ref pending);
 
     public void Enqueue(HistoryEvent historyEvent, JobExecutionRecord record)
     {
+        // Counted first, so the writer cannot finish with it before it counts
+        Interlocked.Increment(ref pending);
         if (channel.Writer.TryWrite((historyEvent, record)))
             return;
+        Interlocked.Decrement(ref pending);
 
         // Full (the store is down or too slow) or completed (shutting down): drop rather than slow jobs down
+        if (!completed)
+            Interlocked.Increment(ref overflowed);
         var total = Interlocked.Increment(ref dropped);
         if (total == 1 || total % 1000 == 0)
             logger.LogWarning("Cronlight history queue is full or closed; {Dropped} records dropped so far", total);
     }
 
-    public void Complete() => channel.Writer.TryComplete();
+    /// <summary>The writer is done with one record, written or not.</summary>
+    public void Written() => Interlocked.Decrement(ref pending);
+
+    public void Complete()
+    {
+        completed = true;
+        channel.Writer.TryComplete();
+    }
 }
 
 /// <summary>
