@@ -135,13 +135,14 @@ events or SignalR, and fall back to the current polling.
   source control.
 - **Permissions per group**, and a "can run, can't edit" role.
 - **OpenAPI description** of the API.
+- **Schedules in plain words**: type "every weekday at 9:30" and an AI integration the host sets up turns it into
+  cron, shown in the cron box with its preview to check before saving. Off unless the host turns it on, since
+  what users type goes to that AI service. Until then, the trigger editor links to Quartz.NET's cron syntax.
 
 ## For a global audience
 
 - **Translations** of the dashboard.
 - **Time zones**: show and edit schedules in a chosen zone, and warn about daylight-saving gaps and repeats.
-- **Schedule builder**: build a schedule in the dashboard by choosing when it runs, in place of the links to ChatGPT
-  and Google, which are removed.
 - **Accessibility**: an axe scan in the tests, and tests at phone width.
 
 ## Simplify

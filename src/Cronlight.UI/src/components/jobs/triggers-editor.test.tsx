@@ -28,6 +28,18 @@ describe('TriggersEditor', () => {
     })
   })
 
+  it("links to Quartz.NET's cron documentation, in a new tab", () => {
+    render(<Editor initial={[emptyTrigger()]} />)
+
+    const link = screen.getByRole('link', { name: /Quartz cron syntax/ })
+    expect(link).toHaveAttribute(
+      'href',
+      'https://www.quartz-scheduler.net/documentation/quartz-3.x/tutorial/crontriggers.html'
+    )
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
   it('adds and removes trigger rows', async () => {
     render(<Editor initial={[emptyTrigger()]} />)
 
