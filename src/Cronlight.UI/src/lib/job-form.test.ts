@@ -89,6 +89,26 @@ describe('dataChanges', () => {
     expect(dataChanges(opened, opened, saved)).toEqual({})
   })
 
+  it('leaves out an optional parameter the job has not saved, unless it was changed', () => {
+    const type = jobType([param('cursor'), param('format', { defaultValue: 'csv' })])
+    const opened = dataRows(type, {})
+
+    // Sending them would overwrite a value the job saved while the form was open
+    expect(dataChanges(opened, opened, {})).toEqual({})
+    const rows = opened.map(r => (r.key === 'cursor' ? { ...r, value: '7' } : r))
+    expect(dataChanges(rows, opened, {})).toEqual({ cursor: '7' })
+  })
+
+  it('keeps a key named __proto__ as a plain key', () => {
+    const saved = JSON.parse('{"__proto__": "a"}') as Record<string, string>
+    const opened = dataRows(undefined, saved)
+
+    const edited = dataChanges([{ key: '__proto__', value: 'b' }], opened, saved)
+    expect(Object.keys(edited)).toEqual(['__proto__'])
+    expect(JSON.stringify(edited)).toBe('{"__proto__":"b"}')
+    expect(JSON.stringify(dataChanges([], opened, saved))).toBe('{"__proto__":null}')
+  })
+
   it('sends a parameter default the saved data does not hold, so a required one is not missing', () => {
     const type = jobType([param('batch', { required: true, defaultValue: '50' })])
     const rows = dataRows(type, { region: 'eu' })

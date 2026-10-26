@@ -191,11 +191,11 @@ describe('JobsTable', () => {
     expect(screen.getByText('This scheduler has no jobs yet.')).toBeInTheDocument()
   })
 
-  it("pauses a job's group only once asked, saying what resuming undoes", async () => {
+  it("resumes a job's group only once asked, saying what resuming undoes", async () => {
     const { actions } = renderTable()
 
-    await userEvent.click(screen.getByRole('button', { name: 'More actions for send-invoices' }))
-    await userEvent.click(await screen.findByRole('menuitem', { name: /Resume group billing/ }))
+    await userEvent.click(screen.getByRole('button', { name: 'More actions for cleanup' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Resume group maintenance/ }))
     const dialog = await screen.findByRole('alertdialog')
     expect(
       within(dialog).getByText(/including jobs that were paused one by one/)
@@ -203,7 +203,40 @@ describe('JobsTable', () => {
     expect(actions.group).not.toHaveBeenCalled()
 
     await userEvent.click(within(dialog).getByRole('button', { name: 'Resume group' }))
-    expect(actions.group).toHaveBeenCalledWith('billing', 'resume')
+    expect(actions.group).toHaveBeenCalledWith('maintenance', 'resume')
+  })
+
+  it('offers to pause a group only when it has a job running, and to resume it only when it has one paused', async () => {
+    renderTable()
+
+    // billing: its only job is active
+    await userEvent.click(screen.getByRole('button', { name: 'More actions for send-invoices' }))
+    expect(await screen.findByRole('menuitem', { name: /Pause group billing/ })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /Resume group billing/ })).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    // maintenance: its only job is paused
+    await userEvent.click(screen.getByRole('button', { name: 'More actions for cleanup' }))
+    expect(
+      await screen.findByRole('menuitem', { name: /Resume group maintenance/ })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /Pause group maintenance/ })).toBeNull()
+  })
+
+  it('shows no next fire for a paused job, and an overdue one as due now', () => {
+    renderTable({
+      jobs: [
+        job({
+          name: 'held',
+          triggers: [trigger({ state: 'Paused', nextFireTimeUtc: '2000-01-01T00:00:00Z' })],
+        }),
+        job({ name: 'late', triggers: [trigger({ nextFireTimeUtc: '2000-01-01T00:00:00Z' })] }),
+      ],
+    })
+
+    const nextFireCell = (name: string) => within(row(name)).getAllByRole('cell').at(-2)
+    expect(nextFireCell('held')).toHaveTextContent('-')
+    expect(nextFireCell('late')).toHaveTextContent('Due now')
   })
 
   it('pauses every job after confirming, and cancelling does nothing', async () => {

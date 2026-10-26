@@ -122,6 +122,45 @@ public class JobErrorTests
         Assert.Single(await HistoryScenarios.History(client, "?group=billing.eu&name=nightly.export"));
     }
 
+    // A timeout or a disposed service looks like the app stopping, but is not
+    [Fact]
+    public async Task A_constructor_that_times_out_is_reported_too()
+    {
+        await using var host = await TestHost.Start(history: _ => { });
+        var client = host.Client();
+        BreakableJob.TimesOut[host.SchedulerName] = true;
+        Assert.Equal(HttpStatusCode.Created,
+            (await client.PostJson("api/jobs", new { type = typeof(BreakableJob).FullName, name = "slow" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("api/jobs/DEFAULT/slow/trigger", null)).StatusCode);
+
+        var records = await HistoryScenarios.WaitForHistory(client, "?name=slow",
+            r => r.Any(x => x.GetProperty("status").GetString() == "Failed"));
+        Assert.StartsWith("Not run: the job could not be created. TaskCanceledException: The partner API did not answer in time",
+            records[0].GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task A_job_Quartz_stops_is_alerted_even_when_it_was_already_failing()
+    {
+        var sink = new AlertTests.RecordingAlertSink();
+        await using var host = await TestHost.Start(services: AlertTests.Alerts(sink));
+        var client = host.Client();
+        Assert.Equal(HttpStatusCode.Created,
+            (await client.PostJson("api/jobs", new { type = typeof(BreakableJob).FullName, name = "worse" })).StatusCode);
+
+        // It fails, and is alerted
+        BreakableJob.Failing[host.SchedulerName] = true;
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("api/jobs/DEFAULT/worse/trigger", null)).StatusCode);
+        await sink.WaitFor(1);
+
+        // Then it cannot even be created, and Quartz stops it: that needs someone to resume it, so it is alerted too
+        BreakableJob.Broken[host.SchedulerName] = true;
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("api/jobs/DEFAULT/worse/trigger", null)).StatusCode);
+        await sink.WaitFor(2);
+        Assert.Equal(CronlightAlertKind.Failing, sink.Alerts[1].Kind);
+        Assert.StartsWith("Not run: the job could not be created", sink.Alerts[1].Error);
+    }
+
     [Fact]
     public async Task A_job_that_cannot_be_created_raises_an_alert_at_once_and_recovers_once_resumed()
     {

@@ -46,10 +46,11 @@ test('rejects an invalid cron expression before saving', async ({ page }) => {
   // The preview checks the expression with Quartz as you type...
   await expect(sheet.getByText("Illegal characters for this position: 'EVE'")).toBeVisible()
 
-  // ...and the server refuses to save it
-  await sheet.getByRole('button', { name: 'Create job' }).click()
-  await expect(page.getByText("Invalid cron expression 'every day please'")).toBeVisible()
-  await expect(sheet).toBeVisible()
+  // ...and the job cannot be created until it is fixed
+  const create = sheet.getByRole('button', { name: 'Create job' })
+  await expect(create).toBeDisabled()
+  await sheet.getByLabel('Cron expression').fill('0 0 6 * * ?')
+  await expect(create).toBeEnabled()
 })
 
 test('edits the schedule of a job and keeps it paused', async ({ page, request }) => {

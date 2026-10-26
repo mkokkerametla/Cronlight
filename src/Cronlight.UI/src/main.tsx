@@ -21,7 +21,8 @@ createRoot(document.getElementById('root')!).render(
         <ErrorBoundary>
           <App />
         </ErrorBoundary>
-        <Toaster richColors closeButton position="bottom-right" />
+        {/* Top center: at the bottom or on the right, toasts cover the side panel's buttons */}
+        <Toaster richColors closeButton position="top-center" />
       </TooltipProvider>
     </ThemeProvider>
   </StrictMode>

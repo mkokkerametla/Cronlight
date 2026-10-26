@@ -304,6 +304,57 @@ describe('JobSheet', () => {
     expect(sheet().getByText('old')).toBeInTheDocument()
   })
 
+  it('shows the next fire of a paused trigger as paused, and an overdue one as due now', () => {
+    renderSheet(
+      job({
+        triggers: [
+          trigger({ name: 'held', state: 'Paused', nextFireTimeUtc: '2000-01-01T00:00:00Z' }),
+          trigger({ name: 'late', nextFireTimeUtc: '2000-01-01T00:00:00Z' }),
+        ],
+      })
+    )
+
+    const next = sheet()
+      .getAllByText('Next fire')
+      .map(label => label.nextElementSibling?.textContent)
+    expect(next).toEqual(['Paused', 'Due now'])
+  })
+
+  it('names the close button for screen readers', () => {
+    renderSheet(job())
+    expect(sheet().getByRole('button', { name: 'Close' })).toBeInTheDocument()
+  })
+
+  it('says how many triggers a delete removes', async () => {
+    renderSheet(job({ triggers: [trigger()] }))
+    await userEvent.click(sheet().getByRole('button', { name: /Delete/ }))
+    expect(
+      within(screen.getByRole('alertdialog')).getByText(
+        /DEFAULT\.nightly and its trigger are removed/
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('does not save while a cron expression is shown as invalid', async () => {
+    const { actions } = renderSheet(job())
+    vi.mocked(api).mockImplementation(async path => ({
+      isValid: false,
+      expression: new URLSearchParams((path as string).split('?')[1]).get('expression'),
+      description: null,
+      nextFireTimes: [],
+      errorMessage: 'Unexpected end of expression',
+    }))
+    await userEvent.click(sheet().getByRole('button', { name: /Edit/ }))
+    await userEvent.clear(sheet().getByLabelText('Cron expression'))
+    await userEvent.type(sheet().getByLabelText('Cron expression'), '0/30 * * * *')
+
+    expect(await sheet().findByText('Unexpected end of expression')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(sheet().getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    )
+    expect(actions.update).not.toHaveBeenCalled()
+  })
+
   it('deletes only after confirmation, then closes', async () => {
     const { actions, onClose } = renderSheet(
       job({ triggers: [trigger(), trigger({ name: 't2' })] })

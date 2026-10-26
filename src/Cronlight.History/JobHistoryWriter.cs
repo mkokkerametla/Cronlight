@@ -114,7 +114,10 @@ internal sealed class JobHistoryWriter(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        // The scheduler has already stopped (it is registered after us, so it stops first): drain what is left
+        // The scheduler has already stopped (it is registered after us, so it stops first), but jobs it did not wait for may
+        // still be running. The queue stays open until what is in it is written, so a run ending meanwhile is recorded.
+        if (initialized && !unavailable)
+            await WhenWritten(cancellationToken);
         queue.Complete();
 
         // Storage never came up, or is down now: there is nothing to drain into, so stop retrying instead of holding up shutdown
@@ -135,6 +138,19 @@ internal sealed class JobHistoryWriter(
             await stopping.CancelAsync();
             foreach (var task in new[] { cleaning, closing }.OfType<Task>())
                 await task.ContinueWith(_ => { }, TaskScheduler.Default);
+        }
+    }
+
+    private async Task WhenWritten(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (queue.Pending > 0 && !unavailable)
+                await Task.Delay(20, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // The host gives up; what is left is written while it waits for the writer below
         }
     }
 
@@ -160,7 +176,9 @@ internal sealed class JobHistoryWriter(
                 open[Run(record)] = record;
             else
                 open.Remove(Run(record));
-            if (!await Write(historyEvent, record, cancellationToken))
+            var written = await Write(historyEvent, record, cancellationToken);
+            queue.Written();
+            if (!written)
             {
                 var lost = 1;
                 while (queue.Reader.TryRead(out _))
@@ -171,21 +189,26 @@ internal sealed class JobHistoryWriter(
         }
 
         // A run's end dropped from a full queue looks the same
-        var error = queue.Dropped == 0
-            ? "Did not finish: the app stopped while it was running."
-            : "No end was recorded: it was still running when the app stopped, or its end was lost while the history queue was full.";
+        var error = RunOutcome.DidNotFinish + (queue.Overflowed == 0
+            ? "the app stopped while it was running."
+            : "no end was recorded. It was still running when the app stopped, or its end was lost while the history queue was full.");
         foreach (var run in open.Values)
         {
             try
             {
                 var now = DateTimeOffset.UtcNow;
-                await store.RecordFinished(run with
+                var closed = run with
                 {
                     Status = JobExecutionStatus.Failed,
                     FinishedTimeUtc = now,
                     DurationMs = (long)(now - run.FiredTimeUtc).TotalMilliseconds,
                     Error = error
-                }, CancellationToken.None);
+                };
+                // Only while still Running: its end may have been written another way, or retention removed it since
+                if (store is IUnfinishedRuns unfinishedRuns)
+                    await unfinishedRuns.FinishIfRunning(closed, CancellationToken.None);
+                else
+                    await store.RecordFinished(closed, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -254,11 +277,15 @@ internal sealed class JobHistoryWriter(
         }
     }
 
+    /// <summary>
+    /// Whether the store answers at all. A summary of no runs (since the end of time) reads no record back, so a record it
+    /// cannot read, such as one a newer version wrote, does not make it look unavailable.
+    /// </summary>
     private async Task<bool> Readable(string schedulerName)
     {
         try
         {
-            await store.Query(schedulerName, new JobHistoryQuery { Limit = 1 }, CancellationToken.None);
+            await store.Summarize(schedulerName, DateTimeOffset.MaxValue, CancellationToken.None);
             return true;
         }
         catch (Exception)
@@ -299,11 +326,12 @@ internal sealed class JobHistoryWriter(
         }
     }
 
+    /// <summary>
+    /// Every CleanupInterval: tries again a schema upgrade that failed at startup (a lock timeout, say), and applies
+    /// retention.
+    /// </summary>
     private async Task Clean(CancellationToken cancellationToken)
     {
-        if (options.Value.Retention is not { } retention)
-            return;
-
         // On a new database the table only exists once initialization has created it
         try
         {
@@ -319,6 +347,10 @@ internal sealed class JobHistoryWriter(
         {
             try
             {
+                if (store is AdoJobHistoryStore { UpgradePending: true } upgrading)
+                    await upgrading.Initialize(cancellationToken);
+                if (options.Value.Retention is not { } retention)
+                    continue;
                 foreach (var scheduler in await schedulers.All(cancellationToken))
                 {
                     var removed = await store.DeleteFiredBefore(scheduler.SchedulerName, DateTimeOffset.UtcNow - retention, cancellationToken);
@@ -407,7 +439,8 @@ internal sealed class JobHistoryWriter(
             if (await unfinishedRuns.FinishIfRunning(run with
                 {
                     Status = JobExecutionStatus.Failed,
-                    Error = $"No end was recorded, and no node is running it any more: the node that ran it ({run.InstanceName}) probably stopped or crashed."
+                    Error = RunOutcome.DidNotFinish +
+                        $"no end was recorded, and no node is running it any more. The node that ran it ({run.InstanceName}) probably stopped or crashed."
                 }, cancellationToken))
                 closed++;
         }

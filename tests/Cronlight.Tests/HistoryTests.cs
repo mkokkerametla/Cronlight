@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Quartz;
 using Quartz.Impl.Matchers;
 
@@ -295,25 +296,119 @@ public class HistoryTests
     public async Task A_run_still_going_when_the_app_stops_is_not_left_running()
     {
         var host = await TestHost.Start(history: Database);
+        var disposed = false;
         var client = host.Client();
         var gate = BlockingJob.Gate(host.SchedulerName);
-        await HistoryScenarios.Create(client, typeof(BlockingJob), "block", new { gate = host.SchedulerName });
-        await client.PostAsync("api/jobs/DEFAULT/block/trigger", null);
         try
         {
+            await HistoryScenarios.Create(client, typeof(BlockingJob), "block", new { gate = host.SchedulerName });
+            await client.PostAsync("api/jobs/DEFAULT/block/trigger", null);
             Assert.True(await gate.Started.WaitAsync(TimeSpan.FromSeconds(15)));
             await HistoryScenarios.WaitForHistory(client, "?name=block", r => r.Count == 1);
             // As Quartz does by default, the app stops without waiting for the job
+            disposed = true;
             await host.DisposeAsync();
         }
         finally
         {
             gate.Release.Release();
+            if (!disposed)
+                await host.DisposeAsync();
         }
 
         var where = $"FROM QRTZ_CRONLIGHT_HISTORY WHERE SCHED_NAME = '{host.SchedulerName}' AND JOB_NAME = 'block'";
         Assert.Equal("Failed", await host.Database.Scalar($"SELECT STATUS {where}"));
         Assert.Equal("Did not finish: the app stopped while it was running.", await host.Database.Scalar($"SELECT ERROR {where}"));
+    }
+
+    [Fact]
+    public async Task Closing_runs_at_shutdown_does_not_bring_back_a_row_that_is_gone()
+    {
+        var host = await TestHost.Start(history: Database);
+        var disposed = false;
+        var client = host.Client();
+        var gate = BlockingJob.Gate(host.SchedulerName);
+        var where = $"FROM QRTZ_CRONLIGHT_HISTORY WHERE SCHED_NAME = '{host.SchedulerName}' AND JOB_NAME = 'block'";
+        try
+        {
+            await HistoryScenarios.Create(client, typeof(BlockingJob), "block", new { gate = host.SchedulerName });
+            await client.PostAsync("api/jobs/DEFAULT/block/trigger", null);
+            Assert.True(await gate.Started.WaitAsync(TimeSpan.FromSeconds(15)));
+            await HistoryScenarios.WaitForHistory(client, "?name=block", r => r.Count == 1);
+            // Deleted meanwhile, as retention would
+            await host.Database.Execute($"DELETE {where}");
+            disposed = true;
+            await host.DisposeAsync();
+        }
+        finally
+        {
+            gate.Release.Release();
+            if (!disposed)
+                await host.DisposeAsync();
+        }
+
+        Assert.Equal(0L, await host.Database.Scalar($"SELECT COUNT(*) {where}"));
+    }
+
+    [Fact]
+    public async Task A_run_that_ends_while_history_drains_at_shutdown_is_recorded()
+    {
+        var store = new GatedStore("drain");
+        var writerStopsNext = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = await TestHost.Start(history: _ => { }, services: s =>
+        {
+            s.AddSingleton<IJobHistoryStore>(store);
+            // Stops just before the history writer, which is registered first and so stops last
+            s.Insert(0, ServiceDescriptor.Singleton<IHostedService>(new StopSignal(writerStopsNext)));
+        });
+        var client = host.Client();
+        var gate = BlockingJob.Gate(host.SchedulerName);
+        Task? stopping = null;
+        try
+        {
+            await HistoryScenarios.Create(client, typeof(BlockingJob), "late", new { gate = host.SchedulerName });
+            await HistoryScenarios.Create(client, typeof(PlainJob), "drain");
+            await client.PostAsync("api/jobs/DEFAULT/late/trigger", null);
+            Assert.True(await gate.Started.WaitAsync(TimeSpan.FromSeconds(15)));
+            // The end of this run holds up the writer, as a slow database would
+            await client.PostAsync("api/jobs/DEFAULT/drain/trigger", null);
+            Assert.True(await store.Held.WaitAsync(TimeSpan.FromSeconds(15)));
+
+            // The app stops without waiting for "late", which ends while history is still being written
+            stopping = host.DisposeAsync().AsTask();
+            await writerStopsNext.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            await Task.Delay(300);
+            gate.Release.Release();
+            await Task.Delay(300);
+        }
+        finally
+        {
+            store.Release.Release();
+            gate.Release.Release();
+            await (stopping ?? host.DisposeAsync().AsTask());
+        }
+
+        Assert.Equal(JobExecutionStatus.Succeeded, Assert.Single(store.Records, r => r.JobName == "late").Status);
+    }
+
+    [Fact]
+    public async Task A_store_whose_records_cannot_be_read_back_does_not_hold_up_history()
+    {
+        var store = new RefusingStore("poison", readable: false);
+        await using var host = await TestHost.Start(history: _ => { }, services: s => s.AddSingleton<IJobHistoryStore>(store));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(PlainJob), "poison");
+        await HistoryScenarios.Create(client, typeof(PlainJob), "ok");
+
+        await client.PostAsync("api/jobs/DEFAULT/poison/trigger", null);
+        await client.PostAsync("api/jobs/DEFAULT/ok/trigger", null);
+
+        // Its Query fails, so the dashboard cannot read it either: look in the store
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); !store.Records.Any(r => r is { JobName: "ok", Status: JobExecutionStatus.Succeeded });)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "The record of the second job was never written");
+            await Task.Delay(100);
+        }
     }
 
     [Fact]
@@ -353,7 +448,7 @@ public class HistoryTests
             await store.RecordStarted(Started("lost", "lost-run", 0), CancellationToken.None);
 
             var lost = await HistoryScenarios.WaitForHistory(client, "?name=lost", r => r[0].GetProperty("status").GetString() == "Failed");
-            Assert.Equal("No end was recorded, and no node is running it any more: the node that ran it (crashed-node) probably stopped or crashed.",
+            Assert.Equal("Did not finish: no end was recorded, and no node is running it any more. The node that ran it (crashed-node) probably stopped or crashed.",
                 lost[0].GetProperty("error").GetString());
             Assert.Contains(await HistoryScenarios.History(client, "?name=block"),
                 r => r.GetProperty("refireCount").GetInt32() == 7 && r.GetProperty("status").GetString() == "Running");
@@ -700,6 +795,101 @@ public class DatabaseTests
 
     [SkippableTheory]
     [MemberData(nameof(Databases))]
+    public async Task Runs_history_closed_as_unfinished_do_not_count_toward_a_clusters_alerts(string name)
+    {
+        var sink = new AlertTests.RecordingAlertSink();
+        await using var host = await TestHost.Start(database: Require(name), clustered: true,
+            history: o => o.Storage = JobHistoryStorage.Database, services: AlertTests.Alerts(sink));
+        var client = host.Client();
+        var store = host.Services.GetRequiredService<IJobHistoryStore>();
+        await HistoryScenarios.WaitForStore(store);
+        await HistoryScenarios.Create(client, typeof(PlainJob), "deployed");
+        // A run a rolling deploy cut short, which history closed: it raised no alert, so its job cannot recover from it
+        var earlier = DateTimeOffset.UtcNow.AddMinutes(-1);
+        await store.RecordFinished(new JobExecutionRecord
+        {
+            SchedulerName = host.SchedulerName,
+            FireInstanceId = "cut-short",
+            InstanceName = "old-node",
+            JobName = "deployed",
+            JobGroup = "DEFAULT",
+            FiredTimeUtc = earlier,
+            FinishedTimeUtc = earlier,
+            Status = JobExecutionStatus.Failed,
+            Error = "Did not finish: the app stopped while it was running."
+        }, CancellationToken.None);
+
+        await client.PostAsync("api/jobs/DEFAULT/deployed/trigger", null);
+        await HistoryScenarios.WaitForHistory(client, "?name=deployed", r => r.Any(x => x.GetProperty("status").GetString() == "Succeeded"));
+        // An alert would be sent as the run ends
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        Assert.Empty(sink.Alerts);
+    }
+
+    // The upgrade is tried again on the next cleanup, here every 200 ms
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task An_upgrade_step_that_failed_is_tried_again_later(string name)
+    {
+        var database = Require(name);
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var (older, view) = ($"HB_{id}", $"HV_{id}");
+        await using (var creator = await TestHost.Start(database: database, history: o =>
+        {
+            o.Storage = JobHistoryStorage.Database;
+            o.TableName = older;
+        }))
+            await HistoryScenarios.WaitForStore(creator.Services.GetRequiredService<IJobHistoryStore>());
+        await database.Execute($"ALTER TABLE {older} DROP COLUMN RUN_LOG");
+        await database.Execute($"CREATE VIEW {view} AS SELECT * FROM {older}");
+        try
+        {
+            await using var host = await TestHost.Start(database: database, history: o =>
+            {
+                o.Storage = JobHistoryStorage.Database;
+                o.TableName = view;
+                o.CleanupInterval = TimeSpan.FromMilliseconds(200);
+            });
+            await HistoryScenarios.WaitForStore(host.Services.GetRequiredService<IJobHistoryStore>());
+
+            // What stopped the upgrade is gone: the name now belongs to the table itself, which can be changed. Swapped in
+            // one step, or the history writer, trying again every 200 ms, could find no table there and create one.
+            await database.Execute(name switch
+            {
+                "SQL Server" => $"BEGIN TRANSACTION; DROP VIEW {view}; EXEC sp_rename '{older}', '{view}'; COMMIT",
+                "MySQL" => $"RENAME TABLE {view} TO {view}_OLD, {older} TO {view}",
+                _ => $"BEGIN; DROP VIEW {view}; ALTER TABLE {older} RENAME TO {view}; COMMIT",
+            });
+            for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(100))
+            {
+                try
+                {
+                    await database.Scalar($"SELECT COUNT(RUN_LOG) FROM {view}");
+                    break;
+                }
+                catch (Exception) when (DateTime.UtcNow < deadline)
+                {
+                }
+            }
+        }
+        finally
+        {
+            // Whichever of these the test got to
+            foreach (var drop in new[] { $"DROP VIEW {view}", $"DROP VIEW {view}_OLD", $"DROP TABLE {view}", $"DROP TABLE {older}" })
+            {
+                try
+                {
+                    await database.Execute(drop);
+                }
+                catch (Exception)
+                {
+                }
+            }
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
     public async Task Job_search_reads_the_Quartz_tables(string name)
     {
         await using var host = await Start(name);
@@ -1010,17 +1200,101 @@ internal sealed class OutageStore : IJobHistoryStore
                 .OrderByDescending(r => r.Id).Take(query.Limit).ToList());
     }
 
+    // Down means down: every call fails
+    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
+        down ? throw new IOException("Connection refused") : Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
+
+    public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
+}
+
+/// <summary>Signals when the host stops it, which it does just before the services registered ahead of it.</summary>
+internal sealed class StopSignal(TaskCompletionSource stopping) : IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        stopping.TrySetResult();
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Keeps records in a list. Writing the end of one job's run waits until the test releases it.</summary>
+internal sealed class GatedStore(string heldJob) : IJobHistoryStore
+{
+    private readonly List<JobExecutionRecord> records = new();
+    private long nextId;
+
+    public SemaphoreSlim Held { get; } = new(0);
+    public SemaphoreSlim Release { get; } = new(0);
+
+    public List<JobExecutionRecord> Records
+    {
+        get
+        {
+            lock (records)
+                return records.ToList();
+        }
+    }
+
+    public Task Initialize(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task RecordStarted(JobExecutionRecord record, CancellationToken cancellationToken) => Upsert(record);
+
+    public async Task RecordFinished(JobExecutionRecord record, CancellationToken cancellationToken)
+    {
+        if (record.JobName == heldJob)
+        {
+            Held.Release();
+            await Release.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        await Upsert(record);
+    }
+
+    private Task Upsert(JobExecutionRecord record)
+    {
+        lock (records)
+        {
+            var index = records.FindIndex(r => r.FireInstanceId == record.FireInstanceId && r.RefireCount == record.RefireCount);
+            if (index >= 0)
+                records[index] = record with { Id = records[index].Id };
+            else
+                records.Add(record with { Id = ++nextId });
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
+    {
+        lock (records)
+            return Task.FromResult<IReadOnlyList<JobExecutionRecord>>(records
+                .Where(r => r.SchedulerName == schedulerName && (query.Status == null || r.Status == query.Status))
+                .OrderByDescending(r => r.Id).Take(query.Limit).ToList());
+    }
+
     public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
         Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
 
     public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
 }
 
-/// <summary>Keeps records in a list, but refuses every record of one job while reads work: a record that can never be written.</summary>
-internal sealed class RefusingStore(string refusedJob) : IJobHistoryStore
+/// <summary>
+/// Keeps records in a list, but refuses every record of one job while it otherwise works: a record that can never be
+/// written. Unless readable, reading records back fails too, as a store that cannot read a newer version's rows would.
+/// </summary>
+internal sealed class RefusingStore(string refusedJob, bool readable = true) : IJobHistoryStore
 {
     private readonly List<JobExecutionRecord> records = new();
     private long nextId;
+
+    public List<JobExecutionRecord> Records
+    {
+        get
+        {
+            lock (records)
+                return records.ToList();
+        }
+    }
 
     public Task Initialize(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -1045,6 +1319,8 @@ internal sealed class RefusingStore(string refusedJob) : IJobHistoryStore
 
     public Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
     {
+        if (!readable)
+            throw new NotSupportedException("Unknown status 'Skipped'");
         lock (records)
             return Task.FromResult<IReadOnlyList<JobExecutionRecord>>(records
                 .Where(r => r.SchedulerName == schedulerName && (query.Status == null || r.Status == query.Status))

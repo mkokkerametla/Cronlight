@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { HistoryTable } from '@/components/history/history-table'
 import { execution } from '@/test/fixtures'
-import type { ExecutionRecord, HistoryFilter, HistoryPage } from '@/types'
+import type { ExecutionRecord, HistoryFilter, HistoryPage, JobType } from '@/types'
 
 vi.mock('@/api', () => ({ api: vi.fn() }))
 
@@ -16,9 +16,11 @@ const onOpenJob = vi.fn()
 function Harness({
   initial,
   onRetry,
+  jobTypes,
 }: {
   initial: HistoryFilter
   onRetry?: (record: ExecutionRecord) => Promise<boolean>
+  jobTypes?: JobType[]
 }) {
   const [filter, setFilter] = useState(initial)
   return (
@@ -28,6 +30,7 @@ function Harness({
       onOpenJob={onOpenJob}
       canManage={onRetry !== undefined}
       onRetry={onRetry}
+      jobTypes={jobTypes}
     />
   )
 }
@@ -50,6 +53,24 @@ describe('HistoryTable', () => {
         }
       )
     })
+  })
+
+  it("names each run's job type as the job list does", async () => {
+    pages.all = {
+      records: [
+        execution(2, { jobType: 'Acme.Jobs.InvoiceJob' }),
+        execution(1, { jobName: 'other', jobType: 'Acme.Jobs.UnlistedJob' }),
+      ],
+      nextBefore: null,
+    }
+    const jobTypes = [
+      { typeName: 'Acme.Jobs.InvoiceJob', displayName: 'Send invoices' },
+    ] as JobType[]
+    render(<Harness initial={all} jobTypes={jobTypes} />)
+
+    expect(await screen.findByText(/DEFAULT · Send invoices/)).toBeInTheDocument()
+    // A type the dashboard does not describe keeps its class name
+    expect(screen.getByText(/DEFAULT · UnlistedJob/)).toBeInTheDocument()
   })
 
   it('lists runs with outcome, error, refires and node', async () => {

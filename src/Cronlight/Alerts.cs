@@ -360,11 +360,16 @@ internal sealed class AlertWorker(
 
         if (!run.Succeeded)
         {
-            // Exactly at the threshold: in a cluster, only the node whose run crossed it sends the alert. A job Quartz has
-            // stopped cannot fail again, so it is alerted below the threshold too.
             var failures = before + 1;
-            var crossed = failures == threshold || run.Stopped && failures < threshold;
-            if (!crossed || !alerted.TryAdd(run.StreakKey, failures))
+            // A job Quartz has stopped needs someone to resume it, which an alert already sent for its failures does not
+            // say: it is alerted whatever its streak
+            if (run.Stopped)
+            {
+                alerted[run.StreakKey] = failures;
+                return Alert(run, CronlightAlertKind.Failing, failures, Truncate(run.Error));
+            }
+            // Exactly at the threshold: in a cluster, only the node whose run crossed it sends the alert
+            if (failures != threshold || !alerted.TryAdd(run.StreakKey, failures))
                 return null;
             return Alert(run, CronlightAlertKind.Failing, failures, Truncate(run.Error));
         }
@@ -409,6 +414,9 @@ internal sealed class AlertWorker(
         var failures = 0;
         foreach (var record in records.Where(r => r.FireInstanceId != run.FireInstanceId))
         {
+            // History closed it, with no alert: the app stopped while it ran, or its node crashed
+            if (record is { Status: JobExecutionStatus.Failed, Error: { } error } && error.StartsWith(RunOutcome.DidNotFinish, StringComparison.Ordinal))
+                continue;
             // A vetoed run with a reason counts as a failure, as AlertListener counts it
             if (record.Status == JobExecutionStatus.Failed || record is { Status: JobExecutionStatus.Vetoed, Error: not null })
                 failures++;

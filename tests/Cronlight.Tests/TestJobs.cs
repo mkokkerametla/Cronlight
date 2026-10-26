@@ -160,19 +160,28 @@ public class SelfDeletingJob : IJob
 
 /// <summary>
 /// Quartz cannot create it while its scheduler is in <see cref="Broken"/>: its constructor throws, as when a
-/// dependency is not registered.
+/// dependency is not registered, or times out (<see cref="TimesOut"/>), as when a dependency calls a slow service.
+/// While its scheduler is in <see cref="Failing"/>, it is created but its run fails.
 /// </summary>
 public class BreakableJob : IJob
 {
     public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> Broken = new();
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> TimesOut = new();
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> Failing = new();
 
     public BreakableJob(Microsoft.Extensions.Options.IOptions<QuartzOptions> quartz)
     {
-        if (Broken.GetValueOrDefault(quartz.Value["quartz.scheduler.instanceName"] ?? ""))
+        var scheduler = quartz.Value["quartz.scheduler.instanceName"] ?? "";
+        if (Broken.GetValueOrDefault(scheduler))
             throw new InvalidOperationException("No IInvoiceGateway is registered");
+        if (TimesOut.GetValueOrDefault(scheduler))
+            throw new TaskCanceledException("The partner API did not answer in time");
     }
 
-    public Task Execute(IJobExecutionContext context) => Task.CompletedTask;
+    public Task Execute(IJobExecutionContext context) =>
+        Failing.GetValueOrDefault(context.Scheduler.SchedulerName)
+            ? throw new InvalidOperationException("Invoice 42 could not be sent")
+            : Task.CompletedTask;
 }
 
 /// <summary>Logs through ILogger while it runs, its apiToken among it, from its own code and from work it starts.</summary>
