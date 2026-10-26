@@ -42,7 +42,6 @@ Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
 | `AllowAnonymousOutsideDevelopment` | `false` | Without a `ViewPolicy` Cronlight returns 403 outside Development unless this is set |
 | `AllowManagingUnloadableJobs` | `false` | Allow pause/resume/delete on jobs whose type isn't in this app |
 | `JobAssemblies` | all loaded app assemblies | Where to look for `IJob` types offered in "New Job". Left empty, every loaded assembly but .NET's and Quartz.NET's (`System`, `Microsoft`, `Quartz`, `netstandard` and names under them, such as `Quartz.Jobs`) |
-| `ShowScheduleAssistant` | `false` | Show the "describe your schedule" box that opens the question in ChatGPT or Google. What users type goes to that site, so turn it on only where staff may use external AI or search tools |
 | `RefreshSeconds` | `10` | How often an open dashboard refreshes jobs, running jobs and history (1 to 300 seconds) |
 | `SensitiveKeyPatterns` | password, secret, token, apikey, connectionstring | JobDataMap keys masked in responses |
 | `SecretsSection` | none | Configuration section that [secret references](job-types.md#secret-references) are read from; none turns them off |

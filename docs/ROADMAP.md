@@ -140,7 +140,8 @@ events or SignalR, and fall back to the current polling.
 
 - **Translations** of the dashboard.
 - **Time zones**: show and edit schedules in a chosen zone, and warn about daylight-saving gaps and repeats.
-- **Built-in cron builder** to replace the links to ChatGPT and Google.
+- **Schedule builder**: build a schedule in the dashboard by choosing when it runs, in place of the links to ChatGPT
+  and Google, which are removed.
 - **Accessibility**: an axe scan in the tests, and tests at phone width.
 
 ## Simplify

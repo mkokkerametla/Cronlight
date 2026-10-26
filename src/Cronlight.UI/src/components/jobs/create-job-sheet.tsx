@@ -35,7 +35,6 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   jobTypes: JobType[]
-  showScheduleAssistant: boolean
   secretReferences: boolean
   onCreate: (request: CreateJobRequest) => Promise<boolean>
 }
@@ -44,7 +43,6 @@ export function CreateJobSheet({
   open,
   onOpenChange,
   jobTypes,
-  showScheduleAssistant,
   secretReferences,
   onCreate,
 }: Props) {
@@ -61,7 +59,6 @@ export function CreateJobSheet({
         {open && (
           <CreateJobForm
             jobTypes={jobTypes}
-            showScheduleAssistant={showScheduleAssistant}
             secretReferences={secretReferences}
             onCreate={onCreate}
             onDone={() => onOpenChange(false)}
@@ -74,7 +71,6 @@ export function CreateJobSheet({
 
 function CreateJobForm({
   jobTypes,
-  showScheduleAssistant,
   secretReferences,
   onCreate,
   onDone,
@@ -174,7 +170,6 @@ function CreateJobForm({
           <TriggersEditor
             triggers={triggers}
             onChange={setTriggers}
-            showScheduleAssistant={showScheduleAssistant}
             onInvalidChange={setCronInvalid}
           />
         </section>

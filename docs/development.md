@@ -109,7 +109,7 @@ pause and resume, search, filters and paging of the job list, the stat cards, th
 cancelling a run, history (paging, job filter, failing and succeeding HTTP jobs), retries, running a
 job with different data, running a failed run again, read-only jobs from other apps sharing the
 scheduler, server errors, changes made elsewhere, a lost connection, viewer and anonymous access, the
-scheduler details, the theme switch and the schedule assistant.
+scheduler details and the theme switch.
 They need Node.js 22.13 or later, for its built-in SQLite module.
 
 ```bash

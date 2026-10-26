@@ -137,7 +137,7 @@ public static class CronlightExtensions
         {
             var headers = context.HttpContext.Response.Headers;
             headers.XContentTypeOptions = "nosniff";
-            // Links out of the dashboard (e.g. the schedule assistant) do not reveal where it is hosted
+            // Links out of the dashboard do not reveal where it is hosted
             headers["Referrer-Policy"] = "no-referrer";
             if (!string.IsNullOrEmpty(policy))
             {

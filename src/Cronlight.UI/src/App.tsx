@@ -88,7 +88,6 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
   const historyEnabled = scheduler?.historyEnabled ?? false
   // A link to History, where history is off, shows the jobs
   const shownTab = tab === 'history' && !historyEnabled ? 'jobs' : tab
-  const showScheduleAssistant = scheduler?.showScheduleAssistant ?? false
   const secretReferences = scheduler?.secretReferences ?? false
 
   const changeTab = (next: Tab) => {
@@ -251,7 +250,6 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
           jobType={jobTypes.find(t => t.typeName === selected?.jobType)}
           canManage={canManage}
           historyEnabled={historyEnabled}
-          showScheduleAssistant={showScheduleAssistant}
           secretReferences={secretReferences}
           actions={actions}
           onClose={() => setSelection(null)}
@@ -261,7 +259,6 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
           open={creating}
           onOpenChange={setCreating}
           jobTypes={jobTypes}
-          showScheduleAssistant={showScheduleAssistant}
           secretReferences={secretReferences}
           onCreate={actions.create}
         />

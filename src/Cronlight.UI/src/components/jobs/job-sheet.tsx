@@ -79,7 +79,6 @@ interface Props {
   jobType: JobType | undefined
   canManage: boolean
   historyEnabled: boolean
-  showScheduleAssistant: boolean
   secretReferences: boolean
   actions: DashboardActions
   onClose: () => void
@@ -91,7 +90,6 @@ export function JobSheet({
   jobType,
   canManage,
   historyEnabled,
-  showScheduleAssistant,
   secretReferences,
   actions,
   onClose,
@@ -136,7 +134,6 @@ export function JobSheet({
               <EditJobForm
                 key={`${job.group}.${job.name}`}
                 job={job}
-                showScheduleAssistant={showScheduleAssistant}
                 secretReferences={secretReferences}
                 jobType={jobType}
                 onCancel={() => setMode('view')}
@@ -399,14 +396,12 @@ function JobDetails({
 function EditJobForm({
   job,
   jobType,
-  showScheduleAssistant,
   secretReferences,
   onSave,
   onCancel,
 }: {
   job: Job
   jobType: JobType | undefined
-  showScheduleAssistant: boolean
   secretReferences: boolean
   onSave: (request: UpdateJobRequest) => Promise<void>
   onCancel: () => void
@@ -466,7 +461,6 @@ function EditJobForm({
           <TriggersEditor
             triggers={triggers}
             onChange={setTriggers}
-            showScheduleAssistant={showScheduleAssistant}
             onInvalidChange={setCronInvalid}
           />
           {otherTriggers > 0 && (

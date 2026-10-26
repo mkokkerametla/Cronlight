@@ -62,8 +62,6 @@ builder.Configuration["JobSecrets:Demo:OrdersToken"] ??= "Bearer demo-token";
 
 builder.Services.AddCronlight(o =>
 {
-    // Off by default, since what users type goes to ChatGPT or Google; the demo shows it
-    o.ShowScheduleAssistant = true;
     // Secret parameters may name a secret from configuration instead of holding it, e.g.
     // authorization = secret:Demo:OrdersToken for the HTTP job calling /demo/orders
     o.SecretsSection = "JobSecrets";
