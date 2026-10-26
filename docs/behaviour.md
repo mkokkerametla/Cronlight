@@ -27,6 +27,17 @@ headers and cross-site requests.
   details, for scripts and small schedulers.
 - **Polling** happens every 10 seconds (`RefreshSeconds`) only while the dashboard is visible: a tab in the background asks
   nothing, and refreshes as soon as it is shown again. The 24-hour failure count is refreshed once a minute.
+- **The address keeps the view.** The tab, the job list's search, filters and page, the History filter and the open
+  job are in the page's URL (`?tab=history&outcome=Failed`, `?group=billing&job=nightly`), so a link opens the same
+  view and Back returns to the one before. Choosing another scheduler starts its dashboard afresh.
+- **Keyboard:** `/` moves to the search box, `j` and `k` move through the jobs on the page, Enter opens the one
+  marked, and Esc closes a panel. Keys typed into a field are text, not shortcuts.
+- **Schedules in words.** Cron schedules read as text ("At 09:00, Monday through Friday") in the job list, the job
+  panel and the editor's preview. Quartz numbers the days of the week from Sunday as 1.
+- **Undo** follows pausing or resuming a job, in the toast that confirms it. A job Quartz stopped (in Error) has no
+  undo for Resume, since pausing it would not stop it again.
+- **Layout:** the Layout menu in the header uses the window's full width and makes table rows compact. Both are
+  remembered in the browser, as the theme is.
 - **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.

@@ -320,6 +320,11 @@ describe('JobSheet', () => {
     expect(next).toEqual(['Paused', 'Due now'])
   })
 
+  it("describes a cron trigger's schedule in words", () => {
+    renderSheet(job({ triggers: [trigger({ cronExpression: '0 0 9 ? * MON-FRI' })] }))
+    expect(sheet().getByText('At 09:00, Monday through Friday')).toBeInTheDocument()
+  })
+
   it('names the close button for screen readers', () => {
     renderSheet(job())
     expect(sheet().getByRole('button', { name: 'Close' })).toBeInTheDocument()

@@ -16,17 +16,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { LayoutMenu } from '@/components/layout-menu'
 import { ThemeToggle } from '@/components/theme-toggle'
+import type { Layout } from '@/hooks/use-layout'
 import { formatDateTime } from '@/lib/format'
 import type { SchedulerInfo } from '@/types'
 
 export function Header({
   scheduler,
   onSchedulerChange,
+  layout,
+  onLayoutChange,
 }: {
   scheduler: SchedulerInfo | null
   /** Shows another scheduler; offered when the app serves more than one */
   onSchedulerChange?: (name: string) => void
+  /** The page's width and row density, offered in a menu when given */
+  layout?: Layout
+  onLayoutChange?: (change: Partial<Layout>) => void
 }) {
   const state = !scheduler
     ? null
@@ -73,6 +80,7 @@ export function Header({
         )}
         {scheduler && !scheduler.canManage && <Badge variant="outline">Read-only</Badge>}
         {scheduler && <SystemInfo scheduler={scheduler} />}
+        {layout && onLayoutChange && <LayoutMenu layout={layout} onChange={onLayoutChange} />}
         <ThemeToggle />
       </div>
     </header>

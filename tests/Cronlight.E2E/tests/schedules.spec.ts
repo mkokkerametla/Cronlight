@@ -50,8 +50,10 @@ test('removing every trigger keeps the job, which then runs only by hand', async
   await expect(details.getByText('No triggers. This job only runs when triggered manually.')).toBeVisible()
   await expect(details.locator('dt', { hasText: 'Durable' }).locator('xpath=following-sibling::dd[1]')).toHaveText('Yes')
 
-  // Still there after a reload, so it was kept on the server and not just in the page
+  // Still there after a reload, so it was kept on the server and not just in the page. The address keeps the job open.
   await page.reload()
+  await expect(page.getByRole('dialog', { name })).toContainText('No triggers.')
+  await page.keyboard.press('Escape')
   await expect(jobRow(page, name)).toBeVisible()
   await expect(jobRow(page, name)).toContainText('-')
 })

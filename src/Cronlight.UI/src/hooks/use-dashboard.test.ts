@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { useDashboard } from '@/hooks/use-dashboard'
-import { job, jobPage, scheduler } from '@/test/fixtures'
+import { job, jobPage, scheduler, trigger } from '@/test/fixtures'
 import type { HistorySummary, Job } from '@/types'
 
 vi.mock('@/api', async importOriginal => ({
@@ -67,6 +67,27 @@ describe('useDashboard', () => {
     expect(result.current.summary).toEqual(summary)
     expect(result.current.error).toBeNull()
     expect(calls()).toContain('job-types')
+  })
+
+  it('shows the history summary on first load, even when a second refresh overtakes the first', async () => {
+    const answer = mockApi.getMockImplementation()!
+    const held: Array<() => void> = []
+    mockApi.mockImplementation(async (path, options) => {
+      if (path.startsWith('jobs/search?')) await new Promise<void>(resolve => held.push(resolve))
+      return answer(path, options)
+    })
+    const { result } = renderHook(() => useDashboard())
+    await waitFor(() => expect(held).toHaveLength(1))
+
+    // The tab comes to the front while the first load is under way, which refreshes again
+    act(() => setHidden(false))
+    await waitFor(() => expect(held).toHaveLength(2))
+    // The first load finishes first, and is set aside for the newer one
+    await act(async () => held[0]())
+    await act(async () => held[1]())
+
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.summary).toEqual(summary)
   })
 
   it('does not ask for a summary when history is off', async () => {
@@ -178,8 +199,40 @@ describe('useDashboard', () => {
 
     expect(ok).toBe(true)
     expect(mockApi).toHaveBeenCalledWith('jobs/a%2Fb/x%20y/pause', { method: 'POST' })
-    expect(toast.success).toHaveBeenCalledWith('x y: paused')
+    expect(toast.success).toHaveBeenCalledWith(
+      'x y: paused',
+      expect.objectContaining({ action: expect.objectContaining({ label: 'Undo' }) })
+    )
     expect(jobLoads()).toBe(1)
+  })
+
+  it('offers to undo a pause, which resumes the job without offering another undo', async () => {
+    const { result } = renderHook(() => useDashboard())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    mockApi.mockClear()
+
+    await act(() => result.current.actions.run(job(), 'pause'))
+    const [, options] = vi.mocked(toast.success).mock.calls.at(-1)!
+    const undo = (options as unknown as { action: { onClick: () => void } }).action
+    await act(async () => undo.onClick())
+
+    await waitFor(() =>
+      expect(mockApi).toHaveBeenCalledWith('jobs/DEFAULT/nightly/resume', { method: 'POST' })
+    )
+    await waitFor(() =>
+      expect(vi.mocked(toast.success).mock.calls.at(-1)).toEqual(['nightly: resumed'])
+    )
+  })
+
+  it('offers no undo for resuming a job Quartz stopped, since pausing would not stop it again', async () => {
+    const { result } = renderHook(() => useDashboard())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    await act(() =>
+      result.current.actions.run(job({ triggers: [trigger({ state: 'Error' })] }), 'resume')
+    )
+
+    expect(vi.mocked(toast.success).mock.calls.at(-1)).toEqual(['nightly: resumed'])
   })
 
   it('looks again a second after triggering a job, once the scheduler has picked it up', async () => {
