@@ -127,6 +127,10 @@ public class CronlightAlertOptions
 /// <summary>A finished run, or a misfire, handed from the job thread to the alert worker.</summary>
 /// <param name="Clustered">The scheduler is clustered, so its other nodes run the job too.</param>
 /// <param name="Misfired">Not a run but a missed fire time, which leaves the failure streak alone.</param>
+/// <param name="Stopped">
+/// Quartz could not create the job and has stopped it until someone resumes it, so its streak cannot grow: alerted at
+/// once, whatever the threshold.
+/// </param>
 internal sealed record AlertRun(
     string SchedulerName,
     string InstanceName,
@@ -136,7 +140,8 @@ internal sealed record AlertRun(
     bool Succeeded,
     string? Error,
     bool Clustered = false,
-    bool Misfired = false
+    bool Misfired = false,
+    bool Stopped = false
 )
 {
     /// <summary>Jobs in different schedulers may share a key, so streaks are kept per scheduler.</summary>
@@ -163,7 +168,8 @@ internal sealed class AlertQueue(ILogger<AlertQueue> logger)
 }
 
 /// <summary>Hands each finished run to the alert worker, so the job thread never waits on a webhook.</summary>
-internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOptions> options, IServiceProvider services) : IJobListener
+internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOptions> options, IServiceProvider services)
+    : IJobListener, IJobNotCreatedHandler
 {
     // Registered by AddCronlight; without it, nothing is retried
     private readonly RetryPlanner? retries = services.GetService<RetryPlanner>();
@@ -196,6 +202,15 @@ internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOpt
     }
 
     public Task JobToBeExecuted(IJobExecutionContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>A job Quartz could not create counts as a failure, and one Quartz has stopped is alerted at once.</summary>
+    public void JobNotCreated(JobNotCreated failure)
+    {
+        if (options.Value.Jobs?.Invoke(failure.Job) == false)
+            return;
+        queue.Enqueue(new AlertRun(failure.SchedulerName, failure.InstanceName, failure.Job, failure.JobType, failure.Id,
+            Succeeded: false, failure.Error, clustered.ContainsKey(failure.SchedulerName), Stopped: failure.Stopped));
+    }
 
     private void Enqueue(IJobExecutionContext context, bool succeeded, string? error)
     {
@@ -257,8 +272,9 @@ internal sealed class AlertWorker(
 
     // Failures in a row per job, as this node saw them; exact unless runs of a job spread over several nodes
     private readonly Dictionary<(string, JobKey), int> streaks = new();
-    // Jobs this node sent a Failing alert for, until they recover: history written behind the runs cannot repeat an alert
-    private readonly HashSet<(string, JobKey)> alerted = new();
+    // Jobs this node sent a Failing alert for, with the failures it reported, until they recover: history written behind
+    // the runs cannot repeat an alert
+    private readonly Dictionary<(string, JobKey), int> alerted = new();
     // Misfires alerted lately, oldest first: a database store reports a misfire again when its handling rolls back
     private readonly HashSet<(string, string)> misfiresAlerted = new();
     private readonly Queue<(string, string)> misfireOrder = new();
@@ -344,15 +360,18 @@ internal sealed class AlertWorker(
 
         if (!run.Succeeded)
         {
-            // Exactly at the threshold: in a cluster, only the node whose run crossed it sends the alert
-            if (before + 1 != threshold || !alerted.Add(run.StreakKey))
+            // Exactly at the threshold: in a cluster, only the node whose run crossed it sends the alert. A job Quartz has
+            // stopped cannot fail again, so it is alerted below the threshold too.
+            var failures = before + 1;
+            var crossed = failures == threshold || run.Stopped && failures < threshold;
+            if (!crossed || !alerted.TryAdd(run.StreakKey, failures))
                 return null;
-            return Alert(run, CronlightAlertKind.Failing, threshold, Truncate(run.Error));
+            return Alert(run, CronlightAlertKind.Failing, failures, Truncate(run.Error));
         }
 
-        var wasAlerted = alerted.Remove(run.StreakKey);
+        var wasAlerted = alerted.Remove(run.StreakKey, out var reported);
         if ((before >= threshold || wasAlerted) && options.Value.NotifyOnRecovery)
-            return Alert(run, CronlightAlertKind.Recovered, Math.Max(before, threshold), null);
+            return Alert(run, CronlightAlertKind.Recovered, Math.Max(before, wasAlerted ? reported : threshold), null);
         return null;
     }
 

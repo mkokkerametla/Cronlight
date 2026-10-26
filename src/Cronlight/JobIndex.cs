@@ -7,12 +7,16 @@ using Quartz.Impl.Matchers;
 namespace Cronlight;
 
 /// <summary>What the job list filters, counts and sorts on, for one job.</summary>
-internal sealed record JobIndexEntry(string Group, string Name, bool Loadable, string TypeLabel, bool Paused)
+/// <param name="Error">
+/// A trigger of the job is in Quartz's Error state: Quartz could not create the job to run it, and the job does not run
+/// again until it is resumed.
+/// </param>
+internal sealed record JobIndexEntry(string Group, string Name, bool Loadable, string TypeLabel, bool Paused, bool Error = false)
 {
     public const string UnloadableLabel = "Unloadable";
 
     /// <summary>The same rule as the dashboard's status badge.</summary>
-    public string Status => !Loadable ? "Unloadable" : Paused ? "Paused" : "Active";
+    public string Status => !Loadable ? "Unloadable" : Error ? "Error" : Paused ? "Paused" : "Active";
 
     public JobKey Key => new(Name, Group);
 }
@@ -53,8 +57,10 @@ internal sealed class JobIndexReader(QuartzDataSource hostDataSource, CronlightS
         var prefix = dataSource.TablePrefix;
         await using var connection = await dataSource.OpenConnection(cancellationToken);
 
-        // Paused per job: it has triggers and every one is paused (PAUSED_BLOCKED is paused while its job runs)
+        // Paused per job: it has triggers and every one is paused (PAUSED_BLOCKED is paused while its job runs).
+        // In error: any one is in Quartz's Error state.
         var paused = new Dictionary<(string, string), bool>();
+        var errors = new HashSet<(string, string)>();
         await using (var command = connection.CreateCommand())
         {
             command.CommandText =
@@ -66,6 +72,8 @@ internal sealed class JobIndexReader(QuartzDataSource hostDataSource, CronlightS
                 var key = (reader.GetString(0), reader.GetString(1));
                 var state = reader.GetString(2);
                 paused[key] = paused.GetValueOrDefault(key, true) && state is "PAUSED" or "PAUSED_BLOCKED";
+                if (state == "ERROR")
+                    errors.Add(key);
             }
         }
 
@@ -80,7 +88,7 @@ internal sealed class JobIndexReader(QuartzDataSource hostDataSource, CronlightS
             {
                 var key = (reader.GetString(0), reader.GetString(1));
                 var type = types.GetOrAdd(reader.GetString(2), name => Type.GetType(name, throwOnError: false));
-                result.Add(Entry(key.Item1, key.Item2, type, paused.GetValueOrDefault(key)));
+                result.Add(Entry(key.Item1, key.Item2, type, paused.GetValueOrDefault(key), errors.Contains(key)));
             }
         }
         return result;
@@ -106,16 +114,21 @@ internal sealed class JobIndexReader(QuartzDataSource hostDataSource, CronlightS
 
             var triggers = await scheduler.GetTriggersOfJob(key, cancellationToken);
             var paused = triggers.Count > 0;
+            var error = false;
             foreach (var trigger in triggers)
-                paused &= await scheduler.GetTriggerState(trigger.Key, cancellationToken) == TriggerState.Paused;
-            result.Add(Entry(key.Group, key.Name, type, paused));
+            {
+                var state = await scheduler.GetTriggerState(trigger.Key, cancellationToken);
+                paused &= state == TriggerState.Paused;
+                error |= state == TriggerState.Error;
+            }
+            result.Add(Entry(key.Group, key.Name, type, paused, error));
         }
         return result;
     }
 
     // Labels match the dashboard's type column: the [CronlightJob] name, else the class name
-    private JobIndexEntry Entry(string group, string name, Type? type, bool paused) =>
+    private JobIndexEntry Entry(string group, string name, Type? type, bool paused, bool error) =>
         new(group, name, type != null,
             type == null ? JobIndexEntry.UnloadableLabel : catalog.Describe(type)?.DisplayName ?? type.FullName!.Split('.')[^1],
-            paused);
+            paused, error);
 }

@@ -15,7 +15,7 @@ internal sealed class AdoJobHistoryStore(
     SqlDialect dialect,
     string tableName,
     bool createTable,
-    ILogger<AdoJobHistoryStore> logger) : IJobHistoryStore
+    ILogger<AdoJobHistoryStore> logger) : IJobHistoryStore, IUnfinishedRuns
 {
     private const string BaseColumns =
         "SCHED_NAME, ENTRY_ID, INSTANCE_NAME, JOB_NAME, JOB_GROUP, JOB_TYPE, TRIGGER_NAME, TRIGGER_GROUP, " +
@@ -123,6 +123,25 @@ internal sealed class AdoJobHistoryStore(
             await Insert(connection, record, cancellationToken);
     }
 
+    public async Task<bool> FinishIfRunning(JobExecutionRecord record, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnection(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            $"UPDATE {tableName} SET FINISHED_TIME = {P("finished")}, DURATION_MS = {P("duration")}, STATUS = {P("status")}, " +
+            $"ERROR = {P("error")} WHERE SCHED_NAME = {P("sched")} AND ENTRY_ID = {P("entry")} AND REFIRE_COUNT = {P("refire")} " +
+            $"AND STATUS = {P("running")}";
+        Add(command, "finished", record.FinishedTimeUtc?.UtcTicks);
+        Add(command, "duration", record.DurationMs);
+        Add(command, "status", record.Status.ToString());
+        Add(command, "error", record.Error);
+        Add(command, "sched", record.SchedulerName);
+        Add(command, "entry", record.FireInstanceId);
+        Add(command, "refire", record.RefireCount);
+        Add(command, "running", nameof(JobExecutionStatus.Running));
+        return await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+    }
+
     public async Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
     {
         if (NotReadyYet)
@@ -215,23 +234,17 @@ internal sealed class AdoJobHistoryStore(
 
     /// <summary>
     /// Columns added after the first release. With CreateTable off a missing column is reported, and history is
-    /// written without it.
+    /// written without it, as it is when adding the column fails (the app may not change the table).
     /// </summary>
     private async Task AddMissingColumns(DbConnection connection, CancellationToken cancellationToken)
     {
         var present = new List<string>();
         foreach (var (column, purpose) in AddedColumns)
         {
-            try
+            if (await HasColumn(connection, column, cancellationToken))
             {
-                await using var probe = connection.CreateCommand();
-                probe.CommandText = $"SELECT {column} FROM {tableName} WHERE 1 = 0";
-                await probe.ExecuteScalarAsync(cancellationToken);
                 present.Add(column);
                 continue;
-            }
-            catch (DbException)
-            {
             }
 
             var statement = $"ALTER TABLE {tableName} ADD {column} {ColumnType(column)} NULL";
@@ -242,12 +255,39 @@ internal sealed class AdoJobHistoryStore(
                 continue;
             }
             logger.LogInformation("Adding column {Column} to history table {Table}", column, tableName);
-            await using var command = connection.CreateCommand();
-            command.CommandText = statement;
-            await command.ExecuteNonQueryAsync(cancellationToken);
-            present.Add(column);
+            try
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = statement;
+                await command.ExecuteNonQueryAsync(cancellationToken);
+                present.Add(column);
+            }
+            // Another node starting at the same time may have added it; otherwise history carries on without it
+            catch (DbException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                if (await HasColumn(connection, column, cancellationToken))
+                    present.Add(column);
+                else
+                    logger.LogWarning(ex, "Could not add column {Column} to history table {Table}, so {Purpose}. Add it with: {Statement}",
+                        column, tableName, purpose, statement);
+            }
         }
         addedColumns = present.ToArray();
+    }
+
+    private async Task<bool> HasColumn(DbConnection connection, string column, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var probe = connection.CreateCommand();
+            probe.CommandText = $"SELECT {column} FROM {tableName} WHERE 1 = 0";
+            await probe.ExecuteScalarAsync(cancellationToken);
+            return true;
+        }
+        catch (DbException)
+        {
+            return false;
+        }
     }
 
     private string ColumnType(string column) => (column, dialect) switch
@@ -278,27 +318,54 @@ internal sealed class AdoJobHistoryStore(
                 continue;
             }
             logger.LogInformation("Adding index {Index} to history table {Table}", index, tableName);
-            await using var command = connection.CreateCommand();
-            command.CommandText = statement;
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            try
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = statement;
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+            // As for columns: another node may have added it, or the app may not change the table, or a large table takes
+            // longer than the command timeout. History works without the index.
+            catch (DbException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                if (!await IndexExists(connection, index, cancellationToken))
+                    logger.LogWarning(ex, "Could not add index {Index} to history table {Table}, so filtering runs by outcome is slow on large tables. Add it with: {Statement}",
+                        index, tableName, statement);
+            }
         }
     }
 
+    /// <summary>
+    /// Whether this table has the index, looked up in the table's own schema or database when its name gives one, and
+    /// in the connection's otherwise: a table of the same name elsewhere must not count.
+    /// </summary>
     private async Task<bool> IndexExists(DbConnection connection, string index, CancellationToken cancellationToken)
     {
         var dot = tableName.LastIndexOf('.');
         var table = tableName[(dot + 1)..];
+        var schema = dot < 0 ? null : tableName[..dot];
+        // SQL Server: a database.schema.table name keeps its indexes in that database's catalog
+        var parts = tableName.Split('.');
+        var catalog = parts.Length == 3 ? $"{parts[0]}." : "";
         await using var command = connection.CreateCommand();
         command.CommandText = dialect switch
         {
-            _ when dialect == SqlDialect.SqlServer => $"SELECT COUNT(*) FROM sys.indexes WHERE name = {P("index")} AND object_id = OBJECT_ID({P("table")})",
-            // Unquoted names are stored in lower case
-            _ when dialect == SqlDialect.PostgreSql => $"SELECT COUNT(*) FROM pg_indexes WHERE indexname = lower({P("index")}) AND tablename = lower({P("table")})",
-            _ when dialect == SqlDialect.MySql => $"SELECT COUNT(*) FROM information_schema.STATISTICS WHERE INDEX_NAME = {P("index")} AND TABLE_NAME = {P("table")} AND TABLE_SCHEMA = DATABASE()",
+            _ when dialect == SqlDialect.SqlServer =>
+                $"SELECT COUNT(*) FROM {catalog}sys.indexes WHERE name = {P("index")} AND object_id = OBJECT_ID({P("table")})",
+            // The table the name finds, through the search path when it names no schema. Unquoted names are stored in lower
+            // case, and cut to 63 characters.
+            _ when dialect == SqlDialect.PostgreSql =>
+                "SELECT COUNT(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid " +
+                $"WHERE i.indrelid = to_regclass({P("table")}) AND c.relname = left(lower({P("index")}), 63)",
+            _ when dialect == SqlDialect.MySql =>
+                $"SELECT COUNT(*) FROM information_schema.STATISTICS WHERE INDEX_NAME = {P("index")} AND TABLE_NAME = {P("table")} " +
+                $"AND TABLE_SCHEMA = {(schema == null ? "DATABASE()" : P("schema"))}",
             _ => $"SELECT COUNT(*) FROM {tableName[..(dot + 1)]}sqlite_master WHERE type = 'index' AND name = {P("index")}",
         };
         Add(command, "index", index);
-        Add(command, "table", dialect == SqlDialect.SqlServer ? tableName : table);
+        Add(command, "table", dialect == SqlDialect.SqlServer || dialect == SqlDialect.PostgreSql ? tableName : table);
+        if (schema != null && dialect == SqlDialect.MySql)
+            Add(command, "schema", schema);
         return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)) > 0;
     }
 

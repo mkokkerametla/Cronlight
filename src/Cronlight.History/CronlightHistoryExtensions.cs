@@ -25,11 +25,14 @@ public static class CronlightHistoryExtensions
             services.Configure(configure);
 
         services.TryAddSingleton<QuartzDataSource>();
+        // Says which runs are going on, so runs left unfinished by a node that stopped can be told apart
+        services.TryAddSingleton<RunningJobsReader>();
         services.TryAddSingleton<JobHistoryQueue>();
         services.TryAddSingleton<MisfireLinks>();
         services.TryAddSingleton<JobHistoryListener>();
         services.TryAddSingleton<IJobHistoryStore>(CreateStore);
         services.AddSchedulerAttachment<JobHistoryAttachment>();
+        services.AddJobNotCreatedHandler<JobHistoryListener>();
         // Ignores everything logged outside a run, so it costs a check per log call
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, RunLogProvider>());
         services.TryAddSingleton<RunLogMasks>();

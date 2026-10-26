@@ -1,15 +1,17 @@
 import type { LucideIcon } from 'lucide-react'
-import { Activity, CircleX, Layers, Lock, PauseCircle } from 'lucide-react'
+import { Activity, CircleX, Layers, Lock, OctagonAlert, PauseCircle } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
-export type StatKey = 'all' | 'running' | 'Paused' | 'Unloadable' | 'failed'
+export type StatKey = 'all' | 'running' | 'Paused' | 'Unloadable' | 'Error' | 'failed'
 
 interface StatsProps {
   total: number
   running: number
   paused: number
   unloadable: number
+  /** Jobs Quartz stopped, which do not run until resumed; their card shows only when there are some. */
+  error: number
   /** Failed executions in the last 24 hours; null when history is not enabled. */
   failed: number | null
   active: StatKey | null
@@ -21,6 +23,7 @@ export function Stats({
   running,
   paused,
   unloadable,
+  error,
   failed,
   active,
   onSelect,
@@ -59,13 +62,24 @@ export function Stats({
       icon: Lock,
       tone: unloadable ? 'text-destructive' : undefined,
     },
+    ...(error > 0
+      ? [
+          {
+            key: 'Error' as const,
+            label: 'Error',
+            value: error,
+            icon: OctagonAlert,
+            tone: 'text-destructive',
+          },
+        ]
+      : []),
   ]
 
   return (
     <div
       className={cn(
         'grid grid-cols-2 gap-3',
-        cards.length === 5 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'
+        { 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' }[cards.length]
       )}
     >
       {cards.map(({ key, label, value, icon: Icon, tone }) => (

@@ -78,6 +78,18 @@ describe('job status helpers', () => {
     expect(jobStatus(job())).toBe('Active')
   })
 
+  it('reports a job with a trigger Quartz stopped as Error, after unloadable and before paused', () => {
+    expect(jobStatus(job({ triggers: [trigger({ state: 'Error' })] }))).toBe('Error')
+    expect(
+      jobStatus(
+        job({ triggers: [trigger({ state: 'Paused' }), trigger({ name: 't2', state: 'Error' })] })
+      )
+    ).toBe('Error')
+    expect(jobStatus(job({ loadable: false, triggers: [trigger({ state: 'Error' })] }))).toBe(
+      'Unloadable'
+    )
+  })
+
   it('labels a job by display name, then short type name', () => {
     expect(typeLabel(job({ displayName: 'Nightly report' }))).toBe('Nightly report')
     expect(typeLabel(job())).toBe('NightlyJob')

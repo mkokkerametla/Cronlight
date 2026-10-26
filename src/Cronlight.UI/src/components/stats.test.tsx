@@ -11,6 +11,7 @@ const renderStats = (overrides: Partial<Parameters<typeof Stats>[0]> = {}) => {
       running={2}
       paused={3}
       unloadable={1}
+      error={0}
       failed={4}
       active="all"
       onSelect={onSelect}
@@ -48,6 +49,14 @@ describe('Stats', () => {
 
     expect(card('Paused')).toHaveAttribute('aria-pressed', 'true')
     expect(card('Total jobs')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('shows jobs Quartz stopped only when there are some', async () => {
+    const onSelect = renderStats({ error: 2 })
+
+    expect(card('Error')).toHaveTextContent('2')
+    await userEvent.click(card('Error'))
+    expect(onSelect).toHaveBeenCalledWith('Error')
   })
 
   it('leaves out failed runs when history is off', () => {

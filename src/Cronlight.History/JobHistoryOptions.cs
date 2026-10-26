@@ -32,6 +32,13 @@ public class JobHistoryOptions
 
     public TimeSpan CleanupInterval { get; set; } = TimeSpan.FromHours(1);
 
+    /// <summary>
+    /// How often to look for runs still recorded as Running that no node is running any more, because the node running
+    /// them stopped or crashed first, and record them as failed. Only for schedulers whose database Cronlight reads,
+    /// which says what every node is running. Runs that started in the last 5 minutes are left alone. Zero turns it off.
+    /// </summary>
+    public TimeSpan UnfinishedRunCheckInterval { get; set; } = TimeSpan.FromMinutes(5);
+
     /// <summary>Records kept per node by the in-memory store.</summary>
     public int InMemoryCapacity { get; set; } = 5000;
 

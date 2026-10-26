@@ -16,7 +16,14 @@ public record RunningJobDto(
     long RunningForMs
 );
 
-public record RunningJobsDto(string Source, IReadOnlyList<RunningJobDto> Jobs);
+/// <param name="Source">
+/// cluster when read from the Quartz tables, which list every node's runs; local when only this node's are known.
+/// </param>
+public record RunningJobsDto(string Source, IReadOnlyList<RunningJobDto> Jobs)
+{
+    public const string Cluster = "cluster";
+    public const string Local = "local";
+}
 
 /// <summary>
 /// IScheduler.GetCurrentlyExecutingJobs only sees this node. For ADO stores the dashboard reads
@@ -33,7 +40,7 @@ internal sealed class RunningJobsReader(QuartzDataSource hostDataSource, Cronlig
         {
             try
             {
-                return new RunningJobsDto("cluster", await ReadFiredTriggers(dataSource, meta.SchedulerName, cancellationToken));
+                return new RunningJobsDto(RunningJobsDto.Cluster, await ReadFiredTriggers(dataSource, meta.SchedulerName, cancellationToken));
             }
             catch (Exception ex) when (ex is DbException or SchedulerException or InvalidOperationException)
             {
@@ -42,7 +49,7 @@ internal sealed class RunningJobsReader(QuartzDataSource hostDataSource, Cronlig
         }
 
         var local = await scheduler.GetCurrentlyExecutingJobs(cancellationToken);
-        return new RunningJobsDto("local", local.Select(c => new RunningJobDto(
+        return new RunningJobsDto(RunningJobsDto.Local, local.Select(c => new RunningJobDto(
             c.JobDetail.Key.Name,
             c.JobDetail.Key.Group,
             c.JobDetail.JobType.FullName,

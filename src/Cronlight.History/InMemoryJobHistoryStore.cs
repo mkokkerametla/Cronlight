@@ -4,7 +4,7 @@ namespace Cronlight.History;
 /// Keeps the most recent executions of this node in memory. Used with the RAM job store, or when the
 /// host's database is not one the ADO store supports.
 /// </summary>
-internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore
+internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore, IUnfinishedRuns
 {
     private readonly LinkedList<JobExecutionRecord> records = new(); // newest first
     private readonly object gate = new();
@@ -35,6 +35,24 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore
                 node.Value = record with { Id = node.Value.Id };
         }
         return Task.CompletedTask;
+    }
+
+    public Task<bool> FinishIfRunning(JobExecutionRecord record, CancellationToken cancellationToken)
+    {
+        lock (gate)
+        {
+            for (var node = records.First; node != null; node = node.Next)
+            {
+                if (node.Value.FireInstanceId != record.FireInstanceId || node.Value.RefireCount != record.RefireCount
+                    || node.Value.SchedulerName != record.SchedulerName)
+                    continue;
+                if (node.Value.Status != JobExecutionStatus.Running)
+                    return Task.FromResult(false);
+                node.Value = record with { Id = node.Value.Id };
+                return Task.FromResult(true);
+            }
+        }
+        return Task.FromResult(false);
     }
 
     public Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)

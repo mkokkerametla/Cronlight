@@ -29,7 +29,7 @@ public static class CronlightExtensions
 
         services.AddSingleton<JobTypeCatalog>();
         services.TryAddSingleton<QuartzDataSource>();
-        services.AddSingleton<RunningJobsReader>();
+        services.TryAddSingleton<RunningJobsReader>();
         services.AddSingleton<JobIndexReader>();
         services.TryAddSingleton<SecretReferenceListener>();
         services.TryAddSingleton<RetryPlanner>();
@@ -40,6 +40,7 @@ public static class CronlightExtensions
         services.AddMetrics();
         services.TryAddSingleton<MetricsListener>();
         services.AddSchedulerAttachment<MetricsAttachment>();
+        services.AddJobNotCreatedHandler<MetricsListener>();
         return services;
     }
 
@@ -63,6 +64,7 @@ public static class CronlightExtensions
         services.TryAddSingleton<AlertQueue>();
         services.TryAddSingleton<AlertListener>();
         services.AddSchedulerAttachment<AlertAttachment>();
+        services.AddJobNotCreatedHandler<AlertListener>();
         // First in the collection: alerts are sent until Quartz has finished its last job
         if (!services.Any(d => d.ImplementationType == typeof(AlertWorker)))
             services.Insert(0, ServiceDescriptor.Singleton<IHostedService, AlertWorker>());

@@ -243,7 +243,7 @@ internal static class HistoryScenarios
     /// <summary>History is written in the background, so poll until it shows what the test expects.</summary>
     // The writer creates the history table in the background after startup, and this test uses the store
     // directly. Reads return nothing until then, so probe with a write (under another scheduler name) instead.
-    private static async Task WaitForStore(IJobHistoryStore store)
+    internal static async Task WaitForStore(IJobHistoryStore store)
     {
         var probe = Record("cronlight-test-probe", "probe", DateTimeOffset.UtcNow);
         var deadline = DateTime.UtcNow.AddSeconds(15);
@@ -289,6 +289,79 @@ public class HistoryTests
     {
         await using var host = await TestHost.Start(history: Database);
         await HistoryScenarios.AddsTheOutcomeIndexToAnOlderTable(host);
+    }
+
+    [Fact]
+    public async Task A_run_still_going_when_the_app_stops_is_not_left_running()
+    {
+        var host = await TestHost.Start(history: Database);
+        var client = host.Client();
+        var gate = BlockingJob.Gate(host.SchedulerName);
+        await HistoryScenarios.Create(client, typeof(BlockingJob), "block", new { gate = host.SchedulerName });
+        await client.PostAsync("api/jobs/DEFAULT/block/trigger", null);
+        try
+        {
+            Assert.True(await gate.Started.WaitAsync(TimeSpan.FromSeconds(15)));
+            await HistoryScenarios.WaitForHistory(client, "?name=block", r => r.Count == 1);
+            // As Quartz does by default, the app stops without waiting for the job
+            await host.DisposeAsync();
+        }
+        finally
+        {
+            gate.Release.Release();
+        }
+
+        var where = $"FROM QRTZ_CRONLIGHT_HISTORY WHERE SCHED_NAME = '{host.SchedulerName}' AND JOB_NAME = 'block'";
+        Assert.Equal("Failed", await host.Database.Scalar($"SELECT STATUS {where}"));
+        Assert.Equal("Did not finish: the app stopped while it was running.", await host.Database.Scalar($"SELECT ERROR {where}"));
+    }
+
+    [Fact]
+    public async Task Runs_that_no_node_is_running_any_more_are_closed_as_failed()
+    {
+        await using var host = await TestHost.Start(history: o =>
+        {
+            o.Storage = JobHistoryStorage.Database;
+            o.UnfinishedRunCheckInterval = TimeSpan.FromMilliseconds(200);
+        });
+        var client = host.Client();
+        var store = host.Services.GetRequiredService<IJobHistoryStore>();
+        await HistoryScenarios.WaitForStore(store);
+        var gate = BlockingJob.Gate(host.SchedulerName);
+        await HistoryScenarios.Create(client, typeof(BlockingJob), "block", new { gate = host.SchedulerName });
+        await client.PostAsync("api/jobs/DEFAULT/block/trigger", null);
+        try
+        {
+            Assert.True(await gate.Started.WaitAsync(TimeSpan.FromSeconds(15)));
+            var running = (await client.GetFromJsonAsync<JsonElement>("api/running")).GetProperty("jobs")[0];
+            var hourAgo = DateTimeOffset.UtcNow.AddHours(-1);
+            JobExecutionRecord Started(string job, string fireInstanceId, int refireCount) => new()
+            {
+                SchedulerName = host.SchedulerName,
+                FireInstanceId = fireInstanceId,
+                RefireCount = refireCount,
+                InstanceName = "crashed-node",
+                JobName = job,
+                JobGroup = "DEFAULT",
+                FiredTimeUtc = hourAgo,
+                Status = JobExecutionStatus.Running
+            };
+            // Started an hour ago, but still running: Quartz lists its fire instance id as executing. Written first, so the
+            // check that closes the next one has seen this one too
+            await store.RecordStarted(Started("block", running.GetProperty("fireInstanceId").GetString()!, 7), CancellationToken.None);
+            // The node running this one crashed an hour ago, so Quartz has no record of it running
+            await store.RecordStarted(Started("lost", "lost-run", 0), CancellationToken.None);
+
+            var lost = await HistoryScenarios.WaitForHistory(client, "?name=lost", r => r[0].GetProperty("status").GetString() == "Failed");
+            Assert.Equal("No end was recorded, and no node is running it any more: the node that ran it (crashed-node) probably stopped or crashed.",
+                lost[0].GetProperty("error").GetString());
+            Assert.Contains(await HistoryScenarios.History(client, "?name=block"),
+                r => r.GetProperty("refireCount").GetInt32() == 7 && r.GetProperty("status").GetString() == "Running");
+        }
+        finally
+        {
+            gate.Release.Release();
+        }
     }
 
     [Fact]
@@ -417,6 +490,70 @@ public class HistoryTests
         var records = await HistoryScenarios.WaitForHistory(client, "", r => r[0].GetProperty("status").GetString() == "Succeeded");
         Assert.Equal("ok", Assert.Single(records).GetProperty("jobName").GetString());
         Assert.Equal(1, store.FailedStarts);
+    }
+
+    [Fact]
+    public async Task History_waits_while_its_table_is_unavailable_and_is_written_once_it_is_back()
+    {
+        await using var host = await TestHost.Start(history: Database);
+        var client = host.Client();
+        await HistoryScenarios.WaitForStore(host.Services.GetRequiredService<IJobHistoryStore>());
+        await HistoryScenarios.Create(client, typeof(PlainJob), "during");
+        var scheduler = await host.Scheduler();
+
+        // As if the database were down: the history table cannot be read or written
+        await host.Database.Execute("ALTER TABLE QRTZ_CRONLIGHT_HISTORY RENAME TO QRTZ_CRONLIGHT_HISTORY_AWAY");
+        try
+        {
+            await client.PostAsync("api/jobs/DEFAULT/during/trigger", null);
+            for (var deadline = DateTime.UtcNow.AddSeconds(15); (await scheduler.GetMetaData()).NumberOfJobsExecuted < 1;)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "The job did not run");
+                await Task.Delay(50);
+            }
+            // Long enough for the writer to try, and fail
+            await Task.Delay(TimeSpan.FromSeconds(1.5));
+        }
+        finally
+        {
+            await host.Database.Execute("ALTER TABLE QRTZ_CRONLIGHT_HISTORY_AWAY RENAME TO QRTZ_CRONLIGHT_HISTORY");
+        }
+
+        var records = await HistoryScenarios.WaitForHistory(client, "?name=during", r => r[0].GetProperty("status").GetString() == "Succeeded");
+        Assert.Single(records);
+    }
+
+    [Fact]
+    public async Task A_write_refused_once_just_after_an_outage_is_tried_again()
+    {
+        var store = new OutageStore();
+        await using var host = await TestHost.Start(history: _ => { }, services: s => s.AddSingleton<IJobHistoryStore>(store));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(PlainJob), "ok");
+
+        await client.PostAsync("api/jobs/DEFAULT/ok/trigger", null);
+        // Reads fail while the store is down, as the dashboard's would
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); store.Writes < 5 && DateTime.UtcNow < deadline;)
+            await Task.Delay(50);
+
+        var records = await HistoryScenarios.WaitForHistory(client, "", r => r[0].GetProperty("status").GetString() == "Succeeded");
+        Assert.Single(records);
+    }
+
+    [Fact]
+    public async Task A_record_the_store_keeps_refusing_does_not_hold_up_later_ones()
+    {
+        var store = new RefusingStore("poison");
+        await using var host = await TestHost.Start(history: _ => { }, services: s => s.AddSingleton<IJobHistoryStore>(store));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(PlainJob), "poison");
+        await HistoryScenarios.Create(client, typeof(PlainJob), "ok");
+
+        await client.PostAsync("api/jobs/DEFAULT/poison/trigger", null);
+        await client.PostAsync("api/jobs/DEFAULT/ok/trigger", null);
+
+        var records = await HistoryScenarios.WaitForHistory(client, "", r => r.Any(x => x.GetProperty("status").GetString() == "Succeeded"));
+        Assert.Equal("ok", Assert.Single(records).GetProperty("jobName").GetString());
     }
 
     [Fact]
@@ -663,6 +800,90 @@ public class DatabaseTests
         }
     }
 
+    // Restarting runs the upgrade checks again, which must find the table's own indexes wherever it is
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task A_history_table_in_another_schema_or_database_keeps_its_indexes_across_restarts(string name)
+    {
+        var database = Require(name);
+        var tableName = $"H_{Guid.NewGuid().ToString("N")[..8]}";
+        // Not where the connection points: another schema, or for SQL Server and MySQL another database
+        var (setup, table, dropIndex, countIndexes) = name switch
+        {
+            "PostgreSQL" => ("CREATE SCHEMA IF NOT EXISTS cronlight_other", $"cronlight_other.{tableName}",
+                $"DROP INDEX cronlight_other.IDX_{tableName}_STATUS",
+                $"SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'cronlight_other' AND tablename = '{tableName.ToLowerInvariant()}' AND indexname LIKE 'idx%'"),
+            "SQL Server" => ("IF DB_ID('cronlight_other') IS NULL CREATE DATABASE cronlight_other", $"cronlight_other.dbo.{tableName}",
+                $"DROP INDEX IDX_{tableName}_STATUS ON cronlight_other.dbo.{tableName}",
+                $"SELECT COUNT(*) FROM cronlight_other.sys.indexes WHERE object_id = OBJECT_ID('cronlight_other.dbo.{tableName}') AND name LIKE 'IDX%'"),
+            _ => ("CREATE DATABASE IF NOT EXISTS cronlight_other", $"cronlight_other.{tableName}",
+                $"DROP INDEX IDX_{tableName}_STATUS ON cronlight_other.{tableName}",
+                $"SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = 'cronlight_other' AND TABLE_NAME = '{tableName}' AND INDEX_NAME LIKE 'IDX%'"),
+        };
+        await database.Execute(setup);
+        // PostgreSQL: a table of the same name in the default schema, whose index must not be taken for this table's
+        if (name == "PostgreSQL")
+        {
+            await database.Execute($"CREATE TABLE {tableName} (ID INT, SCHED_NAME VARCHAR(10), STATUS VARCHAR(10))");
+            await database.Execute($"CREATE INDEX IDX_{tableName}_STATUS ON {tableName} (SCHED_NAME, STATUS, ID)");
+        }
+        try
+        {
+            await using var host = await TestHost.Start(database: database, history: o =>
+            {
+                o.Storage = JobHistoryStorage.Database;
+                o.TableName = table;
+            });
+            await HistoryScenarios.RecordsSuccessAndFailure(host);
+            var store = host.Services.GetRequiredService<IJobHistoryStore>();
+
+            // An index lost meanwhile is added back at the next start, and a start with every index in place leaves them alone
+            await database.Execute(dropIndex);
+            await store.Initialize(CancellationToken.None);
+            await store.Initialize(CancellationToken.None);
+            Assert.Equal(5, Convert.ToInt32(await database.Scalar(countIndexes)));
+        }
+        finally
+        {
+            await database.Execute($"DROP TABLE IF EXISTS {table}");
+            if (name == "PostgreSQL")
+                await database.Execute($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task An_upgrade_step_the_database_refuses_does_not_stop_history(string name)
+    {
+        var database = Require(name);
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var (older, view) = ($"HB_{id}", $"HV_{id}");
+        await using (var creator = await TestHost.Start(database: database, history: o =>
+        {
+            o.Storage = JobHistoryStorage.Database;
+            o.TableName = older;
+        }))
+            await HistoryScenarios.WaitForStore(creator.Services.GetRequiredService<IJobHistoryStore>());
+        // A table from a version before run logs, which the app cannot change: through a view it takes rows, but adding a
+        // column or an index fails, as it does for an app without ALTER rights or when another node got there first
+        await database.Execute($"ALTER TABLE {older} DROP COLUMN RUN_LOG");
+        await database.Execute($"CREATE VIEW {view} AS SELECT * FROM {older}");
+        try
+        {
+            await using var host = await TestHost.Start(database: database, history: o =>
+            {
+                o.Storage = JobHistoryStorage.Database;
+                o.TableName = view;
+            });
+            await HistoryScenarios.RecordsSuccessAndFailure(host);
+        }
+        finally
+        {
+            await database.Execute($"DROP VIEW IF EXISTS {view}");
+            await database.Execute($"DROP TABLE IF EXISTS {older}");
+        }
+    }
+
     [SkippableTheory]
     [MemberData(nameof(Databases))]
     public async Task Editing_triggers_never_deletes_a_job_registered_by_the_host(string name)
@@ -739,6 +960,101 @@ internal sealed class SlowStartingStore : IJobHistoryStore
 
     public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
         Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
+}
+
+/// <summary>
+/// Keeps records in a list. Its second and third writes (a run's end) find it down, reads failing too; the fourth, once
+/// it is back, is refused once (a deadlock, say); later ones work.
+/// </summary>
+internal sealed class OutageStore : IJobHistoryStore
+{
+    private readonly List<JobExecutionRecord> records = new();
+    private long nextId;
+    private int writes;
+    private volatile bool down;
+
+    public int Writes => writes;
+
+    public Task Initialize(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task RecordStarted(JobExecutionRecord record, CancellationToken cancellationToken) => Write(record);
+
+    public Task RecordFinished(JobExecutionRecord record, CancellationToken cancellationToken) => Write(record);
+
+    private Task Write(JobExecutionRecord record)
+    {
+        var write = Interlocked.Increment(ref writes);
+        down = write is 2 or 3;
+        if (down)
+            throw new IOException("Connection refused");
+        if (write == 4)
+            throw new InvalidOperationException("Transaction was deadlocked and has been chosen as the deadlock victim");
+        lock (records)
+        {
+            var index = records.FindIndex(r => r.FireInstanceId == record.FireInstanceId && r.RefireCount == record.RefireCount);
+            if (index >= 0)
+                records[index] = record with { Id = records[index].Id };
+            else
+                records.Add(record with { Id = ++nextId });
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
+    {
+        if (down)
+            throw new IOException("Connection refused");
+        lock (records)
+            return Task.FromResult<IReadOnlyList<JobExecutionRecord>>(records
+                .Where(r => r.SchedulerName == schedulerName && (query.Status == null || r.Status == query.Status))
+                .OrderByDescending(r => r.Id).Take(query.Limit).ToList());
+    }
+
+    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
+        Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
+
+    public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
+}
+
+/// <summary>Keeps records in a list, but refuses every record of one job while reads work: a record that can never be written.</summary>
+internal sealed class RefusingStore(string refusedJob) : IJobHistoryStore
+{
+    private readonly List<JobExecutionRecord> records = new();
+    private long nextId;
+
+    public Task Initialize(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task RecordStarted(JobExecutionRecord record, CancellationToken cancellationToken) => Write(record);
+
+    public Task RecordFinished(JobExecutionRecord record, CancellationToken cancellationToken) => Write(record);
+
+    private Task Write(JobExecutionRecord record)
+    {
+        if (record.JobName == refusedJob)
+            throw new InvalidOperationException("String or binary data would be truncated");
+        lock (records)
+        {
+            var index = records.FindIndex(r => r.FireInstanceId == record.FireInstanceId && r.RefireCount == record.RefireCount);
+            if (index >= 0)
+                records[index] = record with { Id = records[index].Id };
+            else
+                records.Add(record with { Id = ++nextId });
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
+    {
+        lock (records)
+            return Task.FromResult<IReadOnlyList<JobExecutionRecord>>(records
+                .Where(r => r.SchedulerName == schedulerName && (query.Status == null || r.Status == query.Status))
+                .OrderByDescending(r => r.Id).Take(query.Limit).ToList());
+    }
+
+    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
+        Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
+
+    public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
 }
 
 /// <summary>Keeps records in a list and throws on the first start record, to check the writer carries on.</summary>

@@ -158,6 +158,23 @@ public class SelfDeletingJob : IJob
     }
 }
 
+/// <summary>
+/// Quartz cannot create it while its scheduler is in <see cref="Broken"/>: its constructor throws, as when a
+/// dependency is not registered.
+/// </summary>
+public class BreakableJob : IJob
+{
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> Broken = new();
+
+    public BreakableJob(Microsoft.Extensions.Options.IOptions<QuartzOptions> quartz)
+    {
+        if (Broken.GetValueOrDefault(quartz.Value["quartz.scheduler.instanceName"] ?? ""))
+            throw new InvalidOperationException("No IInvoiceGateway is registered");
+    }
+
+    public Task Execute(IJobExecutionContext context) => Task.CompletedTask;
+}
+
 /// <summary>Logs through ILogger while it runs, its apiToken among it, from its own code and from work it starts.</summary>
 public class LoggingJob(Microsoft.Extensions.Logging.ILogger<LoggingJob> logger) : IJob
 {

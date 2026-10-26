@@ -261,9 +261,13 @@ builder.Services.AddCronlightHistory(o =>
   Indexes and columns added in later versions (`ATTEMPT` for retries, `DATA` for each run's own data, `RUN_LOG`
   for what runs log) are added to an existing
   table at startup; with `CreateTable = false` a missing one is logged as a warning with the statement to
-  run, and history is written without it.
-- **Jobs are never slowed down.** Listeners only queue records; a background writer stores them. If the
-  database is unavailable, records beyond `QueueCapacity` are dropped and jobs carry on.
+  run, and history is written without it. The same happens when adding one fails (the app may not alter the
+  table, or a large table takes longer than the command timeout), so history keeps working. These checks look
+  in the schema or database `TableName` names, if it names one.
+- **Jobs are never slowed down.** Listeners only queue records; a background writer stores them. While the
+  database is unavailable, records wait in the queue and are written once it is back; records beyond
+  `QueueCapacity` are dropped, and jobs carry on. A record the database refuses while it is otherwise working is
+  skipped, so it cannot hold up the rest. An app stopping during an outage does not wait for it.
 - **Errors** are stored as exception type and message (truncated to `MaxErrorLength`), never stack traces.
 - **What each run logs** through `ILogger` is kept with it, from the job's own code and from anything it
   calls or starts (an `HttpClient`, a repository), and shown under "log" in the History tab. Entries are kept
@@ -293,6 +297,17 @@ builder.Services.AddCronlightHistory(o =>
   once; each attempt is a record of its own, with its refire count. Quartz 3.17 and later no longer tell
   listeners when such an attempt ends, so Cronlight records it as failed when the next attempt begins, with
   what it threw while it captures logs (`CaptureLogs`), and a generic message otherwise.
+- **Jobs Quartz could not create.** When a job's constructor or the job factory throws (a dependency that is not
+  registered, say), Quartz never runs the job and stops all its triggers until it is resumed (see
+  [jobs in Error](#behaviour-worth-knowing)). History records it as failed, "Not run: the job could not be created",
+  with what was thrown.
+- **Runs that never finished.** A run still going when the app stops (Quartz does not wait for running jobs unless
+  `WaitForJobsToComplete` is set) is recorded as failed: "Did not finish: the app stopped while it was running."
+  For a scheduler whose database Cronlight reads, every `UnfinishedRunCheckInterval` each node also looks for runs
+  still Running in history that no node is running any more, because the node running them crashed, and records
+  them as failed: "No end was recorded, and no node is running it any more". Runs that started in the last 5
+  minutes are left alone, a run is closed only while it is still Running, and if its own end arrives later, it
+  replaces this. Your own `IJobHistoryStore` is left alone.
 - **Late starts.** Any run that started 5 seconds or more after its scheduled time is marked "started …
   late" in History and in the job's recent runs.
 - **What a trigger does when it misses a run** shows on the job's page. Cron triggers made in the dashboard
@@ -309,6 +324,7 @@ builder.Services.AddCronlightHistory(o =>
 | `CreateTable` | `true` | |
 | `Retention` | 14 days | `null` keeps everything |
 | `CleanupInterval` | 1 hour | |
+| `UnfinishedRunCheckInterval` | 5 minutes | How often runs left Running by a node that stopped are looked for; zero turns it off |
 | `InMemoryCapacity` | 5000 | Records kept per node by the in-memory store |
 | `QueueCapacity` | 10000 | |
 | `MaxErrorLength` | 2000 | |
@@ -410,6 +426,11 @@ on by default). Every alert is also logged as a warning under the `Cronlight.Ale
   [execution history](#execution-history-optional-package), the streak is read from history, so it counts
   runs on every node and normally one alert is sent per streak. In a cluster without history, each node
   counts only the runs it executed. Streaks start again from zero when the app restarts.
+- **A job Quartz could not create** (see [execution history](#execution-history-optional-package)) is alerted at
+  once, whatever `AfterConsecutiveFailures` says: Quartz has stopped it, so it cannot fail again until someone
+  resumes it. The alert's error starts with "Not run: the job could not be created". As after other failure
+  alerts, its next success sends a recovery alert from the node that alerted, unless the app has restarted since
+  (a fix that needs a deploy usually means a restart; see the streaks below).
 - Alerts work without the dashboard: an app that only runs jobs can call `AddCronlightAlerts` alone.
 
 For a paging service or anything else, register a sink. Sinks are resolved once, as singletons:
@@ -440,6 +461,8 @@ builder.Services.AddOpenTelemetry().WithMetrics(m => m.AddMeter(CronlightMetrics
 | `cronlight.job.runs.active` | up-down counter | Runs in progress |
 | `cronlight.job.misfires` | counter | Fire times missed by more than the misfire threshold |
 
+A job Quartz could not create counts as a failed run, with no duration, and is never active.
+
 Every instrument is tagged with `cronlight.scheduler`, `cronlight.job.group` and `cronlight.job.name`. Each
 node reports its own runs, so add them up across a cluster. A failure that will be retried counts as
 `retried`, as history shows it.
@@ -459,6 +482,16 @@ standby. `AddCronlight(failureStatus: HealthStatus.Degraded, tags: ["ready"], ti
 
 - **Secrets** are shown as `********`. Saving a masked value back keeps the stored value. To keep them
   out of the database too, use [secret references](#secret-references).
+- **Editing job data** changes only what is edited. `PUT api/jobs/{group}/{name}` sets the data keys it sends and
+  keeps the others: `{"data": {"region": "us"}}` changes one value, and a key sent as `null` is removed. Required
+  parameters are checked on the data the job ends up with. The dashboard's edit form sends only the fields, values
+  and triggers changed in it, so a value the job saved meanwhile (with `[PersistJobDataAfterExecution]`) or a change
+  someone else made is not undone; **Run with different data** compares with the values as the form opened too.
+- **Jobs in Error.** When Quartz cannot create a job to run it (its constructor or the job factory throws), it sets
+  every trigger of the job to Error and does not run it again by itself. The job list shows such jobs as **Error**,
+  with a card counting them and a status filter (`status=Error` in `api/jobs/search`, `counts.error` in its answer),
+  and the job's page explains it. History and the app's log say what was thrown. Fix the cause, then **Resume** the
+  job, its group or every job: resuming sets triggers in Error back to normal.
 - **Cancelling a run** from the Running tab asks the job to stop by cancelling
   `context.CancellationToken`, using Quartz's interrupt. Jobs that pass the token on (to `Task.Delay`,
   HttpClient, database calls) stop promptly; a job that never checks it keeps running. History records the
