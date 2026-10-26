@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Cronlight</RootNamespace>
@@ -14,7 +14,10 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <!-- Only the core Quartz API: the host owns scheduler setup, store and hosting -->
+    <!--
+      Only the core Quartz API: the host owns scheduler setup, store and hosting. The lowest 3.x version
+      Cronlight supports, so hosts choose their own; the tests run on the latest 3.x.
+    -->
     <PackageReference Include="Quartz" Version="3.13.1" />
     <!-- Same package that provides AddQuartz(); used to read the host's store settings -->
     <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.13.1" />
@@ -25,12 +28,8 @@
     <InternalsVisibleTo Include="Cronlight.History" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.13" />
-  </ItemGroup>
-
   <!--
-    ASP.NET Core 8 ships Microsoft.Extensions.FileProviders.Embedded, so NuGet prunes the package and
+    ASP.NET Core ships Microsoft.Extensions.FileProviders.Embedded, so NuGet prunes the package and
     with it the build step that generates the embedded files manifest; without the manifest the UI
     fails to load at startup. The SDK adds the prune list in a target, so it is edited in one too.
   -->
@@ -39,7 +38,7 @@
       <PrunePackageReference Remove="Microsoft.Extensions.FileProviders.Embedded" />
     </ItemGroup>
   </Target>
-  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.2" />
   </ItemGroup>
 

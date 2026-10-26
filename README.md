@@ -22,7 +22,8 @@ dotnet add package Cronlight.Quartz.Dashboard.History --prerelease   # optional:
 Cronlight is in beta: `--prerelease` is needed until 1.0, and options or endpoints may still change
 between betas.
 
-Requires ASP.NET Core 8 or 10 and Quartz.NET 3.x configured with `AddQuartz()`. The setup below also calls
+Requires ASP.NET Core 10 and Quartz.NET 3.13.1 or later 3.x (tested on 3.22.7), configured with `AddQuartz()`.
+Quartz 4 is not supported yet. Hosts on .NET 8 can stay on 0.1.0-beta.2. The setup below also calls
 `AddQuartzHostedService()`, which comes from the separate `Quartz.Extensions.Hosting` package (or
 `Quartz.AspNetCore`, which includes it); Cronlight does not install it for you, because the host owns scheduler setup.
 
@@ -502,7 +503,7 @@ standby. `AddCronlight(failureStatus: HealthStatus.Degraded, tags: ["ready"], ti
 
 | Path | |
 |---|---|
-| `src/Cronlight` | The library (net8.0, net10.0). The built UI is embedded in the assembly |
+| `src/Cronlight` | The library (net10.0). The built UI is embedded in the assembly |
 | `src/Cronlight.History` | Optional execution history: listener, database and in-memory stores, schema scripts |
 | `src/Cronlight.UI` | UI source: React, TypeScript, Vite, Tailwind and shadcn/ui. Built into `src/Cronlight/wwwroot` |
 | `samples/Cronlight.SampleHost` | Host app using SQLite, with an HTTP job, demo endpoints and demo `X-Demo-Role` header auth |
@@ -511,13 +512,13 @@ standby. `AddCronlight(failureStatus: HealthStatus.Degraded, tags: ["ready"], ti
 | `tests/Cronlight.E2E` | End-to-end tests: Playwright drives the sample host in Chromium |
 | `assets` | Logo (`icon.svg`) and the 128px `icon.png` used as the NuGet package icon |
 | `build/verify-packages.sh` | Checks run on packed `.nupkg` files in CI |
-| `build/smoke-test.sh` | Installs the packed packages into new .NET 8 and .NET 10 apps and runs them |
+| `build/smoke-test.sh` | Installs the packed packages into a new .NET 10 app on Quartz 3.13.1 and runs it |
 | `build/test-all.sh` | Runs the UI and .NET test suites |
 | `.github/workflows` | CI and release pipelines |
 
 ## Development
 
-Requires the .NET 10 SDK (see `global.json`; it also builds the net8.0 target) and Node.js 20+.
+Requires the .NET 10 SDK (see `global.json`) and Node.js 20+.
 
 ```bash
 dotnet build              # also runs `npm ci` / `npm run build` for the UI when its sources changed
@@ -540,7 +541,7 @@ server** (`.vscode/launch.json`).
 
 ### Running the UI and .NET tests
 
-`build/test-all.sh` runs the UI lint, type-check and unit tests and the .NET tests on .NET 8 and 10,
+`build/test-all.sh` runs the UI lint, type-check and unit tests and the .NET tests,
 installing npm packages when missing. A failing suite does not stop the rest; a summary at the end lists
 each result. It does not run the end-to-end tests (see below).
 
@@ -627,7 +628,7 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
    `CRONLIGHT_REQUIRE_DATABASES=true` makes a missing database fail the run rather than skip its tests.
 4. Pack both packages as `0.1.0-ci.<run>` and verify them with `build/verify-packages.sh` (both target
    frameworks, UI embedded, README, license, symbols, matching dependency versions).
-   `build/smoke-test.sh` then installs them into a new .NET 8 and .NET 10 web app, runs it and checks
+   `build/smoke-test.sh` then installs them into a new .NET 10 web app on Quartz 3.13.1, runs it and checks
    the dashboard, API and history respond.
 5. Upload the packages and test results as workflow artifacts.
 6. End-to-end tests (a separate job): Playwright runs `tests/Cronlight.E2E` against the sample host and

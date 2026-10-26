@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the UI lint, type-check and unit tests and the .NET tests on .NET 8 and 10. The Playwright
+# Runs the UI lint, type-check and unit tests and the .NET tests. The Playwright
 # end-to-end tests are not included; run them with `npx playwright test` in tests/Cronlight.E2E.
 # A failing suite does not stop the others; the summary lists each result and the script exits
 # non-zero if any failed.
@@ -143,7 +143,7 @@ for suite in "${suites[@]}"; do
           continue
         fi
       fi
-      run_suite ".NET tests (net8.0, net10.0)" dotnet_tests
+      run_suite ".NET tests" dotnet_tests
       ;;
   esac
 done

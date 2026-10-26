@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
+using Quartz.Spi;
 
 namespace Cronlight.Tests;
 
@@ -12,20 +13,25 @@ public class MisfireTests
     private static readonly TimeSpan Threshold = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// A job whose every-ten-minutes trigger started 25 minutes ago, so its last three fire times were missed and
+    /// A job whose every-ten-minutes trigger is due 25 minutes ago, so its last three fire times were missed and
     /// the next one is five minutes away. Returns the first fire time missed.
     /// </summary>
+    /// <remarks>
+    /// The trigger fired once before, as one that was waiting while the scheduler was down. Since Quartz 3.17, a
+    /// repeating trigger that has never fired starts now when it is scheduled with a start in the past.
+    /// </remarks>
     private static async Task<DateTimeOffset> ScheduleOverdue(IScheduler scheduler, string name, Action<SimpleScheduleBuilder> misfire)
     {
         var start = DateTimeOffset.UtcNow.AddMinutes(-25);
         var job = JobBuilder.Create<PlainJob>().WithIdentity(name).StoreDurably().Build();
-        var trigger = TriggerBuilder.Create().ForJob(job).WithIdentity(name).StartAt(start)
+        var trigger = (IOperableTrigger)TriggerBuilder.Create().ForJob(job).WithIdentity(name).StartAt(start)
             .WithSimpleSchedule(s =>
             {
                 s.WithIntervalInMinutes(10).RepeatForever();
                 misfire(s);
             })
             .Build();
+        trigger.SetPreviousFireTimeUtc(start.AddMinutes(-10));
         await scheduler.ScheduleJob(job, [trigger], replace: false);
         return start;
     }

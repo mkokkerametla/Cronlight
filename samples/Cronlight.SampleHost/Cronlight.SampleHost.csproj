@@ -7,8 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Quartz.Extensions.Hosting" Version="3.13.1" />
-    <PackageReference Include="Quartz.Serialization.Json" Version="3.13.1" />
+    <PackageReference Include="Quartz.Extensions.Hosting" Version="3.22.7" />
+    <PackageReference Include="Quartz.Serialization.Json" Version="3.22.7" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
     <!-- Patched native SQLite (Microsoft.Data.Sqlite 10.0.2 brings a vulnerable 2.1.11) -->
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />

@@ -106,8 +106,6 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
-          # The .NET 8 runtime runs the net8.0 consumer app in the package smoke test
-          dotnet-version: 8.0.x
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

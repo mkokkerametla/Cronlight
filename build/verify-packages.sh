@@ -22,7 +22,7 @@ check_package() {
   listing=$(unzip -Z1 "$nupkg")
   nuspec=$(unzip -p "$nupkg" "$id.nuspec")
 
-  for tfm in net8.0 net10.0; do
+  for tfm in net10.0; do
     grep -qx "lib/$tfm/[^/]*\.dll" <<<"$listing" || fail "$id: no assembly for $tfm"
   done
   grep -qx "README.md" <<<"$listing" || fail "$id: README.md not packed"
@@ -38,7 +38,7 @@ check_package Cronlight.Quartz.Dashboard.History
 # The dashboard UI must be embedded in the core assembly for every target framework
 core="$dir/Cronlight.Quartz.Dashboard.$version.nupkg"
 if [[ -f "$core" ]]; then
-  for tfm in net8.0 net10.0; do
+  for tfm in net10.0; do
     # grep -c (not -q) reads all input: an early exit would kill unzip with SIGPIPE and trip pipefail
     unzip -p "$core" "lib/$tfm/Cronlight.dll" | grep -ac "Cronlight.wwwroot.index.html" >/dev/null \
       || fail "Cronlight.Quartz.Dashboard: UI not embedded in $tfm assembly"

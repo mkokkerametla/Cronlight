@@ -20,7 +20,7 @@ contains() {
   [[ $body == *"$2"* ]]
 }
 
-for tfm in net8.0 net10.0; do
+for tfm in net10.0; do
   app="$work/$tfm"
   mkdir -p "$app"
   cd "$app"
@@ -37,6 +37,7 @@ for tfm in net8.0 net10.0; do
 </configuration>
 EOF
   dotnet new web -n SmokeApp -f "$tfm" -o . >/dev/null
+  # The lowest Quartz the packages support; the test suite runs on the latest 3.x
   dotnet add package Quartz.Extensions.Hosting --version 3.13.1 >/dev/null
   dotnet add package Cronlight.Quartz.Dashboard --version "$version" >/dev/null
   dotnet add package Cronlight.Quartz.Dashboard.History --version "$version" >/dev/null

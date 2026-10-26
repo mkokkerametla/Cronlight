@@ -106,9 +106,12 @@ Move when all of these hold:
 - no new schema migrations in that time;
 - no open 4.x bugs of that kind on GitHub.
 
-Staying on 3.13.1 also avoids [quartznet#4167](https://github.com/quartznet/quartznet/issues/4167), open
-since 2026-10-25: non-concurrent jobs with many triggers start 15–35 seconds late on 3.19.1 and 3.22.7, but
-not on 3.13.0. Check it before raising the 3.x version.
+The packages still require only Quartz 3.13.1, so a host is not moved to a later 3.x by installing Cronlight:
+[quartznet#4167](https://github.com/quartznet/quartznet/issues/4167), open since 2026-10-25, makes
+non-concurrent jobs with many triggers start 15–35 seconds late on 3.19.1 and 3.22.7, but not on 3.13.0.
+Check it before raising that minimum. The tests and the sample run on the latest 3.x (3.22.7 since
+2026-10-26), and the package smoke test on 3.13.1. Cronlight targets .NET 10 only since 2026-10-26 (.NET 8
+support ends 2026-11-10); hosts on .NET 8 can stay on 0.1.0-beta.2.
 
 Quartz.NET 4.0 targets `net10.0` only. Public `Task` members became `ValueTask`, `IJob.Execute` takes a
 cancellation token, the container builds the scheduler (no `quartz.config`, no process-global singletons) and
@@ -155,11 +158,10 @@ events or SignalR, and fall back to the current polling.
   reports it again; history keeps one record per misfire.
 
 - No end-to-end tests for alerts, which would need a webhook receiver in the sample host.
-- `RetryTests.A_run_with_different_data_uses_it_for_that_run_and_its_retries_only` failed once on .NET 10
-  during a full parallel run: the retry never showed in history. It passes on its own and in later full
-  runs. A suspected cause, not confirmed, is a busy SQLite store making the retry fail to schedule, which is
-  only logged at the time, and the tests discard logs. A retry that cannot be scheduled now leaves the run
-  Failed with the reason, so a repeat would show why.
+- On Quartz before 3.17, a job with a retry policy that fails with `RefireImmediately` is retried as well as
+  refired: Quartz reports that attempt's end to listeners there, and the retry planner does not check for a
+  refire. 3.17 and later do not report it, so it does not happen there. The tests run on 3.22.7, so this path
+  is untested.
 - Not covered by tests: a history table without the `ATTEMPT` column when `CreateTable` is off, and a
   blocked run counting as a failure in a cluster, where streaks are read from history.
 
