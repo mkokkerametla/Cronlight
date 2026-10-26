@@ -523,7 +523,7 @@ internal static class DashboardApi
             OnJob(http, o.Value, group, name, (s, k) => s.ResumeJob(k)));
         api.MapPost("/jobs/{group}/{name}/trigger", RunJob);
         api.MapDelete("/jobs/{group}/{name}", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
-            OnJob(http, o.Value, group, name, (s, k) => s.DeleteJob(k)));
+            OnJob(http, o.Value, group, name, DeleteJob));
 
         api.MapPost("/jobs/{group}/{name}/runs/{fireInstanceId}/cancel", CancelRun);
         api.MapPost("/jobs/{group}/{name}/retries/{trigger}/cancel-retry", CancelRetry);
@@ -684,6 +684,28 @@ internal static class DashboardApi
                 title: "This run is not running.",
                 detail: "It has already finished, or was never started.",
                 statusCode: StatusCodes.Status404NotFound);
+    }
+
+    /// <summary>
+    /// Quartz lists the job's triggers, then unschedules each, and fails if one has gone in between: a one-off trigger
+    /// that has just fired, such as Run now's, removes itself. Asked again, it no longer lists that trigger.
+    /// </summary>
+    private static async Task DeleteJob(IScheduler scheduler, JobKey key)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await scheduler.DeleteJob(key);
+                return;
+            }
+            catch (SchedulerException) when (attempt < 3)
+            {
+                // A job that is not durable goes with its last trigger
+                if (!await scheduler.CheckExists(key))
+                    return;
+            }
+        }
     }
 
     private static async Task<IResult> OnJob(HttpContext http, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)
