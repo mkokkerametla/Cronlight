@@ -52,7 +52,6 @@ function Harness({ onCreate }: { onCreate: (request: CreateJobRequest) => Promis
         open={open}
         onOpenChange={setOpen}
         jobTypes={jobTypes}
-        showScheduleAssistant={false}
         secretReferences={false}
         onCreate={onCreate}
       />

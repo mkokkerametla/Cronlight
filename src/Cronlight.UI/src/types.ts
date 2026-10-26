@@ -91,7 +91,6 @@ export interface SchedulerInfo {
   runningSince: string | null
   canManage: boolean
   historyEnabled: boolean
-  showScheduleAssistant: boolean
   secretReferences: boolean
   /** How often the dashboard refreshes, in seconds */
   refreshSeconds: number

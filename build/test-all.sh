@@ -81,7 +81,8 @@ start_databases() {
     export QUARTZ_TEST_SQLSERVER="Server=127.0.0.1,21433;Database=quartz;User Id=sa;Password=$password;TrustServerCertificate=true"
   fi
 
-  local sqlcmd=("$engine" exec cronlight-test-mssql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$password")
+  # MSYS_NO_PATHCONV stops Git Bash on Windows turning the container's /opt path into a Windows one
+  local sqlcmd=(env MSYS_NO_PATHCONV=1 "$engine" exec cronlight-test-mssql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$password")
   for c in "${containers[@]}"; do
     case $c in
       *postgres) wait_for PostgreSQL "$engine" exec "$c" pg_isready -U postgres -d quartz || return 1 ;;

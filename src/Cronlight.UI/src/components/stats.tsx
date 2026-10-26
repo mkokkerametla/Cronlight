@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 import { Activity, CircleX, Layers, Lock, OctagonAlert, PauseCircle } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
 export type StatKey = 'all' | 'running' | 'Paused' | 'Unloadable' | 'Error' | 'failed'
@@ -16,6 +17,26 @@ interface StatsProps {
   failed: number | null
   active: StatKey | null
   onSelect: (key: StatKey) => void
+}
+
+const rowClass = (cards: number) =>
+  cn(
+    'grid grid-cols-2 gap-3',
+    { 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' }[cards]
+  )
+
+/**
+ * The stat row while the dashboard loads. Whether history is on is not known yet, so it holds the five cards a
+ * dashboard with history shows, the usual setup, and the row does not move when they arrive.
+ */
+export function StatsSkeleton() {
+  return (
+    <div className={rowClass(5)}>
+      {Array.from({ length: 5 }, (_, i) => (
+        <Skeleton key={i} className="h-[74px] rounded-xl" />
+      ))}
+    </div>
+  )
 }
 
 export function Stats({
@@ -76,12 +97,7 @@ export function Stats({
   ]
 
   return (
-    <div
-      className={cn(
-        'grid grid-cols-2 gap-3',
-        { 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' }[cards.length]
-      )}
-    >
+    <div className={rowClass(cards.length)}>
       {cards.map(({ key, label, value, icon: Icon, tone }) => (
         <button
           key={key}

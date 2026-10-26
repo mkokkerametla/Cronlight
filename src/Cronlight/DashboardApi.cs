@@ -245,7 +245,6 @@ internal static class DashboardApi
                 // Lets the UI hide controls the user cannot use; the server still enforces it
                 CanManage = await CanManage(http, options.Value, scheduler.SchedulerName),
                 HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null,
-                options.Value.ShowScheduleAssistant,
                 SecretReferences = SecretReferences.Enabled(options.Value),
                 RefreshSeconds = Math.Clamp(options.Value.RefreshSeconds, 1, 300),
                 // Every scheduler served that the user may see, the host's own first, for the dashboard's scheduler picker

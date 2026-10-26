@@ -33,14 +33,6 @@ public class CronlightOptions
     public bool AllowManagingUnloadableJobs { get; set; }
 
     /// <summary>
-    /// Shows a box next to cron expressions where users describe a schedule in plain language and
-    /// open it as a question in ChatGPT or Google. What they type goes to that site from their own
-    /// browser (Cronlight's server sends nothing), so it is off by default: turn it on where staff may
-    /// use external AI or search tools.
-    /// </summary>
-    public bool ShowScheduleAssistant { get; set; }
-
-    /// <summary>
     /// How often an open dashboard asks for fresh jobs, running jobs and history, in seconds (1 to 300). Each
     /// open tab polls, while visible, so a shorter interval puts more load on the scheduler's database.
     /// </summary>

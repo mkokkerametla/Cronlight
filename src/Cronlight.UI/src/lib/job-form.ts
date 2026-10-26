@@ -56,7 +56,7 @@ export const editableKinds: EditableTriggerKind[] = ['Cron', 'Once', 'Interval']
 export const isEditable = (trigger: Trigger) => (editableKinds as string[]).includes(trigger.kind)
 
 export interface TriggerDraft {
-  /** Client-only row key, so per-row state (cron preview, schedule assistant) stays with its trigger */
+  /** Client-only row key, so per-row state (cron preview) stays with its trigger */
   id: number
   kind: EditableTriggerKind
   name: string

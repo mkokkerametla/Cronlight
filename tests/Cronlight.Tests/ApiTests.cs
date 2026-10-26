@@ -45,22 +45,6 @@ public class ApiTests
     }
 
     [Theory]
-    [InlineData(null, false)]
-    [InlineData(true, true)]
-    public async Task Scheduler_info_reports_whether_to_show_the_schedule_assistant(bool? setting, bool expected)
-    {
-        await using var host = await TestHost.Start(configure: o =>
-        {
-            if (setting is { } show)
-                o.ShowScheduleAssistant = show;
-        });
-
-        var scheduler = await host.Client().GetFromJsonAsync<JsonElement>("api/scheduler");
-
-        Assert.Equal(expected, scheduler.GetProperty("showScheduleAssistant").GetBoolean());
-    }
-
-    [Theory]
     [InlineData(null, 10)]
     [InlineData(1, 1)]
     [InlineData(0, 1)]

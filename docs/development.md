@@ -76,7 +76,9 @@ export QUARTZ_TEST_MYSQL='Server=127.0.0.1;Port=13306;Database=quartz;User Id=ro
 dotnet test
 ```
 
-The tests recreate the Quartz tables in these databases, so point them at throwaway instances only.
+The tests recreate the Quartz tables in these databases, so point them at throwaway instances only. In Git Bash
+on Windows, run the `exec ... sqlcmd` line with `MSYS_NO_PATHCONV=1` in front, or Git Bash turns the container's
+`/opt/...` path into a Windows path.
 
 Each test host gets a fresh SQLite file in a folder of its own for the run, removed when the run ends. The
 packages need Quartz 3.13.1, but the tests and the sample run on the latest 3.x (3.22.7). To see what the test
@@ -107,7 +109,7 @@ pause and resume, search, filters and paging of the job list, the stat cards, th
 cancelling a run, history (paging, job filter, failing and succeeding HTTP jobs), retries, running a
 job with different data, running a failed run again, read-only jobs from other apps sharing the
 scheduler, server errors, changes made elsewhere, a lost connection, viewer and anonymous access, the
-scheduler details, the theme switch and the schedule assistant.
+scheduler details and the theme switch.
 They need Node.js 22.13 or later, for its built-in SQLite module.
 
 ```bash

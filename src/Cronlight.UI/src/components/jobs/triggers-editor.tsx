@@ -12,7 +12,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { CronPreview } from '@/components/jobs/cron-preview'
-import { ScheduleAssistant } from '@/components/jobs/schedule-assistant'
 import { formatDateTime, formatSeconds } from '@/lib/format'
 import {
   emptyTrigger,
@@ -26,7 +25,6 @@ import type { EditableTriggerKind } from '@/types'
 interface Props {
   triggers: TriggerDraft[]
   onChange: (triggers: TriggerDraft[]) => void
-  showScheduleAssistant: boolean
   /** Told whether a cron expression is shown as invalid, so the form can refuse to save */
   onInvalidChange?: (invalid: boolean) => void
 }
@@ -44,12 +42,7 @@ const skipLabels: Record<EditableTriggerKind, string> = {
     'Skip missed runs (when the scheduler was down or busy) instead of running once when it can',
 }
 
-export function TriggersEditor({
-  triggers,
-  onChange,
-  showScheduleAssistant,
-  onInvalidChange,
-}: Props) {
+export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
   const id = useId()
   const update = (index: number, patch: Partial<TriggerDraft>) =>
     onChange(triggers.map((t, i) => (i === index ? { ...t, ...patch } : t)))
@@ -203,9 +196,6 @@ export function TriggersEditor({
               {skipLabels[trigger.kind]}
             </Label>
           </div>
-          {showScheduleAssistant && trigger.kind === 'Cron' && (
-            <ScheduleAssistant timeZone={trigger.timeZone} />
-          )}
         </div>
       ))}
       <Button
