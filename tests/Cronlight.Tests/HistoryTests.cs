@@ -131,6 +131,7 @@ internal static class HistoryScenarios
         Assert.Equal(2, records.Count);
         Assert.Equal(("Succeeded", 1), (records[0].GetProperty("status").GetString(), records[0].GetProperty("refireCount").GetInt32()));
         Assert.Equal(("Failed", 0), (records[1].GetProperty("status").GetString(), records[1].GetProperty("refireCount").GetInt32()));
+        Assert.Equal("JobExecutionException: first attempt failed", records[1].GetProperty("error").GetString());
     }
 
     public static async Task RecordsVetoedRuns(TestHost host)
@@ -270,7 +271,9 @@ internal static class HistoryScenarios
             if (records.Count > 0 && done(records))
                 return records;
             if (DateTime.UtcNow > deadline)
-                throw new TimeoutException($"History never matched; last saw {records.Count} records");
+                throw new TimeoutException($"History never matched; last saw {records.Count} records: " + string.Join(", ",
+                    records.Select(r => $"{r.GetProperty("jobName").GetString()} {r.GetProperty("status").GetString()} " +
+                        $"(refire {r.GetProperty("refireCount").GetInt32()}, trigger {r.GetProperty("triggerName").GetString()})")));
             await Task.Delay(100);
         }
     }

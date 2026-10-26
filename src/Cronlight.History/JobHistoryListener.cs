@@ -81,9 +81,25 @@ internal sealed class JobHistoryListener(
 
     public Task JobToBeExecuted(IJobExecutionContext context, CancellationToken cancellationToken = default)
     {
+        if (Refires.Begin(context, Name))
+            queue.Enqueue(HistoryEvent.Finished, RefiredAttempt(context));
         queue.Enqueue(HistoryEvent.Started, Record(context, JobExecutionStatus.Running));
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// The attempt before this one, which failed and asked to run again at once, recorded as Quartz before 3.17 reports
+    /// it. The context still holds its run time and log; what it threw is known when Cronlight wrapped the job.
+    /// </summary>
+    private JobExecutionRecord RefiredAttempt(IJobExecutionContext context) => Record(context, JobExecutionStatus.Failed) with
+    {
+        RefireCount = context.RefireCount - 1,
+        FinishedTimeUtc = context.FireTimeUtc + context.JobRunTime,
+        DurationMs = (long)context.JobRunTime.TotalMilliseconds,
+        Error = Truncate(RunOutcome.Error(context, context.Get(RunLogJob.RefireErrorKey) as JobExecutionException)
+            ?? "Failed and asked to run again at once"),
+        Log = (context.Get(RunLog.ContextKey) as RunLog)?.Close()
+    };
 
     public Task JobExecutionVetoed(IJobExecutionContext context, CancellationToken cancellationToken = default)
     {
@@ -98,6 +114,7 @@ internal sealed class JobHistoryListener(
 
     public async Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken cancellationToken = default)
     {
+        Refires.End(context, Name);
         var status = RunOutcome.Status(context, jobException);
         if (retries != null && await retries.Retry(context, jobException, cancellationToken))
             status = JobExecutionStatus.Retried;

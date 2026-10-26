@@ -42,3 +42,25 @@ internal static class RunOutcome
         return exception;
     }
 }
+
+/// <summary>
+/// Quartz 3.17 and later do not tell job listeners that an attempt ended when the job asked to run again at once
+/// (a JobExecutionException with RefireImmediately): the next attempt just begins, on the same context. Earlier
+/// versions report the end first. A listener that pairs starts with ends calls <see cref="Begin"/> and
+/// <see cref="End"/>, and learns from Begin that the attempt before ended unreported.
+/// </summary>
+internal static class Refires
+{
+    /// <summary>Marks an attempt as begun; true when the one before it on this context never reported its end.</summary>
+    public static bool Begin(IJobExecutionContext context, string listener)
+    {
+        var key = Key(listener);
+        var previousUnreported = context.RefireCount > 0 && context.Get(key) is true;
+        context.Put(key, true);
+        return previousUnreported;
+    }
+
+    public static void End(IJobExecutionContext context, string listener) => context.Put(Key(listener), false);
+
+    private static string Key(string listener) => $"Cronlight.Attempting.{listener}";
+}

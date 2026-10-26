@@ -48,7 +48,19 @@ internal sealed class MetricsListener : IJobListener
 
     public Task JobToBeExecuted(IJobExecutionContext context, CancellationToken cancellationToken = default)
     {
-        active.Add(1, Tags(context.Scheduler.SchedulerName, context.JobDetail.Key));
+        var job = context.JobDetail.Key;
+        if (Refires.Begin(context, Name))
+        {
+            // The attempt before failed and asked to run again: counted as Quartz before 3.17 reports it, and this
+            // attempt takes its place among the active runs
+            var tags = Tags(context.Scheduler.SchedulerName, job, "failed");
+            runs.Add(1, tags);
+            duration.Record(context.JobRunTime.TotalSeconds, tags);
+        }
+        else
+        {
+            active.Add(1, Tags(context.Scheduler.SchedulerName, job));
+        }
         return Task.CompletedTask;
     }
 
@@ -60,6 +72,7 @@ internal sealed class MetricsListener : IJobListener
 
     public async Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken cancellationToken = default)
     {
+        Refires.End(context, Name);
         var job = context.JobDetail.Key;
         active.Add(-1, Tags(context.Scheduler.SchedulerName, job));
         // Asks the planner, as history and alerts do, so a failure that is retried counts as retried in all three

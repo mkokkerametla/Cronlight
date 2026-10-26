@@ -65,6 +65,26 @@ public class MetricsTests
     }
 
     [Fact]
+    public async Task An_attempt_refired_at_once_counts_as_failed_and_leaves_no_run_active()
+    {
+        string? name = null;
+        using var recorder = new Recorder(() => name!);
+        await using var host = await TestHost.Start();
+        name = host.SchedulerName;
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(RefireOnceJob), "retry");
+
+        await client.PostAsync("api/jobs/DEFAULT/retry/trigger", null);
+        for (var deadline = DateTime.UtcNow.AddSeconds(15);
+             recorder.Measurements.Count(m => m.Instrument == "cronlight.job.runs") < 2 && DateTime.UtcNow < deadline;)
+            await Task.Delay(50);
+
+        Assert.Equal(new[] { "failed", "succeeded" },
+            recorder.Measurements.Where(m => m.Instrument == "cronlight.job.runs").Select(m => m.Tags["cronlight.run.outcome"]));
+        Assert.Equal(0, recorder.Measurements.Where(m => m.Instrument == "cronlight.job.runs.active").Sum(m => m.Value));
+    }
+
+    [Fact]
     public async Task A_failure_that_is_retried_counts_as_retried()
     {
         string? name = null;

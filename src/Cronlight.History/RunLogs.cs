@@ -143,6 +143,9 @@ internal sealed class RunLogJobFactory(IJobFactory inner, IOptions<JobHistoryOpt
 /// </summary>
 internal sealed class RunLogJob(IJob job, JobHistoryOptions options, RunLogMasks masks) : IJob
 {
+    /// <summary>What an attempt that asked to run again at once threw: Quartz 3.17 and later do not pass it to listeners.</summary>
+    public const string RefireErrorKey = "Cronlight.RefireError";
+
     public IJob Job => job;
 
     public async Task Execute(IJobExecutionContext context)
@@ -151,6 +154,14 @@ internal sealed class RunLogJob(IJob job, JobHistoryOptions options, RunLogMasks
         var log = new RunLog(Math.Max(1, options.MaxLogEntries), Math.Max(1, options.MaxLogMessageLength), masks.For(context));
         context.Put(RunLog.ContextKey, log);
         log.Enter();
-        await job.Execute(context);
+        try
+        {
+            await job.Execute(context);
+        }
+        catch (JobExecutionException ex) when (ex.RefireImmediately)
+        {
+            context.Put(RefireErrorKey, ex);
+            throw;
+        }
     }
 }
