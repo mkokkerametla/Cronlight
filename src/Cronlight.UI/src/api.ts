@@ -1,4 +1,4 @@
-import type { Job } from '@/types'
+import type { ImportedJob, ImportResult, Job } from '@/types'
 
 const SCHEDULER_PARAM = 'scheduler'
 
@@ -59,3 +59,57 @@ async function errorMessage(res: Response): Promise<string> {
 
 export const jobPath = (job: Pick<Job, 'group' | 'name'>) =>
   `jobs/${encodeURIComponent(job.group)}/${encodeURIComponent(job.name)}`
+
+/**
+ * Downloads the scheduler's jobs as a JSON or YAML file, named as the server names it. Fetched rather than linked, so
+ * a failure shows as an error instead of downloading it.
+ */
+export async function exportJobs(format: 'json' | 'yaml') {
+  const res = await fetch(`api/${forScheduler(`jobs/export?format=${format}`)}`, {
+    credentials: 'same-origin',
+  })
+  if (!res.ok) throw new Error(await errorMessage(res))
+  const name =
+    /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ??
+    `cronlight-jobs.${format}`
+  const url = URL.createObjectURL(await res.blob())
+  const link = Object.assign(document.createElement('a'), { href: url, download: name })
+  document.body.append(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+  return name
+}
+
+/** What importing a file did or would do; a file with mistakes changes nothing, and says what is wrong with each job. */
+export type ImportOutcome =
+  { ok: true; result: ImportResult } | { ok: false; message: string; jobs: ImportedJob[] }
+
+/** Imports a file of jobs, or with dryRun only checks it and says what importing it would change. */
+export async function importJobs(
+  text: string,
+  yaml: boolean,
+  dryRun: boolean
+): Promise<ImportOutcome> {
+  const res = await fetch(`api/${forScheduler(`jobs/import?dryRun=${dryRun}`)}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'X-Cronlight-Request': '1',
+      'Content-Type': yaml ? 'application/yaml' : 'application/json',
+    },
+    body: text,
+  })
+  if (res.ok) return { ok: true, result: (await res.json()) as ImportResult }
+  const body = await res.text()
+  try {
+    const problem = JSON.parse(body) as { title?: string; detail?: string; jobs?: ImportedJob[] }
+    return {
+      ok: false,
+      message: problem.detail || problem.title || `${res.status}`,
+      jobs: problem.jobs ?? [],
+    }
+  } catch {
+    return { ok: false, message: body || `${res.status} ${res.statusText}`, jobs: [] }
+  }
+}

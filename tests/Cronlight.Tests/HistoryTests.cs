@@ -285,6 +285,29 @@ public class HistoryTests
     private static readonly Action<JobHistoryOptions> Database = o => o.Storage = JobHistoryStorage.Database;
     private static readonly Action<JobHistoryOptions> InMemory = o => o.Storage = JobHistoryStorage.InMemory;
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Queries_can_ask_for_runs_that_started_in_a_window(bool database)
+    {
+        await using var host = await TestHost.Start(history: database ? Database : InMemory);
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(PlainJob), "windowed");
+        await client.PostAsync("api/jobs/DEFAULT/windowed/trigger", null);
+        var run = (await HistoryScenarios.WaitForHistory(client, "?name=windowed", r => r.Count == 1))[0];
+        var fired = run.GetProperty("firedTimeUtc").GetDateTimeOffset();
+        var store = host.Services.GetRequiredService<IJobHistoryStore>();
+
+        async Task<int> Count(DateTimeOffset? from, DateTimeOffset? before) =>
+            (await store.Query(host.SchedulerName, new JobHistoryQuery { JobName = "windowed", FiredFromUtc = from, FiredBeforeUtc = before },
+                CancellationToken.None)).Count;
+
+        Assert.Equal(1, await Count(fired, fired.AddTicks(1)));
+        Assert.Equal(0, await Count(fired.AddTicks(1), null));
+        Assert.Equal(0, await Count(null, fired));
+        Assert.Equal(1, await Count(fired.AddHours(-1), null));
+    }
+
     [Fact]
     public async Task A_history_table_from_an_older_version_gets_the_outcome_index()
     {

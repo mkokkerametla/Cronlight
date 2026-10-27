@@ -21,11 +21,17 @@
     <PackageReference Include="Quartz" Version="3.13.1" />
     <!-- Same package that provides AddQuartz(); used to read the host's store settings -->
     <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.13.1" />
+    <!-- Reads and writes the jobs files of export and import in YAML; it has no dependencies of its own -->
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+    <!-- Describes the API as an OpenAPI document of its own, at {prefix}/api/openapi.json -->
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Shares QuartzDataSource (connections to the Quartz database) with the history package -->
     <InternalsVisibleTo Include="Cronlight.History" />
+    <!-- Its tools follow the dashboard's own rules: permissions, masking, auditing -->
+    <InternalsVisibleTo Include="Cronlight.Mcp" />
     <!-- Tests the job type catalog's assembly scanning directly -->
     <InternalsVisibleTo Include="Cronlight.Tests" />
   </ItemGroup>

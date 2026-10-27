@@ -176,6 +176,16 @@ internal sealed class AdoJobHistoryStore(
             where.Append($" AND ID < {P("before")}");
             Add(command, "before", query.BeforeId);
         }
+        if (query.FiredFromUtc != null)
+        {
+            where.Append($" AND FIRED_TIME >= {P("from")}");
+            Add(command, "from", query.FiredFromUtc.Value.UtcTicks);
+        }
+        if (query.FiredBeforeUtc != null)
+        {
+            where.Append($" AND FIRED_TIME < {P("to")}");
+            Add(command, "to", query.FiredBeforeUtc.Value.UtcTicks);
+        }
 
         command.CommandText = dialect.SelectTop(Math.Clamp(query.Limit, 1, 500), Columns, $"FROM {tableName} {where} ORDER BY ID DESC");
 

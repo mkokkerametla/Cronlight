@@ -64,7 +64,9 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore, 
                     && (query.JobGroup == null || r.JobGroup == query.JobGroup)
                     && (query.JobName == null || r.JobName == query.JobName)
                     && (query.Status == null || r.Status == query.Status)
-                    && (query.BeforeId == null || r.Id < query.BeforeId))
+                    && (query.BeforeId == null || r.Id < query.BeforeId)
+                    && (query.FiredFromUtc == null || r.FiredTimeUtc >= query.FiredFromUtc)
+                    && (query.FiredBeforeUtc == null || r.FiredTimeUtc < query.FiredBeforeUtc))
                 .Take(Math.Clamp(query.Limit, 1, 500))
                 // Logs are read one run at a time, as the database store does
                 .Select(r => r with { Log = null, HasLog = r.Log != null })

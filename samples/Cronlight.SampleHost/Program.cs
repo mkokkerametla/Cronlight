@@ -5,6 +5,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 using Quartz;
 using Cronlight;
+using Cronlight.Mcp;
 using Cronlight.SampleHost;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -70,6 +71,11 @@ builder.Services.AddCronlight(o =>
     builder.Configuration.GetSection("Cronlight").Bind(o);
 });
 
+// An MCP server at /ops/jobs/mcp, so AI assistants can read the jobs, runs and logs, and here also pause, resume and run
+// them. Clients send X-Demo-Role as the dashboard does, e.g.
+// claude mcp add --transport http cronlight http://localhost:5099/ops/jobs/mcp --header "X-Demo-Role: admin"
+builder.Services.AddCronlightMcp(o => o.AllowActions = true);
+
 // Health of every scheduler served, for load balancers and Kubernetes probes: GET /healthz
 builder.Services.AddHealthChecks().AddCronlight();
 
@@ -95,6 +101,7 @@ app.MapGet("/demo/slow", async () =>
     return Results.Ok();
 });
 app.MapCronlight("/ops/jobs");
+app.MapCronlightMcp("/ops/jobs/mcp");
 app.MapHealthChecks("/healthz");
 
 app.Run();

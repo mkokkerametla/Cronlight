@@ -79,7 +79,10 @@ builder.Services.AddCronlightHistory(o =>
   and are not reported as misfires. Filter the History tab by *Misfired* to see them all.
 - **Retention** is applied hourly by every node and only touches its own scheduler's rows, so apps sharing
   a database keep their own retention.
-- **Your own store:** register an `IJobHistoryStore` before calling `AddCronlightHistory`.
+- **Your own store:** register an `IJobHistoryStore` before calling `AddCronlightHistory`. Its `Query` should honour
+  every filter of `JobHistoryQuery`, including `FiredFromUtc` and `FiredBeforeUtc`: the MCP server's analytics read a
+  window of runs with them. A store that ignores them still works, but reads every newer run first, so an answer about
+  a window long past can come back truncated.
 
 | Option | Default | |
 |---|---|---|

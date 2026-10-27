@@ -32,11 +32,14 @@
     <PackageReference Include="Quartz.Extensions.Hosting" Version="3.22.7" />
     <PackageReference Include="Quartz.Serialization.Json" Version="3.22.7" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.13" />
+    <!-- Test hosts with an OpenAPI document of their own reference it as such a host would, with its build settings -->
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Cronlight\Cronlight.csproj" />
     <ProjectReference Include="..\..\src\Cronlight.History\Cronlight.History.csproj" />
+    <ProjectReference Include="..\..\src\Cronlight.Mcp\Cronlight.Mcp.csproj" />
     <ProjectReference Include="..\QuartzSample.Jobs\QuartzSample.Jobs.csproj" />
   </ItemGroup>
 

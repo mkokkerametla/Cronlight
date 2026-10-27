@@ -16,17 +16,19 @@ namespace Cronlight;
 /// </summary>
 /// <param name="Action">
 /// create, update, pause, resume, trigger, cancel, cancel-retry or delete for one job; pause-group or resume-group for every
-/// job in <paramref name="JobGroup"/>, and pause-all or resume-all for every job in the scheduler, with an empty group.
-/// For these the job name is empty.
+/// job in <paramref name="JobGroup"/>, and pause-all or resume-all for every job in the scheduler, with an empty group;
+/// import, or import-dry-run when it only checked the file, for a file of jobs. For these the job name is empty.
 /// </param>
 /// <param name="User">The user's name, or "anonymous" when the dashboard allows anonymous access.</param>
 /// <param name="Error">Why the request was refused or failed; null when it succeeded.</param>
 /// <param name="Changes">
 /// What a create or update set, by field: description, triggers, retry, or data.&lt;key&gt;. For a run (trigger),
 /// the data changed for that run only, and retryOf when it repeats a failed run. For a group or the whole scheduler,
-/// jobs: how many jobs it held.
+/// jobs: how many jobs it held. For an import, &lt;group&gt;.&lt;name&gt; (created or updated) for each job it changed, and
+/// &lt;group&gt;.&lt;name&gt;: &lt;field&gt; for what it changed.
 /// </param>
 /// <param name="Scheduler">The scheduler the job is in.</param>
+/// <param name="Via">How the change was asked for: null for the dashboard or its API, mcp for an MCP client's tool call.</param>
 public sealed record CronlightAuditEvent(
     DateTimeOffset TimeUtc,
     string User,
@@ -37,7 +39,8 @@ public sealed record CronlightAuditEvent(
     int StatusCode,
     string? Error,
     IReadOnlyDictionary<string, CronlightAuditChange> Changes,
-    string? Scheduler = null
+    string? Scheduler = null,
+    string? Via = null
 );
 
 /// <summary>A field's value before and after a change; null where it was not set.</summary>
@@ -88,35 +91,47 @@ internal static class Audit
         });
     }
 
-    private static async Task Write(EndpointFilterInvocationContext context, object? result, Exception? failure, ILogger logger)
+    private static Task Write(EndpointFilterInvocationContext context, object? result, Exception? failure, ILogger logger)
     {
+        var (group, name) = Target(context);
         var http = context.HttpContext;
+        return Record(http, ActionName(http.Request), group, name, DashboardApi.RequestedScheduler(http), result, failure, logger);
+    }
+
+    /// <summary>
+    /// Writes the audit event for a change, or an attempt at one, that did not come through the API's endpoints, such as
+    /// an MCP tool call. What it changed is what the code it ran recorded with <see cref="RecordChanges"/>.
+    /// </summary>
+    /// <param name="scheduler">The scheduler's name; the host's own when empty.</param>
+    /// <param name="result">The outcome, as the API would answer it; its status code says whether it succeeded.</param>
+    internal static async Task Record(HttpContext http, string action, string group, string name, string? scheduler, object? result,
+        Exception? failure, ILogger logger, string? via = null)
+    {
         var status = failure is UnknownSchedulerException ? StatusCodes.Status404NotFound
             : failure != null ? StatusCodes.Status500InternalServerError
             : (result as IStatusCodeHttpResult)?.StatusCode ?? StatusCodes.Status200OK;
         var succeeded = status < 400;
-        var (group, name) = Target(context);
         var changes = http.Items[ChangesKey] as IReadOnlyDictionary<string, CronlightAuditChange> ?? NoChanges;
-        var scheduler = DashboardApi.RequestedScheduler(http) is { Length: > 0 } requested
-            ? requested
-            : (await http.RequestServices.GetRequiredService<CronlightSchedulers>().Default()).SchedulerName;
+        if (string.IsNullOrEmpty(scheduler))
+            scheduler = (await http.RequestServices.GetRequiredService<CronlightSchedulers>().Default()).SchedulerName;
 
         var auditEvent = new CronlightAuditEvent(
             DateTimeOffset.UtcNow,
             UserName(http.User),
-            ActionName(http.Request),
+            action,
             group,
             name,
             succeeded,
             status,
             succeeded ? null : failure?.Message ?? ErrorMessage(result) ?? ReasonPhrases.GetReasonPhrase(status),
             changes,
-            scheduler);
+            scheduler,
+            via);
 
         logger.Log(succeeded ? LogLevel.Information : LogLevel.Warning,
-            "Audit: {User} {AuditAction} {JobGroup}.{JobName} in {Scheduler}: {AuditOutcome} ({StatusCode}){AuditError} {AuditChanges}",
-            auditEvent.User, auditEvent.Action, group, name, scheduler, succeeded ? "succeeded" : "refused", status,
-            auditEvent.Error is { } error ? $" {error}" : "", changes.Count > 0 ? JsonSerializer.Serialize(changes) : "");
+            "Audit: {User} {AuditAction} {JobGroup}.{JobName} in {Scheduler}{AuditVia}: {AuditOutcome} ({StatusCode}){AuditError} {AuditChanges}",
+            auditEvent.User, auditEvent.Action, group, name, scheduler, via is null ? "" : $" via {via}", succeeded ? "succeeded" : "refused",
+            status, auditEvent.Error is { } error ? $" {error}" : "", changes.Count > 0 ? JsonSerializer.Serialize(changes) : "");
 
         foreach (var sink in http.RequestServices.GetServices<ICronlightAuditSink>())
         {
@@ -155,6 +170,8 @@ internal static class Audit
         var segments = (request.Path.Value ?? "").TrimEnd('/').Split('/');
         var last = segments[^1];
         var route = request.RouteValues;
+        if (last == "import")
+            return bool.TryParse(request.Query["dryRun"], out var dryRun) && dryRun ? "import-dry-run" : "import";
         return last == "jobs" ? "create"
             : route.ContainsKey("group") && !route.ContainsKey("name") ? $"{last}-group"
             : !route.ContainsKey("group") && segments.Length >= 2 && segments[^2] == "scheduler" ? $"{last}-all"

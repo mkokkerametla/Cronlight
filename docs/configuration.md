@@ -30,7 +30,19 @@ app.UseAuthorization();
 app.MapCronlight("/ops/jobs");
 ```
 
-Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
+Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`, and described at `/ops/jobs/api/openapi.json`.
+
+## The API's description
+
+`api/openapi.json` is an OpenAPI 3.1 document of every endpoint: what it takes, what it answers and its errors. Load
+it into a client generator, Postman or a Swagger UI the host serves. It is for those who may see the dashboard
+(`ViewPolicy`), as the rest of the API is.
+
+It is a document of its own, named `cronlight`, and the API's endpoints are in that document group. So the host's own
+OpenAPI documents leave them out: `AddOpenApi()`'s, and Swashbuckle's with its default rules, take endpoints with no
+group or their own. A host that wants them in its own document can include the `cronlight` group there. A host that
+serves Microsoft.AspNetCore.OpenApi's documents by name (`MapOpenApi()`) gets an empty `cronlight` document at
+`/openapi/cronlight.json`: the full one is only served at `api/openapi.json`, behind the dashboard's `ViewPolicy`.
 
 ## Options
 

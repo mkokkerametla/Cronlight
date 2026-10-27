@@ -24,8 +24,13 @@ second scheduler.
   late starts.
 - **Retries:** failed runs retried automatically, as set per job type or per job.
 - **Alerts:** Slack, Teams, webhook or email when a job fails, recovers or is stopped by Quartz.
-- **Operations:** an audit log of every change, OpenTelemetry metrics and a health check.
+- **Export and import:** jobs as JSON or YAML files, to move them between environments or keep them in source
+  control; an import says what it will change before changing anything.
+- **Operations:** an audit log of every change, OpenTelemetry metrics, a health check, and an OpenAPI description of
+  the API.
 - **Several schedulers** in one app, each with its own permissions.
+- **AI assistants** (optional package): an MCP server, so Claude, Copilot or any MCP client can read jobs, runs and
+  logs, and if you allow it pause, resume and run jobs, under the dashboard's permissions and audit log.
 
 ## Requirements
 
@@ -43,6 +48,7 @@ version (0.1.1) does not.
 ```bash
 dotnet add package Cronlight.Quartz.Dashboard
 dotnet add package Cronlight.Quartz.Dashboard.History   # optional: execution history
+dotnet add package Cronlight.Quartz.Dashboard.Mcp       # optional: an MCP server for AI assistants
 ```
 
 The setup below also calls `AddQuartzHostedService()`, from `Quartz.Extensions.Hosting` (or `Quartz.AspNetCore`).
@@ -81,7 +87,7 @@ app.UseAuthorization();
 app.MapCronlight("/ops/jobs");
 ```
 
-Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
+Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`, described by an OpenAPI document at `/ops/jobs/api/openapi.json`.
 
 - **Access:** without a `ViewPolicy`, the dashboard answers 403 outside the Development environment.
 - **Scripts:** requests that change jobs must send an `X-Cronlight-Request` header (any value), which keeps other
@@ -119,6 +125,8 @@ Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
 - [Retries and re-running](https://github.com/mkokkerametla/Cronlight/blob/main/docs/retries.md)
 - [Execution history](https://github.com/mkokkerametla/Cronlight/blob/main/docs/history.md)
 - [Failure alerts](https://github.com/mkokkerametla/Cronlight/blob/main/docs/alerts.md)
+- [Exporting and importing jobs](https://github.com/mkokkerametla/Cronlight/blob/main/docs/export-import.md)
+- [AI assistants (MCP server)](https://github.com/mkokkerametla/Cronlight/blob/main/docs/mcp.md)
 - [Audit log](https://github.com/mkokkerametla/Cronlight/blob/main/docs/audit.md)
 - [Metrics and health checks](https://github.com/mkokkerametla/Cronlight/blob/main/docs/metrics-and-health.md)
 - [Several schedulers in one app](https://github.com/mkokkerametla/Cronlight/blob/main/docs/schedulers.md)

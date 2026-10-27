@@ -56,6 +56,16 @@ These are listed so the roadmap below is read against them:
   dashboard that never starts its schedulers by the cluster's nodes.
 - Triggers keep their Quartz calendar, priority, description and data when their schedule is edited, and the
   job panel names the calendar and lists a trigger's next five fire times.
+- Export and import of jobs as JSON or YAML (`api/jobs/export`, `api/jobs/import`, and the All jobs menu): an import
+  creates and updates jobs to match the file, never deletes one, checks every job before changing any, and can be
+  checked first with a dry run. See [Exporting and importing jobs](export-import.md).
+- An OpenAPI 3.1 description of the API at `api/openapi.json`, a document of its own that the host's documents leave
+  out. See [Setup and options](configuration.md#the-apis-description).
+- An MCP server for AI assistants, in its own package (`Cronlight.Quartz.Dashboard.Mcp`): read-only tools for jobs,
+  runs, logs and failure and status summaries, and opt-in pause, resume, run and run again, on the dashboard's
+  permissions and audit log, and history analytics: per-job run statistics (success rate, average, median and P95
+  duration, compared with the window before), runs over time, and errors grouped across jobs. See
+  [AI assistants (MCP server)](mcp.md). The dashboard itself does not show these statistics yet (#29).
 
 ## How Cronlight compares
 
@@ -151,15 +161,13 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 - Branding options and an embedded mode for showing the dashboard inside an app's own layout ([#23](https://github.com/mkokkerametla/Cronlight/issues/23)).
 - Cancelling a run on any node of a cluster, through the store ([#27](https://github.com/mkokkerametla/Cronlight/issues/27); Quartz 4 does this).
 - An Activity tab showing the audit trail in the dashboard ([#28](https://github.com/mkokkerametla/Cronlight/issues/28)).
-- Run statistics: success rate and average and P95 duration over History and per job ([#29](https://github.com/mkokkerametla/Cronlight/issues/29)).
+- Run statistics in the dashboard: success rate and average and P95 duration over History and per job ([#29](https://github.com/mkokkerametla/Cronlight/issues/29)).
+  The MCP server's `run_statistics` already counts them, which the dashboard could show.
 - Attaching to a Quartz database and listing every scheduler in it ([#39](https://github.com/mkokkerametla/Cronlight/issues/39); Quartz 4 does this).
 
 ## 2.0
 
-- **Export and import** jobs as JSON or YAML, for moving jobs between environments and keeping them in
-  source control.
 - **Permissions per group**, and a "can run, can't edit" role.
-- **OpenAPI description** of the API.
 - **Schedules in plain words**: type "every weekday at 9:30" and an AI integration the host sets up turns it into
   cron, shown in the cron box with its preview to check before saving. Off unless the host turns it on, since
   what users type goes to that AI service. Until then, the trigger editor links to Quartz.NET's cron syntax.
@@ -175,8 +183,7 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 - Run logs are shown once a run has finished; a running job's log so far is not visible.
 - The misfire counter can count a misfire twice when a database store rolls back its misfire handling and
   reports it again; history keeps one record per misfire.
-
-- No end-to-end tests for alerts, which would need a webhook receiver in the sample host.
+- No end-to-end tests for email alerts or misfire alerts; the integration tests cover both.
 - On Quartz before 3.17, a job with a retry policy that fails with `RefireImmediately` is retried as well as
   refired: Quartz reports that attempt's end to listeners there, and the retry planner does not check for a
   refire. 3.17 and later do not report it, so it does not happen there. The tests run on 3.22.7, so this path

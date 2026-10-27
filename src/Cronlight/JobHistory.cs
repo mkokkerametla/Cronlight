@@ -82,6 +82,12 @@ public record JobHistoryQuery
     /// <summary>Keyset paging: only records with an Id lower than this.</summary>
     public long? BeforeId { get; init; }
 
+    /// <summary>Only records of runs that started at or after this time.</summary>
+    public DateTimeOffset? FiredFromUtc { get; init; }
+
+    /// <summary>Only records of runs that started before this time.</summary>
+    public DateTimeOffset? FiredBeforeUtc { get; init; }
+
     public int Limit { get; init; } = 50;
 }
 

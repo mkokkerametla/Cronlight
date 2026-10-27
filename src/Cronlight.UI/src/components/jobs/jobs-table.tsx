@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   ChevronLeft,
   ChevronRight,
+  Download,
   Inbox,
   MoreHorizontal,
   Pause,
@@ -9,8 +10,10 @@ import {
   PlayCircle,
   Plus,
   Search,
+  Upload,
   X,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -50,6 +53,7 @@ import {
 } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { StatusBadge } from '@/components/jobs/status-badge'
+import { exportJobs } from '@/api'
 import type { DashboardActions } from '@/hooks/use-dashboard'
 import {
   canResume,
@@ -79,6 +83,7 @@ interface Props {
   selectedKey: string | null
   onSelect: (job: Job) => void
   onNewJob: () => void
+  onImport: () => void
   actions: DashboardActions
 }
 
@@ -92,6 +97,7 @@ export function JobsTable({
   selectedKey,
   onSelect,
   onNewJob,
+  onImport,
   actions,
 }: Props) {
   const [search, setSearch] = useState(query.search)
@@ -239,11 +245,9 @@ export function JobsTable({
             <X /> Clear
           </Button>
         )}
-        {canManage && (
-          <div className="ml-auto">
-            <SchedulerActions actions={actions} />
-          </div>
-        )}
+        <div className="ml-auto">
+          <SchedulerActions actions={actions} canManage={canManage} onImport={onImport} />
+        </div>
         {canManage && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -577,9 +581,21 @@ function ConfirmBulk({
   )
 }
 
-/** Pauses or resumes every job in the scheduler, after asking */
-function SchedulerActions({ actions }: { actions: DashboardActions }) {
+/** Exports every job to a file; for managers also imports a file, and pauses or resumes every job, after asking */
+function SchedulerActions({
+  actions,
+  canManage,
+  onImport,
+}: {
+  actions: DashboardActions
+  canManage: boolean
+  onImport: () => void
+}) {
   const [confirming, setConfirming] = useState<BulkTarget | null>(null)
+  const download = (format: 'json' | 'yaml') =>
+    exportJobs(format).catch((err: Error) =>
+      toast.error('Could not export the jobs', { description: err.message })
+    )
   return (
     <>
       <DropdownMenu>
@@ -588,13 +604,27 @@ function SchedulerActions({ actions }: { actions: DashboardActions }) {
             <MoreHorizontal /> All jobs
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => setConfirming({ group: null, action: 'pause' })}>
-            <Pause /> Pause all jobs
+        <DropdownMenuContent align="end" className="w-auto">
+          <DropdownMenuItem onSelect={() => void download('yaml')}>
+            <Download /> Export as YAML
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setConfirming({ group: null, action: 'resume' })}>
-            <PlayCircle /> Resume all jobs
+          <DropdownMenuItem onSelect={() => void download('json')}>
+            <Download /> Export as JSON
           </DropdownMenuItem>
+          {canManage && (
+            <>
+              <DropdownMenuItem onSelect={onImport}>
+                <Upload /> Import jobs…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setConfirming({ group: null, action: 'pause' })}>
+                <Pause /> Pause all jobs
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setConfirming({ group: null, action: 'resume' })}>
+                <PlayCircle /> Resume all jobs
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       <ConfirmBulk target={confirming} onClose={() => setConfirming(null)} actions={actions} />

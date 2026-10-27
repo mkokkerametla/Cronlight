@@ -1,7 +1,7 @@
 # Behaviour worth knowing
 
-How the dashboard and its API behave: secrets, editing, triggers, pausing, cancelling, large schedulers, security
-headers and cross-site requests.
+How the dashboard and its API behave: secrets, editing, triggers, pausing, cancelling, large schedulers, exporting and
+importing, security headers and cross-site requests.
 
 - **Secrets** are shown as `********`. Saving a masked value back keeps the stored value. To keep them
   out of the database too, use [secret references](job-types.md#secret-references). A secret is a value whose key
@@ -9,6 +9,8 @@ headers and cross-site requests.
   matches `SensitiveKeyPatterns`. A run's secrets, resolved references included, are also masked in what it logs and
   in why it failed, as History and alerts show it. Quartz itself logs the exception a job throws, at Error level in
   the app's log, which Cronlight does not change: keep secrets out of exception messages, or filter that log.
+  [Exported files](export-import.md#secrets) hold them masked too, and importing a masked value keeps the stored
+  one.
 - **Editing job data** changes only what is edited. `PUT api/jobs/{group}/{name}` sets the data keys it sends and
   keeps the others: `{"data": {"region": "us"}}` changes one value, and a key sent as `null` is removed. Required
   parameters are checked on the data the job ends up with. The dashboard's edit form sends only the fields, values
@@ -52,7 +54,8 @@ headers and cross-site requests.
   undo for Resume, since pausing it would not stop it again.
 - **Layout:** the dashboard uses the window's full width; the Layout menu in the header narrows it to a centred
   column, and makes table rows compact. Both are remembered in the browser, as the theme is.
-- **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
+- **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only, and left out
+  of exports.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.
 - **A cluster by its nodes.** For a clustered scheduler on a database store whose connection Cronlight has (the
@@ -73,7 +76,7 @@ headers and cross-site requests.
   `X-Frame-Options: DENY`), `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. To
   embed the dashboard in your portal:
   `o.ContentSecurityPolicy = CronlightOptions.DefaultContentSecurityPolicy.Replace("frame-ancestors 'none'", "frame-ancestors https://portal.contoso.com");`
-- **Cross-site requests** cannot change jobs. Requests that create, edit, pause, run or delete must
+- **Cross-site requests** cannot change jobs. Requests that create, edit, pause, run, delete or import must
   send an `X-Cronlight-Request` header (any value), which the dashboard does and another site cannot,
   and browser requests marked `Sec-Fetch-Site: cross-site` are refused. Scripts calling the API add the
   header, e.g. `curl -X POST -H "X-Cronlight-Request: 1" …/api/jobs/DEFAULT/nightly/trigger`. Reads
@@ -104,3 +107,9 @@ headers and cross-site requests.
   scheduler that holds jobs of another app (types
   not loadable here) is refused unless `AllowManagingUnloadableJobs` is on, rather than half done. Audited as
   `pause-group`, `resume-group`, `pause-all` and `resume-all`.
+- **Exporting and importing.** "All jobs" also exports every job as YAML or JSON, and imports a file after showing
+  what it would change (`GET api/jobs/export`, `POST api/jobs/import`). An import creates and updates jobs to match
+  the file, never deletes one, and changes nothing if any of its jobs cannot be imported. See
+  [Exporting and importing jobs](export-import.md).
+- **The API is described** by an OpenAPI 3.1 document at `api/openapi.json`, which the host's own OpenAPI documents
+  leave out. See [The API's description](configuration.md#the-apis-description).

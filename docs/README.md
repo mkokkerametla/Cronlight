@@ -7,11 +7,13 @@ They are also on the [website](https://cronlight.pages.dev/docs/), next to a [li
 
 | Page | |
 |---|---|
-| [Setup and options](configuration.md) | Adding Cronlight to an app, and every option it takes |
+| [Setup and options](configuration.md) | Adding Cronlight to an app, every option it takes, and the API's OpenAPI description |
 | [Job types and secrets](job-types.md) | Forms for your job types, masked secrets, and secret references kept out of the database |
 | [Retries and re-running](retries.md) | Retrying failed runs automatically, and running a job again by hand |
 | [Execution history](history.md) | The optional package: every run, what it logged, misfires, late starts and runs that never finished |
 | [Failure alerts](alerts.md) | Slack, Teams, webhook, email or your own sink when jobs fail, recover, stop or misfire |
+| [Exporting and importing jobs](export-import.md) | Jobs as JSON or YAML files, to move them between environments or keep them in source control |
+| [AI assistants (MCP server)](mcp.md) | The optional package that lets Claude, Copilot or any MCP client read jobs, runs and logs, and act on jobs if allowed |
 | [Audit log](audit.md) | What is recorded for every change, and how to keep it in your own store |
 | [Metrics and health checks](metrics-and-health.md) | OpenTelemetry metrics for every run, and a health check per scheduler |
 | [Several schedulers in one app](schedulers.md) | Serving schedulers the app builds in code, with permissions per scheduler |

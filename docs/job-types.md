@@ -47,7 +47,9 @@ Azure Key Vault through its configuration provider (a vault secret named `JobSec
   parameters `secret:…` is plain text, so a secret cannot be copied into a URL or request body.
 - The API checks references when a job is saved and refuses unknown names. A run whose secret is missing
   (removed from configuration later, or a job saved by code) is vetoed and history shows why.
-- References are not secret, so the UI and audit log show them as written.
+- References are not secret, so the UI and audit log show them as written, and [exported files](export-import.md)
+  keep them: a job moved to another environment with its file reads the secret from that environment's
+  configuration.
 - The value replaces the reference in the run's `context.MergedJobDataMap`, which is where jobs should
   read it. The stored job keeps the reference. `context.JobDetail.JobDataMap` holds the reference too.
 - Every app that runs these jobs (each cluster node) needs `AddCronlight` with the same `SecretsSection`
