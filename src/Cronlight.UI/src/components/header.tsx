@@ -34,7 +34,10 @@ const toneDot: Record<Tone, string> = {
 /** A cluster by its nodes, which may all be other processes; otherwise this process, which is the scheduler */
 function schedulerState(scheduler: SchedulerInfo): { label: string; tone: Tone } {
   if (scheduler.clusterNodes) {
-    const alive = scheduler.clusterNodes.filter(n => n.alive).length
+    // A node in standby keeps checking in; only this one's standby can be seen
+    const alive = scheduler.clusterNodes.filter(
+      n => n.alive && !(n.thisNode && scheduler.inStandbyMode)
+    ).length
     return alive > 0
       ? { label: `Running · ${alive} ${alive === 1 ? 'node' : 'nodes'}`, tone: 'running' }
       : { label: 'No nodes running', tone: 'warning' }
@@ -104,9 +107,13 @@ export function Header({
 
 type Rows = [string, string][]
 
-/** "3 sec. ago", "2 min. ago", from the server's count */
+/** "3 sec. ago", "2 min. ago", "5 hr. ago", from the server's count */
 const ago = (seconds: number) =>
-  seconds < 60 ? `${seconds} sec. ago` : `${Math.floor(seconds / 60)} min. ago`
+  seconds < 60
+    ? `${seconds} sec. ago`
+    : seconds < 3600
+      ? `${Math.floor(seconds / 60)} min. ago`
+      : `${Math.floor(seconds / 3600)} hr. ago`
 
 function SystemInfo({ scheduler }: { scheduler: SchedulerInfo }) {
   const nodes = scheduler.clusterNodes
@@ -185,7 +192,11 @@ function SystemInfo({ scheduler }: { scheduler: SchedulerInfo }) {
             ) : (
               <ul className="space-y-1.5 px-2 py-1.5 text-sm">
                 {nodes.map(n => (
-                  <li key={n.instanceId} className="flex items-center justify-between gap-2">
+                  <li
+                    key={n.instanceId}
+                    className="flex items-center justify-between gap-2"
+                    title={formatDateTime(n.lastCheckinUtc)}
+                  >
                     <span className="min-w-0 truncate font-mono text-xs" title={n.instanceId}>
                       {n.instanceId}
                     </span>
@@ -194,7 +205,9 @@ function SystemInfo({ scheduler }: { scheduler: SchedulerInfo }) {
                       {n.alive ? (
                         `checked in ${ago(n.secondsSinceCheckin)}`
                       ) : (
-                        <span className="text-amber-700 dark:text-amber-400">not responding</span>
+                        <span className="text-amber-700 dark:text-amber-400">
+                          {`not responding · ${ago(n.secondsSinceCheckin)}`}
+                        </span>
                       )}
                     </span>
                   </li>

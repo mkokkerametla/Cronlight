@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { ThemeProvider } from 'next-themes'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Header } from '@/components/header'
+import { formatDateTime } from '@/lib/format'
 import { scheduler } from '@/test/fixtures'
 import type { ClusterNode, SchedulerInfo } from '@/types'
 
@@ -61,6 +62,18 @@ describe('Header', () => {
       expect(screen.queryByText('Stopped')).toBeNull()
     }
   )
+
+  // Quartz keeps a node in standby checking in; only this node's standby can be seen
+  it.each([
+    [[node('node-1', { thisNode: true })], 'No nodes running'],
+    [[node('node-1', { thisNode: true }), node('node-2')], 'Running · 1 node'],
+  ])('does not count this node as running while it is in standby: %#', (clusterNodes, label) => {
+    renderHeader(
+      scheduler({ jobStoreClustered: true, started: true, inStandbyMode: true, clusterNodes })
+    )
+
+    expect(screen.getByText(label)).toBeInTheDocument()
+  })
 
   it('says no nodes are running, and none checked in, for a cluster without nodes', async () => {
     renderHeader(scheduler({ jobStoreClustered: true, started: false, clusterNodes: [] }))
@@ -130,9 +143,27 @@ describe('Header', () => {
     expect(screen.getByText('Not started (manages only)')).toBeInTheDocument()
     expect(screen.getByText('worker-a')).toBeInTheDocument()
     expect(screen.getByText('checked in 3 sec. ago')).toBeInTheDocument()
-    expect(screen.getByText('not responding')).toBeInTheDocument()
+    expect(screen.getByText('not responding · 5 min. ago')).toBeInTheDocument()
+    expect(screen.getByText('worker-a').closest('li')).toHaveAttribute(
+      'title',
+      formatDateTime('2030-01-01T00:00:00Z')
+    )
     for (const perProcess of ['Instance', 'Threads', 'Jobs executed', 'Running since'])
       expect(screen.queryByText(perProcess)).toBeNull()
+  })
+
+  it('says in hours how long ago a node stopped responding', async () => {
+    renderHeader(
+      scheduler({
+        jobStoreClustered: true,
+        started: false,
+        clusterNodes: [node('worker-a', { alive: false, secondsSinceCheckin: 7200 })],
+      })
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Scheduler details' }))
+
+    expect(screen.getByText('not responding · 2 hr. ago')).toBeInTheDocument()
   })
 
   it('marks this node, with its own state, when this process is one of the nodes', async () => {
