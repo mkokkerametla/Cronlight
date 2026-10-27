@@ -7,8 +7,8 @@ using System.Text.RegularExpressions;
 namespace Cronlight.Tests;
 
 /// <summary>
-/// Just enough SMTP on a loopback port to receive what SmtpClient sends: no TLS and no sign-in. Keeps each
-/// message's recipients and decoded subject and body.
+/// Just enough SMTP on a loopback port to receive what SmtpClient sends: no TLS, and sign-in with AUTH LOGIN, which
+/// accepts anyone. Keeps each message's recipients and decoded subject and body, and who signed in.
 /// </summary>
 public sealed class FakeSmtpServer : IAsyncDisposable
 {
@@ -17,6 +17,7 @@ public sealed class FakeSmtpServer : IAsyncDisposable
     private readonly Task accepting;
 
     public ConcurrentQueue<Email> Messages { get; } = new();
+    public ConcurrentQueue<(string UserName, string Password)> SignIns { get; } = new();
     public int Port => ((IPEndPoint)listener.LocalEndpoint).Port;
 
     public record Email(IReadOnlyList<string> To, string Subject, string Body);
@@ -68,7 +69,19 @@ public sealed class FakeSmtpServer : IAsyncDisposable
             {
                 case "EHLO":
                     await writer.WriteLineAsync("250-localhost");
+                    await writer.WriteLineAsync("250-AUTH LOGIN");
                     await writer.WriteLineAsync("250 8BITMIME");
+                    break;
+                case "AUTH":
+                    // The user name may come with the command; each prompt is "Username:" or "Password:" in base64
+                    static string Decode(string? text) => Encoding.UTF8.GetString(Convert.FromBase64String(text ?? ""));
+                    var parts = line.Split(' ');
+                    if (parts.Length < 3)
+                        await writer.WriteLineAsync("334 VXNlcm5hbWU6");
+                    var userName = Decode(parts.Length >= 3 ? parts[2] : await reader.ReadLineAsync());
+                    await writer.WriteLineAsync("334 UGFzc3dvcmQ6");
+                    SignIns.Enqueue((userName, Decode(await reader.ReadLineAsync())));
+                    await writer.WriteLineAsync("235 Authentication successful");
                     break;
                 case "RCPT":
                     to.Add(Regex.Match(line, "<(.*)>").Groups[1].Value);

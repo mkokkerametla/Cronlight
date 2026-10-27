@@ -1,7 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Quartz;
 
 namespace Cronlight.Tests;
 
@@ -144,6 +148,27 @@ public class MetricsTests
         var stopped = (await health.CheckHealthAsync()).Entries["cronlight"];
         Assert.Equal(HealthStatus.Unhealthy, stopped.Status);
         Assert.Equal($"{host.SchedulerName} has shut down", stopped.Description);
+    }
+
+    [Fact]
+    public async Task The_health_check_fails_when_the_scheduler_cannot_be_created()
+    {
+        // A database store with no database: Quartz refuses to create the scheduler. Without Quartz's hosted service, as
+        // for a host that starts its scheduler later, the app runs and its health check is what says so.
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.Replace(ServiceDescriptor.Singleton<ILoggerFactory>(ErrorFileLoggerFactory.Instance));
+        builder.Services.AddQuartz(q =>
+        {
+            q.SchedulerName = $"broken-{Guid.NewGuid():N}";
+            q.UsePersistentStore(store => store.UseNewtonsoftJsonSerializer());
+        });
+        builder.Services.AddHealthChecks().AddCronlight();
+        using var host = builder.Build();
+
+        var entry = (await host.Services.GetRequiredService<HealthCheckService>().CheckHealthAsync()).Entries["cronlight"];
+        Assert.Equal(HealthStatus.Unhealthy, entry.Status);
+        Assert.StartsWith("the scheduler could not be created: ", entry.Description);
+        Assert.NotNull(entry.Exception);
     }
 
     [Fact]
