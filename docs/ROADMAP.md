@@ -177,8 +177,7 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 - Run logs are shown once a run has finished; a running job's log so far is not visible.
 - The misfire counter can count a misfire twice when a database store rolls back its misfire handling and
   reports it again; history keeps one record per misfire.
-
-- No end-to-end tests for alerts, which would need a webhook receiver in the sample host.
+- No end-to-end tests for email alerts or misfire alerts; the integration tests cover both.
 - On Quartz before 3.17, a job with a retry policy that fails with `RefireImmediately` is retried as well as
   refired: Quartz reports that attempt's end to listeners there, and the retry planner does not check for a
   refire. 3.17 and later do not report it, so it does not happen there. The tests run on 3.22.7, so this path

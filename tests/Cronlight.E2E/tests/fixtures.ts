@@ -4,13 +4,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { test as base } from '@playwright/test'
 import { sampleHostDir, sampleHostDll } from '../global-setup'
+import { WebhookReceiver } from './webhooks'
 
 export { expect } from '@playwright/test'
 
-/** The sample host a worker's tests run against, and the SQLite file it keeps its jobs and history in. */
+/**
+ * The sample host a worker's tests run against, the SQLite file it keeps its jobs and history in, and the receiver
+ * its alerts are posted to.
+ */
 export interface SampleHost {
   baseURL: string
   database: string
+  webhooks: WebhookReceiver
 }
 
 const basePort = Number(process.env.E2E_PORT ?? 5199)
@@ -25,6 +30,8 @@ export const test = base.extend<object, { sampleHost: SampleHost }>({
     async ({}, use, workerInfo) => {
       const port = basePort + workerInfo.parallelIndex
       const database = path.join(os.tmpdir(), `cronlight-e2e-${process.pid}-${workerInfo.workerIndex}.db`)
+      const baseURL = `http://127.0.0.1:${port}/ops/jobs/`
+      const webhooks = await WebhookReceiver.start()
       const host = spawn('dotnet', [sampleHostDll], {
         cwd: sampleHostDir,
         stdio: ['ignore', 'ignore', 'pipe'],
@@ -37,6 +44,9 @@ export const test = base.extend<object, { sampleHost: SampleHost }>({
           Cronlight__ManagePolicy: 'QuartzAdmins',
           // Views refresh every second instead of every 10, so tests wait less for changes to show
           Cronlight__RefreshSeconds: '1',
+          // The sample alerts after two failures in a row
+          ...webhooks.settings,
+          CronlightAlerts__DashboardUrl: baseURL,
         },
       })
       let stderr = ''
@@ -45,13 +55,14 @@ export const test = base.extend<object, { sampleHost: SampleHost }>({
 
       try {
         await waitUntilServing(`http://127.0.0.1:${port}/`, exited, () => stderr)
-        await use({ baseURL: `http://127.0.0.1:${port}/ops/jobs/`, database })
+        await use({ baseURL, database, webhooks })
       } finally {
         host.kill('SIGTERM')
         // The sample waits for running jobs on shutdown; a long one is not worth waiting for
         const killed = setTimeout(() => host.kill('SIGKILL'), 5_000)
         await exited
         clearTimeout(killed)
+        await webhooks.close()
         await Promise.all(['', '-wal', '-shm'].map(suffix => rm(database + suffix, { force: true })))
       }
     },

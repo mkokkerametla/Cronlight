@@ -17,6 +17,7 @@ interface CreateJob {
   group?: string
   data?: Record<string, string>
   triggers?: { name?: string; cronExpression: string; timeZone?: string }[]
+  retry?: { maxRetries: number; delaySeconds: number; exponential?: boolean }
 }
 
 /** Arranges a job through the API, for tests whose subject is something else. */

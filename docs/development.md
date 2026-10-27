@@ -110,7 +110,8 @@ search, filters and paging of the job list, the stat cards, the running jobs vie
 history (paging, job filter, failing and succeeding HTTP jobs, run logs with secrets masked), retries,
 running a job with different data, running a failed run again, exporting and importing jobs, read-only jobs from
 other apps sharing the scheduler, server errors, changes made elsewhere, a lost connection, viewer and anonymous
-access, the scheduler details and the theme switch.
+access, the scheduler details and the theme switch. Each worker also runs a webhook receiver that its host posts
+alerts to, as JSON, Slack and Teams webhooks, for the tests of failure and recovery alerts.
 They need Node.js 22.13 or later, for its built-in SQLite module.
 
 ```bash
