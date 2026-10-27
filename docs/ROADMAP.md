@@ -39,7 +39,8 @@ These are listed so the roadmap below is read against them:
     for cron triggers; runs that start 5 seconds late or more are marked; the run that catches up after a
     misfire is recorded at the fire time it makes up for.
   - Several schedulers: permissions per scheduler (`o.Schedulers[name]`); an added scheduler given its
-    properties is read from its tables, like the host's own.
+    properties is read from its tables, like the host's own; each scheduler can offer only its own app's job
+    types in New job (`o.Schedulers[name].JobAssemblies`).
 - Log output for each run: what a job logs through `ILogger` while it runs is kept with that run in history
   (`RUN_LOG` column), with sensitive job data values masked, and shown in the History tab. Captured by
   wrapping the host's job factory, so the log follows the run's async flow; a scheduler built in code opts in
@@ -50,6 +51,11 @@ These are listed so the roadmap below is read against them:
   another app's jobs, and audited.
 - OpenTelemetry metrics on the `Cronlight` meter (runs by outcome, duration, active runs, misfires) and a
   health check (`AddHealthChecks().AddCronlight()`) for shut-down or unreachable job stores.
+- Clustered schedulers by their nodes: the header says how many nodes run the scheduler, read from
+  `QRTZ_SCHEDULER_STATE`, the scheduler details list them, and `AddCronlight(checkCluster: true)` checks a
+  dashboard that never starts its schedulers by the cluster's nodes.
+- Triggers keep their Quartz calendar, priority, description and data when their schedule is edited, and the
+  job panel names the calendar and lists a trigger's next five fire times.
 
 ## How Cronlight compares
 
@@ -99,6 +105,13 @@ every node as `NON_CLUSTERED`, so nodes could take each other's fired triggers, 
 error committing half a fire batch (duplicate firings on PostgreSQL, triggers stuck `BLOCKED` on SQL Server
 and MySQL). 4.6.0 also added three more schema migrations. 3.x is still maintained (3.22.7 on the same day).
 
+**Checked again on 2026-10-27: still wait.** 4.6.1 (2026-10-26) fixed a start resetting declared triggers' run
+state, so a trigger with a set number of runs ran them again, a retry pending at shutdown was dropped and a
+trigger an operator paused was resumed. That restarts the four weeks below: 2026-11-23 at the earliest. 4.6.2 the
+same day fixed time zone names only. Open: [quartznet#4173](https://github.com/quartznet/quartznet/issues/4173), a non-concurrent job's next run starting about 70 ms
+later on 4.x's database stores than on 3.x, with stalls of seconds early in a backlog. 3.22.8 and 3.22.9 shipped
+the same fixes for 3.x.
+
 Move when all of these hold:
 
 - at least four weeks after the latest 4.x release with no data-integrity, clustering or
@@ -109,7 +122,8 @@ Move when all of these hold:
 The packages still require only Quartz 3.13.1, so a host is not moved to a later 3.x by installing Cronlight:
 [quartznet#4167](https://github.com/quartznet/quartznet/issues/4167), open since 2026-10-25, makes
 non-concurrent jobs with many triggers start 15–35 seconds late on 3.19.1 and 3.22.7, but not on 3.13.0.
-Check it before raising that minimum. The tests and the sample run on the latest 3.x (3.22.7 since
+3.22.8 makes such a job's completion read only its misfired triggers, which shortens that drain; check it before
+raising that minimum. The tests and the sample run on the latest 3.x (3.22.7 since
 2026-10-26), and the package smoke test on 3.13.1. Cronlight targets .NET 10 only since 2026-10-26 (.NET 8
 support ends 2026-11-10); hosts on .NET 8 can stay on 0.1.0-beta.2.
 
@@ -124,10 +138,21 @@ affected. To decide:
 - Process-global singletons are gone in 4.x, so `UseCronlight`'s reason for being opt-in (the
   process-wide scheduler registry) may not apply there.
 
-### Live updates
+### Not planned now
 
-Push changes (runs starting and finishing, jobs paused) to the dashboard, for example with server-sent
-events or SignalR, and fall back to the current polling.
+- **Live updates** (an event stream and a Live view, [#26](https://github.com/mkokkerametla/Cronlight/issues/26)) are not planned: polling every 10 seconds suits a
+  jobs dashboard, and a stream brings proxy, fallback and cluster limits (a node only sees its own events). A
+  running job's log so far could later be read on each refresh, without a stream.
+
+### Deferred
+
+Waiting for a user who asks for them, or for Quartz 4, which does some of them itself:
+
+- Branding options and an embedded mode for showing the dashboard inside an app's own layout ([#23](https://github.com/mkokkerametla/Cronlight/issues/23)).
+- Cancelling a run on any node of a cluster, through the store ([#27](https://github.com/mkokkerametla/Cronlight/issues/27); Quartz 4 does this).
+- An Activity tab showing the audit trail in the dashboard ([#28](https://github.com/mkokkerametla/Cronlight/issues/28)).
+- Run statistics: success rate and average and P95 duration over History and per job ([#29](https://github.com/mkokkerametla/Cronlight/issues/29)).
+- Attaching to a Quartz database and listing every scheduler in it ([#39](https://github.com/mkokkerametla/Cronlight/issues/39); Quartz 4 does this).
 
 ## 2.0
 
