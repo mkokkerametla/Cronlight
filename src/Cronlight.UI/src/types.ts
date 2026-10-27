@@ -224,6 +224,30 @@ export interface RunJobRequest {
   retryOf?: string
 }
 
+/** A field's value before and after a change, as the audit log records it: secrets masked */
+export interface FieldChange {
+  before: string | null
+  after: string | null
+}
+
+/** What importing a file does, or would do, to one job (api/jobs/import) */
+export interface ImportedJob {
+  group: string
+  name: string
+  action: 'create' | 'update' | 'unchanged' | 'error'
+  error: string | null
+  /** By field: description, triggers, retry, or data.<key> */
+  changes: Record<string, FieldChange>
+}
+
+export interface ImportResult {
+  dryRun: boolean
+  created: number
+  updated: number
+  unchanged: number
+  jobs: ImportedJob[]
+}
+
 export type JobAction = 'trigger' | 'pause' | 'resume'
 
 /** Pausing or resuming every job in a group, or in the scheduler */

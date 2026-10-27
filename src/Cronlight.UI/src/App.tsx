@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Header } from '@/components/header'
 import { HistoryTable } from '@/components/history/history-table'
 import { CreateJobSheet } from '@/components/jobs/create-job-sheet'
+import { ImportJobsSheet } from '@/components/jobs/import-jobs-sheet'
 import { JobSheet } from '@/components/jobs/job-sheet'
 import { JobsTable } from '@/components/jobs/jobs-table'
 import { RunningTable } from '@/components/running-table'
@@ -48,6 +49,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>(initial.historyFilter)
   const [selection, setSelection] = useState<Pick<Job, 'group' | 'name'> | null>(initial.selection)
   const [creating, setCreating] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [layout, changeLayout] = useLayout()
 
   // The address follows the view. Another tab, or a job opened, is a step Back returns from; filters, paging and
@@ -217,6 +219,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
                     selectedKey={selectedKey}
                     onSelect={job => setSelection({ group: job.group, name: job.name })}
                     onNewJob={() => setCreating(true)}
+                    onImport={() => setImporting(true)}
                     actions={actions}
                   />
                 </TabsContent>
@@ -261,6 +264,11 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
           jobTypes={jobTypes}
           secretReferences={secretReferences}
           onCreate={actions.create}
+        />
+        <ImportJobsSheet
+          open={importing}
+          onOpenChange={setImporting}
+          onImported={() => void refresh()}
         />
       </div>
     </RefreshInterval.Provider>

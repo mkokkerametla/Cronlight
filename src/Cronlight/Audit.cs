@@ -16,15 +16,16 @@ namespace Cronlight;
 /// </summary>
 /// <param name="Action">
 /// create, update, pause, resume, trigger, cancel, cancel-retry or delete for one job; pause-group or resume-group for every
-/// job in <paramref name="JobGroup"/>, and pause-all or resume-all for every job in the scheduler, with an empty group.
-/// For these the job name is empty.
+/// job in <paramref name="JobGroup"/>, and pause-all or resume-all for every job in the scheduler, with an empty group;
+/// import, or import-dry-run when it only checked the file, for a file of jobs. For these the job name is empty.
 /// </param>
 /// <param name="User">The user's name, or "anonymous" when the dashboard allows anonymous access.</param>
 /// <param name="Error">Why the request was refused or failed; null when it succeeded.</param>
 /// <param name="Changes">
 /// What a create or update set, by field: description, triggers, retry, or data.&lt;key&gt;. For a run (trigger),
 /// the data changed for that run only, and retryOf when it repeats a failed run. For a group or the whole scheduler,
-/// jobs: how many jobs it held.
+/// jobs: how many jobs it held. For an import, &lt;group&gt;.&lt;name&gt; (created or updated) for each job it changed, and
+/// &lt;group&gt;.&lt;name&gt;: &lt;field&gt; for what it changed.
 /// </param>
 /// <param name="Scheduler">The scheduler the job is in.</param>
 public sealed record CronlightAuditEvent(
@@ -155,6 +156,8 @@ internal static class Audit
         var segments = (request.Path.Value ?? "").TrimEnd('/').Split('/');
         var last = segments[^1];
         var route = request.RouteValues;
+        if (last == "import")
+            return bool.TryParse(request.Query["dryRun"], out var dryRun) && dryRun ? "import-dry-run" : "import";
         return last == "jobs" ? "create"
             : route.ContainsKey("group") && !route.ContainsKey("name") ? $"{last}-group"
             : !route.ContainsKey("group") && segments.Length >= 2 && segments[^2] == "scheduler" ? $"{last}-all"

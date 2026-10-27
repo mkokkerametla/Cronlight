@@ -132,6 +132,12 @@ internal record UpdateJobRequest(string? Description, Dictionary<string, string?
 /// <param name="RetryOf">The fire instance id of the failed run this one retries, for the audit log.</param>
 internal record RunJobRequest(Dictionary<string, string>? Data, string? RetryOf = null);
 
+/// <summary>A create or update, checked and ready to carry out.</summary>
+/// <param name="Changes">What it changes, by field, as the audit log records it.</param>
+/// <param name="Triggers">The job's triggers of the kinds it sets, once carried out.</param>
+internal sealed record JobChange(JobKey Key, Dictionary<string, CronlightAuditChange> Changes, IReadOnlyList<TriggerKey> Triggers,
+    Func<IScheduler, Task> Apply);
+
 internal record CronPreviewDto(bool IsValid, string Expression, string? Description, IReadOnlyList<DateTimeOffset> NextFireTimes, string? ErrorMessage);
 
 internal static class DashboardApi
@@ -154,7 +160,7 @@ internal static class DashboardApi
     public static string RequestedScheduler(HttpContext http) => http.Request.Query[SchedulerParameter].ToString();
 
     /// <summary>The scheduler the request asks for, else the host's own. An unknown name ends the request with 404.</summary>
-    private static async Task<IScheduler> Scheduler(HttpContext http, CancellationToken cancellationToken = default) =>
+    internal static async Task<IScheduler> Scheduler(HttpContext http, CancellationToken cancellationToken = default) =>
         await http.RequestServices.GetRequiredService<CronlightSchedulers>().Find(RequestedScheduler(http), cancellationToken)
         ?? throw new UnknownSchedulerException(RequestedScheduler(http));
 
@@ -408,6 +414,8 @@ internal static class DashboardApi
             return Results.Ok(await store.Summarize(scheduler.SchedulerName, since, ct));
         });
 
+        api.MapGet("/jobs/export", JobTransfer.Export);
+
         api.MapGet("/cron/preview", (string expression, string? timeZone, int? count) =>
         {
             if (!TryResolveTimeZone(timeZone, out var tz))
@@ -437,137 +445,28 @@ internal static class DashboardApi
     {
         api.MapPost("/jobs", async (CreateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
-            var typeName = string.IsNullOrWhiteSpace(request.Type) ? request.JobType : request.Type;
-            if (string.IsNullOrWhiteSpace(typeName))
-                return Invalid("A job type is required: set 'type' to one of the types listed by api/job-types");
-            if (string.IsNullOrWhiteSpace(request.Name))
-                return Invalid("A job name is required");
-            if (HasControlCharacters(request.Name) || HasControlCharacters(request.Group))
-                return Invalid("Job names and groups cannot contain control characters, such as line breaks or tabs");
-            if (!catalog.TryGet(typeName, out var type, out var info))
-                return Invalid($"Unknown job type '{typeName}'");
             var scheduler = await Scheduler(http);
-            if (!catalog.Offers(scheduler.SchedulerName, typeName))
-                return Invalid($"Job type '{typeName}' is not offered for scheduler '{scheduler.SchedulerName}'");
-
-            var data = request.Data ?? new();
-            foreach (var p in info.Parameters.Where(p => p.DefaultValue != null && !data.ContainsKey(p.Key)))
-                data[p.Key] = p.DefaultValue!;
-
-            if (ReservedKey(data.Keys) is { } reserved)
-                return Invalid(reserved);
-            if (ValidateParameters(info, data) is { } invalid)
-                return Invalid(invalid);
-            if (request.Retry?.Problem() is { } badRetry)
-                return Invalid(badRetry);
-            var secretKeys = SecretKeys(type);
-            if (CheckSecretReferences(http, data, secretKeys, options.Value) is { } unresolved)
-                return Invalid(unresolved);
-
-            var key = new JobKey(request.Name, string.IsNullOrWhiteSpace(request.Group) ? "DEFAULT" : request.Group);
-            if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
-                return Invalid(error);
-
-            if (await scheduler.CheckExists(key))
-                return Refused($"Job {key} already exists");
-            if (await FindTriggerConflict(scheduler, triggers, new HashSet<TriggerKey>()) is { } conflict)
-                return Refused(conflict);
-
-            var jobData = ToJobDataMap(data);
-            if (request.Retry != null && Retries.Store(request.Retry, type) is { } policy)
-                jobData[Retries.PolicyKey] = policy;
-            var job = JobBuilder.Create(type)
-                .WithIdentity(key)
-                .WithDescription(request.Description)
-                .SetJobData(jobData)
-                .StoreDurably()
-                .Build();
-
-            var changes = DataChanges(new Dictionary<string, object>(), job.JobDataMap, secretKeys, options.Value);
-            AddChange(changes, "description", null, request.Description);
-            AddChange(changes, "triggers", null, DescribeTriggers(triggers));
-            AddChange(changes, "retry", null, DescribeRetry(Retries.For(job)));
-            Audit.RecordChanges(http, changes);
-
-            // One call stores the job and its triggers together, so a failure leaves nothing behind
-            await scheduler.ScheduleJob(job, triggers, replace: false);
-
-            return Results.Created($"jobs/{Uri.EscapeDataString(key.Group)}/{Uri.EscapeDataString(key.Name)}", new { key.Name, key.Group });
+            var (change, problem) = await PlanCreate(scheduler, request, http, catalog, options.Value);
+            if (change == null)
+                return problem!;
+            Audit.RecordChanges(http, change.Changes);
+            await change.Apply(scheduler);
+            return Results.Created($"jobs/{Uri.EscapeDataString(change.Key.Group)}/{Uri.EscapeDataString(change.Key.Name)}",
+                new { change.Key.Name, change.Key.Group });
         });
 
         api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             var scheduler = await Scheduler(http);
-            var key = JobKeyFrom(group, name);
-            var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
-            if (problem != null)
-                return problem;
-            if (existing == null)
-                return ReadOnlyJob(key, "edited");
-
-            // Validate everything before mutating anything
-            var info = catalog.Describe(existing.JobType);
-            var secretKeys = SecretKeys(existing.JobType);
-            var setValues = request.Data?.Where(kv => kv.Value != null).ToDictionary(kv => kv.Key, kv => kv.Value!);
-            if (request.Data != null && ReservedKey(request.Data.Keys) is { } reserved)
-                return Invalid(reserved);
-            // The data the job will have, so a required parameter cannot be removed either
-            if (request.Data != null && info != null && ValidateParameters(info, Merged(existing.JobDataMap, request.Data)) is { } invalid)
-                return Invalid(invalid);
-            if (request.Retry?.Problem() is { } badRetry)
-                return Invalid(badRetry);
-            if (setValues != null && CheckSecretReferences(http, setValues, secretKeys, options.Value) is { } unresolved)
-                return Invalid(unresolved);
-
-            var requested = new List<ITrigger>();
-            IReadOnlyCollection<ITrigger> current = [];
-            IReadOnlySet<string> kinds = EditableKinds;
-            if (request.Triggers != null)
-            {
-                if (!TryReplacedKinds(request, out kinds, out var badKinds))
-                    return Invalid(badKinds);
-                current = await scheduler.GetTriggersOfJob(key);
-                if (!TryBuildTriggers(key, request.Triggers, current, out requested, out var error))
-                    return Invalid(error);
-                if (await FindExcludedTrigger(scheduler, requested) is { } excluded)
-                    return Invalid(excluded);
-                var own = current.Where(t => kinds.Contains(Kind(t))).Select(t => t.Key).ToHashSet();
-                if (await FindTriggerConflict(scheduler, requested, own) is { } conflict)
-                    return Refused(conflict);
-            }
-
-            var data = request.Data == null ? new JobDataMap((IDictionary<string, object>)existing.JobDataMap) : MergeJobData(existing.JobDataMap, request.Data);
-            if (request.Retry != null)
-            {
-                data.Remove(Retries.PolicyKey);
-                if (Retries.Store(request.Retry, existing.JobType) is { } policy)
-                    data[Retries.PolicyKey] = policy;
-            }
-            var changes = DataChanges(existing.JobDataMap, data, secretKeys, options.Value);
-            if (request.Description != null)
-                AddChange(changes, "description", existing.Description, request.Description);
-            if (request.Triggers != null)
-                AddChange(changes, "triggers", DescribeTriggers(current, kinds), DescribeTriggers(requested));
-            var retryBefore = Retries.For(existing);
-            var retryAfter = Retries.For(existing.GetJobBuilder().SetJobData(data).Build());
-            if (retryBefore != retryAfter)
-                AddChange(changes, "retry", DescribeRetry(retryBefore), DescribeRetry(retryAfter));
-            Audit.RecordChanges(http, changes);
-
-            if (request.Data != null || request.Description != null || request.Retry != null)
-            {
-                var updated = existing.GetJobBuilder()
-                    .WithDescription(request.Description ?? existing.Description)
-                    .SetJobData(data)
-                    .Build();
-                await scheduler.AddJob(updated, replace: true, storeNonDurableWhileAwaitingScheduling: true);
-            }
-
-            if (request.Triggers != null)
-                await ReplaceTriggers(scheduler, key, requested, kinds);
-
+            var (change, problem) = await PlanUpdate(scheduler, JobKeyFrom(group, name), request, http, catalog, options.Value);
+            if (change == null)
+                return problem!;
+            Audit.RecordChanges(http, change.Changes);
+            await change.Apply(scheduler);
             return Results.NoContent();
         });
+
+        api.MapPost("/jobs/import", JobTransfer.Import);
 
         api.MapPost("/jobs/{group}/{name}/pause", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
             OnJob(http, o.Value, group, name, (s, k) => s.PauseJob(k)));
@@ -588,6 +487,140 @@ internal static class DashboardApi
             OnJobs(http, index, o.Value, null, (s, _) => s.PauseAll(ct), resume: false, ct));
         api.MapPost("/scheduler/resume", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
             OnJobs(http, index, o.Value, null, (s, _) => s.ResumeAll(ct), resume: true, ct));
+    }
+
+    /// <summary>
+    /// Checks a new job, and returns what creating it changes, or the problem to answer with. Changes nothing itself, so
+    /// an import can check every job before creating any.
+    /// </summary>
+    internal static async Task<(JobChange? Change, IResult? Problem)> PlanCreate(IScheduler scheduler, CreateJobRequest request,
+        HttpContext http, JobTypeCatalog catalog, CronlightOptions options)
+    {
+        var typeName = string.IsNullOrWhiteSpace(request.Type) ? request.JobType : request.Type;
+        if (string.IsNullOrWhiteSpace(typeName))
+            return (null, Invalid("A job type is required: set 'type' to one of the types listed by api/job-types"));
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return (null, Invalid("A job name is required"));
+        if (HasControlCharacters(request.Name) || HasControlCharacters(request.Group))
+            return (null, Invalid("Job names and groups cannot contain control characters, such as line breaks or tabs"));
+        if (!catalog.TryGet(typeName, out var type, out var info))
+            return (null, Invalid($"Unknown job type '{typeName}'"));
+        if (!catalog.Offers(scheduler.SchedulerName, typeName))
+            return (null, Invalid($"Job type '{typeName}' is not offered for scheduler '{scheduler.SchedulerName}'"));
+
+        var data = request.Data ?? new();
+        foreach (var p in info.Parameters.Where(p => p.DefaultValue != null && !data.ContainsKey(p.Key)))
+            data[p.Key] = p.DefaultValue!;
+
+        if (ReservedKey(data.Keys) is { } reserved)
+            return (null, Invalid(reserved));
+        if (ValidateParameters(info, data) is { } invalid)
+            return (null, Invalid(invalid));
+        if (request.Retry?.Problem() is { } badRetry)
+            return (null, Invalid(badRetry));
+        var secretKeys = SecretKeys(type);
+        if (CheckSecretReferences(http, data, secretKeys, options) is { } unresolved)
+            return (null, Invalid(unresolved));
+
+        var key = new JobKey(request.Name, string.IsNullOrWhiteSpace(request.Group) ? "DEFAULT" : request.Group);
+        if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
+            return (null, Invalid(error));
+
+        if (await scheduler.CheckExists(key))
+            return (null, Refused($"Job {key} already exists"));
+        if (await FindTriggerConflict(scheduler, triggers, new HashSet<TriggerKey>()) is { } conflict)
+            return (null, Refused(conflict));
+
+        var jobData = ToJobDataMap(data);
+        if (request.Retry != null && Retries.Store(request.Retry, type) is { } policy)
+            jobData[Retries.PolicyKey] = policy;
+        var job = JobBuilder.Create(type)
+            .WithIdentity(key)
+            .WithDescription(request.Description)
+            .SetJobData(jobData)
+            .StoreDurably()
+            .Build();
+
+        var changes = DataChanges(new Dictionary<string, object>(), job.JobDataMap, secretKeys, options);
+        AddChange(changes, "description", null, request.Description);
+        AddChange(changes, "triggers", null, DescribeTriggers(triggers));
+        AddChange(changes, "retry", null, DescribeRetry(Retries.For(job)));
+
+        // One call stores the job and its triggers together, so a failure leaves nothing behind
+        return (new JobChange(key, changes, triggers.Select(t => t.Key).ToList(), s => s.ScheduleJob(job, triggers, replace: false)), null);
+    }
+
+    /// <summary>Checks a change to a job, and returns what it changes, or the problem to answer with. Changes nothing itself.</summary>
+    internal static async Task<(JobChange? Change, IResult? Problem)> PlanUpdate(IScheduler scheduler, JobKey key, UpdateJobRequest request,
+        HttpContext http, JobTypeCatalog catalog, CronlightOptions options)
+    {
+        var (existing, problem) = await GetManageableJob(scheduler, key, options);
+        if (problem != null)
+            return (null, problem);
+        if (existing == null)
+            return (null, ReadOnlyJob(key, "edited"));
+
+        var info = catalog.Describe(existing.JobType);
+        var secretKeys = SecretKeys(existing.JobType);
+        var setValues = request.Data?.Where(kv => kv.Value != null).ToDictionary(kv => kv.Key, kv => kv.Value!);
+        if (request.Data != null && ReservedKey(request.Data.Keys) is { } reserved)
+            return (null, Invalid(reserved));
+        // The data the job will have, so a required parameter cannot be removed either
+        if (request.Data != null && info != null && ValidateParameters(info, Merged(existing.JobDataMap, request.Data)) is { } invalid)
+            return (null, Invalid(invalid));
+        if (request.Retry?.Problem() is { } badRetry)
+            return (null, Invalid(badRetry));
+        if (setValues != null && CheckSecretReferences(http, setValues, secretKeys, options) is { } unresolved)
+            return (null, Invalid(unresolved));
+
+        var requested = new List<ITrigger>();
+        IReadOnlyCollection<ITrigger> current = [];
+        IReadOnlySet<string> kinds = EditableKinds;
+        if (request.Triggers != null)
+        {
+            if (!TryReplacedKinds(request, out kinds, out var badKinds))
+                return (null, Invalid(badKinds));
+            current = await scheduler.GetTriggersOfJob(key);
+            if (!TryBuildTriggers(key, request.Triggers, current, out requested, out var error))
+                return (null, Invalid(error));
+            if (await FindExcludedTrigger(scheduler, requested) is { } excluded)
+                return (null, Invalid(excluded));
+            var own = current.Where(t => kinds.Contains(Kind(t))).Select(t => t.Key).ToHashSet();
+            if (await FindTriggerConflict(scheduler, requested, own) is { } conflict)
+                return (null, Refused(conflict));
+        }
+
+        var data = request.Data == null ? new JobDataMap((IDictionary<string, object>)existing.JobDataMap) : MergeJobData(existing.JobDataMap, request.Data);
+        if (request.Retry != null)
+        {
+            data.Remove(Retries.PolicyKey);
+            if (Retries.Store(request.Retry, existing.JobType) is { } policy)
+                data[Retries.PolicyKey] = policy;
+        }
+        var changes = DataChanges(existing.JobDataMap, data, secretKeys, options);
+        if (request.Description != null)
+            AddChange(changes, "description", existing.Description, request.Description);
+        if (request.Triggers != null)
+            AddChange(changes, "triggers", DescribeTriggers(current, kinds), DescribeTriggers(requested));
+        var retryBefore = Retries.For(existing);
+        var retryAfter = Retries.For(existing.GetJobBuilder().SetJobData(data).Build());
+        if (retryBefore != retryAfter)
+            AddChange(changes, "retry", DescribeRetry(retryBefore), DescribeRetry(retryAfter));
+
+        return (new JobChange(key, changes, requested.Select(t => t.Key).ToList(), async s =>
+        {
+            if (request.Data != null || request.Description != null || request.Retry != null)
+            {
+                var updated = existing.GetJobBuilder()
+                    .WithDescription(request.Description ?? existing.Description)
+                    .SetJobData(data)
+                    .Build();
+                await s.AddJob(updated, replace: true, storeNonDurableWhileAwaitingScheduling: true);
+            }
+
+            if (request.Triggers != null)
+                await ReplaceTriggers(s, key, requested, kinds);
+        }), null);
     }
 
     /// <summary>
@@ -819,7 +852,7 @@ internal static class DashboardApi
     /// Returns the job detail, or a 404/409 result. Detail is null (with no problem) only for an
     /// unloadable job when AllowManagingUnloadableJobs is on.
     /// </summary>
-    private static async Task<(IJobDetail? Detail, IResult? Problem)> GetManageableJob(IScheduler scheduler, JobKey key, CronlightOptions options)
+    internal static async Task<(IJobDetail? Detail, IResult? Problem)> GetManageableJob(IScheduler scheduler, JobKey key, CronlightOptions options)
     {
         if (!await scheduler.CheckExists(key))
             return (null, NoSuchJob(key));
@@ -838,7 +871,7 @@ internal static class DashboardApi
     // Every error is ProblemDetails: its title names the kind of error and its detail says what is wrong, so a client
     // can show the detail alone
 
-    private static IResult Invalid(string detail) =>
+    internal static IResult Invalid(string detail) =>
         Results.Problem(title: "Invalid request.", detail: detail, statusCode: StatusCodes.Status400BadRequest);
 
     private static IResult Missing(string detail) =>
@@ -860,7 +893,7 @@ internal static class DashboardApi
             statusCode: StatusCodes.Status409Conflict);
 
     /// <summary>The kinds of trigger the dashboard creates and edits (see <see cref="Kind"/>).</summary>
-    private static readonly IReadOnlySet<string> EditableKinds = new HashSet<string> { "Cron", "Once", "Interval" };
+    internal static readonly IReadOnlySet<string> EditableKinds = new HashSet<string> { "Cron", "Once", "Interval" };
 
     private static string? EditableKind(string? kind) =>
         EditableKinds.FirstOrDefault(k => string.Equals(k, kind ?? "Cron", StringComparison.OrdinalIgnoreCase));
@@ -1229,7 +1262,7 @@ internal static class DashboardApi
     /// trigger's class name. A simple trigger whose interval is not a whole number of seconds up to 366 days is shown by
     /// class name too, since the editor could not send it back as it is.
     /// </summary>
-    private static string Kind(ITrigger trigger) => trigger switch
+    internal static string Kind(ITrigger trigger) => trigger switch
     {
         ICronTrigger => "Cron",
         _ when trigger.Key.Group == Retries.TriggerGroup => "Retry",

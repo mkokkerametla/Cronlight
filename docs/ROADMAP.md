@@ -56,6 +56,9 @@ These are listed so the roadmap below is read against them:
   dashboard that never starts its schedulers by the cluster's nodes.
 - Triggers keep their Quartz calendar, priority, description and data when their schedule is edited, and the
   job panel names the calendar and lists a trigger's next five fire times.
+- Export and import of jobs as JSON or YAML (`api/jobs/export`, `api/jobs/import`, and the All jobs menu): an import
+  creates and updates jobs to match the file, never deletes one, checks every job before changing any, and can be
+  checked first with a dry run. See [Exporting and importing jobs](export-import.md).
 
 ## How Cronlight compares
 
@@ -156,8 +159,6 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 
 ## 2.0
 
-- **Export and import** jobs as JSON or YAML, for moving jobs between environments and keeping them in
-  source control.
 - **Permissions per group**, and a "can run, can't edit" role.
 - **OpenAPI description** of the API.
 - **Schedules in plain words**: type "every weekday at 9:30" and an AI integration the host sets up turns it into

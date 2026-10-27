@@ -21,6 +21,8 @@
     <PackageReference Include="Quartz" Version="3.13.1" />
     <!-- Same package that provides AddQuartz(); used to read the host's store settings -->
     <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.13.1" />
+    <!-- Reads and writes the jobs files of export and import in YAML; it has no dependencies of its own -->
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 
   <ItemGroup>

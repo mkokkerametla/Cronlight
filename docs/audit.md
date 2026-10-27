@@ -2,8 +2,8 @@
 
 What is recorded for every change made through the dashboard or its API, and how to keep it.
 
-Every change made through the dashboard or its API (create, edit, pause, resume, run now, cancel, delete, and
-pausing or resuming a group or the whole scheduler) is
+Every change made through the dashboard or its API (create, edit, pause, resume, run now, cancel, delete,
+pausing or resuming a group or the whole scheduler, and [importing jobs](export-import.md#audit)) is
 logged under the `Cronlight.Audit` category: who made it, the job, whether it succeeded, for creates
 and edits what changed, and for runs with different data what was changed for that run. Refused attempts are logged as warnings with the reason, such as a cross-site
 request or read-only mode. Requests turned away by the host's authorization policies before reaching

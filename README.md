@@ -24,6 +24,8 @@ second scheduler.
   late starts.
 - **Retries:** failed runs retried automatically, as set per job type or per job.
 - **Alerts:** Slack, Teams, webhook or email when a job fails, recovers or is stopped by Quartz.
+- **Export and import:** jobs as JSON or YAML files, to move them between environments or keep them in source
+  control; an import says what it will change before changing anything.
 - **Operations:** an audit log of every change, OpenTelemetry metrics and a health check.
 - **Several schedulers** in one app, each with its own permissions.
 
@@ -119,6 +121,7 @@ Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
 - [Retries and re-running](https://github.com/mkokkerametla/Cronlight/blob/main/docs/retries.md)
 - [Execution history](https://github.com/mkokkerametla/Cronlight/blob/main/docs/history.md)
 - [Failure alerts](https://github.com/mkokkerametla/Cronlight/blob/main/docs/alerts.md)
+- [Exporting and importing jobs](https://github.com/mkokkerametla/Cronlight/blob/main/docs/export-import.md)
 - [Audit log](https://github.com/mkokkerametla/Cronlight/blob/main/docs/audit.md)
 - [Metrics and health checks](https://github.com/mkokkerametla/Cronlight/blob/main/docs/metrics-and-health.md)
 - [Several schedulers in one app](https://github.com/mkokkerametla/Cronlight/blob/main/docs/schedulers.md)

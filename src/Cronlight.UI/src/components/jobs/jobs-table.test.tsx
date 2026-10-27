@@ -28,6 +28,7 @@ function renderTable(overrides: Partial<Parameters<typeof JobsTable>[0]> = {}) {
   } as unknown as DashboardActions
   const onSelect = vi.fn()
   const onQueryChange = vi.fn()
+  const onImport = vi.fn()
   render(
     <TooltipProvider>
       <JobsTable
@@ -40,12 +41,13 @@ function renderTable(overrides: Partial<Parameters<typeof JobsTable>[0]> = {}) {
         selectedKey={null}
         onSelect={onSelect}
         onNewJob={vi.fn()}
+        onImport={onImport}
         actions={actions}
         {...overrides}
       />
     </TooltipProvider>
   )
-  return { actions, onSelect, onQueryChange }
+  return { actions, onSelect, onQueryChange, onImport }
 }
 
 const row = (name: string) =>
@@ -282,6 +284,23 @@ describe('JobsTable', () => {
     expect(screen.queryByRole('checkbox')).toBeNull()
     expect(screen.queryByRole('button', { name: /New job|Run |Pause |Resume / })).toBeNull()
     expect(names()).toHaveLength(3)
+  })
+
+  it('lets a read-only user export the jobs, but not import them', async () => {
+    renderTable({ canManage: false })
+
+    await userEvent.click(screen.getByRole('button', { name: 'All jobs' }))
+    const items = (await screen.findAllByRole('menuitem')).map(item => item.textContent)
+    expect(items).toEqual(['Export as YAML', 'Export as JSON'])
+  })
+
+  it('opens the import from the All jobs menu', async () => {
+    const { onImport } = renderTable()
+
+    await userEvent.click(screen.getByRole('button', { name: 'All jobs' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Import jobs/ }))
+
+    expect(onImport).toHaveBeenCalled()
   })
 
   it('says when the scheduler has no jobs', () => {
