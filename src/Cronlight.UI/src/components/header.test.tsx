@@ -103,6 +103,47 @@ describe('Header', () => {
     expect(value('Your access')).toBe('Read-only')
   })
 
+  it("lists a cluster's nodes in the details, and says this process does not run it", async () => {
+    renderHeader(
+      scheduler({
+        jobStoreClustered: true,
+        started: false,
+        clusterNodes: [
+          node('worker-a'),
+          node('worker-b', { alive: false, secondsSinceCheckin: 300 }),
+        ],
+      })
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Scheduler details' }))
+
+    expect(screen.getByText('Not started (manages only)')).toBeInTheDocument()
+    expect(screen.getByText('worker-a')).toBeInTheDocument()
+    expect(screen.getByText('checked in 3 sec. ago')).toBeInTheDocument()
+    expect(screen.getByText('not responding')).toBeInTheDocument()
+    expect(screen.queryByText('Jobs executed')).toBeNull()
+  })
+
+  it('marks this node, with its own state, when this process is one of the nodes', async () => {
+    renderHeader(
+      scheduler({
+        jobStoreClustered: true,
+        inStandbyMode: true,
+        clusterNodes: [
+          node('node-1', { thisNode: true }),
+          node('node-2', { secondsSinceCheckin: 90 }),
+        ],
+      })
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Scheduler details' }))
+
+    expect(screen.getByText('this node')).toBeInTheDocument()
+    expect(screen.getByText('Standby')).toBeInTheDocument()
+    expect(screen.getByText('checked in 1 min. ago')).toBeInTheDocument()
+    expect(screen.getByText('Jobs executed')).toBeInTheDocument()
+  })
+
   it('switches to dark mode and remembers the choice', async () => {
     renderHeader(scheduler())
 

@@ -1,4 +1,5 @@
 import { Info } from 'lucide-react'
+import { Fragment } from 'react'
 import logo from '@/assets/logo.svg'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -101,16 +102,53 @@ export function Header({
   )
 }
 
+type Rows = [string, string][]
+
+/** "3 sec. ago", "2 min. ago", from the server's count */
+const ago = (seconds: number) =>
+  seconds < 60 ? `${seconds} sec. ago` : `${Math.floor(seconds / 60)} min. ago`
+
 function SystemInfo({ scheduler }: { scheduler: SchedulerInfo }) {
-  const rows: [string, string][] = [
-    ['Version', scheduler.version],
-    ['Instance', scheduler.schedulerInstanceId],
-    ['Job store', `${scheduler.jobStore}${scheduler.jobStoreClustered ? ' (clustered)' : ''}`],
-    ['Threads', String(scheduler.threadPoolSize)],
-    ['Jobs executed', String(scheduler.numberOfJobsExecuted)],
-    ['Running since', formatDateTime(scheduler.runningSince)],
-    ['Your access', scheduler.canManage ? 'Manage' : 'Read-only'],
-  ]
+  const nodes = scheduler.clusterNodes
+  const store = `${scheduler.jobStore}${scheduler.jobStoreClustered ? ' (clustered)' : ''}`
+  const access = scheduler.canManage ? 'Manage' : 'Read-only'
+  const sections: { label: string; rows: Rows }[] = nodes
+    ? [
+        {
+          label: 'Scheduler',
+          rows: [
+            ['Version', scheduler.version],
+            ['Job store', store],
+            ['Your access', access],
+          ],
+        },
+        {
+          label: 'This process',
+          rows: scheduler.started
+            ? [
+                ['Instance', scheduler.schedulerInstanceId],
+                ['State', scheduler.inStandbyMode ? 'Standby' : 'Running'],
+                ['Threads', String(scheduler.threadPoolSize)],
+                ['Jobs executed', String(scheduler.numberOfJobsExecuted)],
+                ['Running since', formatDateTime(scheduler.runningSince)],
+              ]
+            : [['State', 'Not started (manages only)']],
+        },
+      ]
+    : [
+        {
+          label: 'Scheduler',
+          rows: [
+            ['Version', scheduler.version],
+            ['Instance', scheduler.schedulerInstanceId],
+            ['Job store', store],
+            ['Threads', String(scheduler.threadPoolSize)],
+            ['Jobs executed', String(scheduler.numberOfJobsExecuted)],
+            ['Running since', formatDateTime(scheduler.runningSince)],
+            ['Your access', access],
+          ],
+        },
+      ]
 
   return (
     <DropdownMenu>
@@ -119,19 +157,49 @@ function SystemInfo({ scheduler }: { scheduler: SchedulerInfo }) {
           <Info />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel>Scheduler</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-2 py-1.5 text-sm">
-          {rows.map(([label, value]) => (
-            <div key={label} className="contents">
-              <dt className="text-muted-foreground">{label}</dt>
-              <dd className="truncate text-right font-medium" title={value}>
-                {value}
-              </dd>
-            </div>
-          ))}
-        </dl>
+      {/* Wider for node names; the plain menu keeps its width */}
+      <DropdownMenuContent align="end" className={nodes ? 'w-80' : 'w-72'}>
+        {sections.map((section, i) => (
+          <Fragment key={section.label}>
+            {i > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuLabel>{section.label}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-2 py-1.5 text-sm">
+              {section.rows.map(([label, value]) => (
+                <div key={label} className="contents">
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="truncate text-right font-medium" title={value}>
+                    {value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </Fragment>
+        ))}
+        {nodes && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Nodes</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <ul className="space-y-1.5 px-2 py-1.5 text-sm">
+              {nodes.map(n => (
+                <li key={n.instanceId} className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate font-mono text-xs" title={n.instanceId}>
+                    {n.instanceId}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                    {n.thisNode && <Badge variant="outline">this node</Badge>}
+                    {n.alive ? (
+                      `checked in ${ago(n.secondsSinceCheckin)}`
+                    ) : (
+                      <span className="text-amber-700 dark:text-amber-400">not responding</span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
