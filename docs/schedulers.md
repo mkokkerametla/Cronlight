@@ -28,9 +28,15 @@ history and failure streaks, and audit events and alerts name the scheduler.
 - History of every scheduler goes into the one history table (`SCHED_NAME` tells them apart), and
   `Retention` applies to each.
 - **Permissions per scheduler** come on top of `ViewPolicy` and `ManagePolicy`:
-  `o.Schedulers["Billing"] = new() { ViewPolicy = "BillingTeam", ManagePolicy = "BillingAdmins" }`. A user
-  without its view policy does not see it in the picker and gets 403 from its API; one without its manage
-  policy (falling back to its view policy) sees it read-only. Schedulers not listed are open to everyone
-  the dashboard admits. Refusals are audited.
+  `o.Schedulers["Billing"].ViewPolicy = "BillingTeam"` and `o.Schedulers["Billing"].ManagePolicy = "BillingAdmins"`
+  (or `"Cronlight:Schedulers:Billing:ViewPolicy"` in configuration). A user without its view policy does not see it
+  in the picker and gets 403 from its API; one without its manage policy (falling back to its view policy) sees it
+  read-only. Schedulers not listed are open to everyone the dashboard admits. Refusals are audited.
+- **Job types per scheduler.** A dashboard that manages the schedulers of several apps would offer every app's job
+  types in each scheduler's New job. Give a scheduler its app's job library instead:
+  `o.Schedulers["Billing"].JobAssemblies.Add(typeof(InvoiceJob).Assembly)`. It then offers only the job types in
+  those assemblies, and the API refuses to create others in it. Schedulers without their own keep offering those of
+  `JobAssemblies`. Jobs of other types already in a scheduler are still shown and edited, with their data as plain
+  values, as for hidden types.
 
 The sample host has a second, in-memory scheduler named Reports (`samples/Cronlight.SampleHost/ReportsScheduler.cs`).

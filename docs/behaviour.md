@@ -78,6 +78,10 @@ headers and cross-site requests.
   not rescheduled, and a paused trigger stays paused when its schedule changes. An interval trigger whose
   start has passed moves to its next run after now when it is changed, rather than running at once, and the
   runs it has had count towards its number of runs.
+  - **Set in code, kept on edit.** A trigger's Quartz calendar (`ModifiedByCalendar("holidays")`), priority,
+    description and trigger data are not edited in the dashboard, and stay when its schedule changes, as long as it
+    keeps its name. The job panel names the calendar ("Skips times excluded by holidays"), and a schedule its calendar
+    would never let fire (a one-time run on a holiday) is refused.
   - In the API a trigger is `{ "kind": "Once", "startAtUtc": "…" }` or
     `{ "kind": "Interval", "intervalSeconds": 300, "startAtUtc": "…", "repeatCount": 9 }` (runs after the
     first, at least 1; left out repeats forever), and cron is the default kind.

@@ -14,11 +14,14 @@ public class CronlightOptions
     public bool ReadOnly { get; set; }
 
     /// <summary>
-    /// Access to single schedulers, by scheduler name, on top of <see cref="ViewPolicy"/> and
-    /// <see cref="ManagePolicy"/>: e.g. <c>o.Schedulers["Billing"] = new() { ViewPolicy = "BillingTeam" }</c> shows
-    /// the Billing scheduler only to that policy. Schedulers not listed are open to everyone the dashboard admits.
+    /// Settings for single schedulers, by scheduler name: who may see and change each, on top of
+    /// <see cref="ViewPolicy"/> and <see cref="ManagePolicy"/>, and which job types it offers. E.g.
+    /// <c>o.Schedulers["Billing"].ViewPolicy = "BillingTeam"</c> shows the Billing scheduler only to that policy, and
+    /// <c>o.Schedulers["Billing"].JobAssemblies.Add(typeof(InvoiceJob).Assembly)</c> offers only its app's job types.
+    /// A name is added when first used. Schedulers not listed are open to everyone the dashboard admits and offer
+    /// every job type.
     /// </summary>
-    public Dictionary<string, CronlightSchedulerAccess> Schedulers { get; } = new(StringComparer.Ordinal);
+    public CronlightSchedulerOptionsByName Schedulers { get; } = new();
 
     /// <summary>
     /// Without a policy the dashboard is only reachable in the Development environment.
@@ -62,7 +65,10 @@ public class CronlightOptions
     /// </summary>
     public string? ContentSecurityPolicy { get; set; } = DefaultContentSecurityPolicy;
 
-    /// <summary>Assemblies scanned for IJob implementations. Empty = all loaded non-framework assemblies.</summary>
+    /// <summary>
+    /// Assemblies scanned for IJob implementations. Empty = all loaded non-framework assemblies. A scheduler given
+    /// its own <see cref="CronlightSchedulerOptions.JobAssemblies"/> offers those instead.
+    /// </summary>
     public List<Assembly> JobAssemblies { get; } = new();
 
     /// <summary>JobDataMap keys containing any of these (case-insensitive) are masked in API responses.</summary>
@@ -70,12 +76,30 @@ public class CronlightOptions
         new() { "password", "secret", "token", "apikey", "connectionstring" };
 }
 
-/// <summary>Who may see and change one scheduler, in addition to the dashboard-wide policies.</summary>
-public class CronlightSchedulerAccess
+/// <summary>Settings per scheduler, by scheduler name. Reading a name not yet listed adds it.</summary>
+public class CronlightSchedulerOptionsByName() : Dictionary<string, CronlightSchedulerOptions>(StringComparer.Ordinal)
+{
+    /// <summary>The scheduler's settings, added when first read, so they can be set without creating them first.</summary>
+    public new CronlightSchedulerOptions this[string schedulerName]
+    {
+        get => TryGetValue(schedulerName, out var options) ? options : base[schedulerName] = new();
+        set => base[schedulerName] = value;
+    }
+}
+
+/// <summary>Who may see and change one scheduler, in addition to the dashboard-wide policies, and the job types it offers.</summary>
+public class CronlightSchedulerOptions
 {
     /// <summary>Required to see the scheduler: it is left out of the scheduler picker, and its API refuses others.</summary>
     public string? ViewPolicy { get; set; }
 
     /// <summary>Required to change its jobs. Falls back to <see cref="ViewPolicy"/>.</summary>
     public string? ManagePolicy { get; set; }
+
+    /// <summary>
+    /// Assemblies whose job types this scheduler offers in New job, in place of <see cref="CronlightOptions.JobAssemblies"/>:
+    /// for a dashboard that manages the schedulers of several apps, each app's job library. Empty = the same as every
+    /// other scheduler. Jobs of other types already in the scheduler are still shown and edited.
+    /// </summary>
+    public List<Assembly> JobAssemblies { get; } = new();
 }

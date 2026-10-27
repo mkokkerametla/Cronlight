@@ -27,6 +27,8 @@ export interface Trigger {
   repeatCount?: number | null
   /** A missed fire time is skipped rather than run as soon as the scheduler can */
   skipsMissed?: boolean
+  /** The Quartz calendar whose excluded times (holidays, say) the trigger skips; set in code, kept on edit */
+  calendarName?: string | null
 }
 
 /** A trigger's next fire times, from api/jobs/{group}/{name}/fire-times */

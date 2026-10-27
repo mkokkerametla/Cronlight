@@ -119,6 +119,69 @@ public class TriggerKindTests
         Assert.Equal(("Interval", 3600L), (main.GetProperty("kind").GetString(), main.GetProperty("intervalSeconds").GetInt64()));
     }
 
+    public static TheoryData<string> Databases => DatabaseTests.Databases;
+
+    [Fact]
+    public async Task A_trigger_whose_schedule_changes_keeps_its_calendar_priority_description_and_data() =>
+        await KeepsWhatWasSetInCode(await TestHost.Start());
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task A_trigger_whose_schedule_changes_keeps_its_calendar_on_each_database(string name) =>
+        await KeepsWhatWasSetInCode(await TestHost.Start(database: DatabaseTests.Require(name)));
+
+    private static async Task KeepsWhatWasSetInCode(TestHost started)
+    {
+        await using var host = started;
+        var client = host.Client();
+        var scheduler = await host.Scheduler();
+        await client.PostJson("api/jobs", new { type = Plain, name = "payroll" });
+        await scheduler.AddCalendar("holidays", new HolidayCalendar(), replace: false, updateTriggers: false);
+        // As the host might have registered it in code
+        await scheduler.ScheduleJob(TriggerBuilder.Create().WithIdentity("morning", "DEFAULT").ForJob("payroll", "DEFAULT")
+            .WithCronSchedule("0 0 9 ? * MON-FRI").ModifiedByCalendar("holidays").WithPriority(7)
+            .WithDescription("Before the bank's cut-off").UsingJobData("region", "eu").Build());
+        Assert.Equal("holidays", (await Triggers(client, "payroll"))["morning"].GetProperty("calendarName").GetString());
+
+        var response = await client.PutJson("api/jobs/DEFAULT/payroll", new
+        {
+            triggers = new[] { new { name = "morning", kind = "Interval", intervalSeconds = 3600L } },
+            triggerKinds = new[] { "Cron", "Once", "Interval" }
+        });
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var morning = await scheduler.GetTrigger(new TriggerKey("morning", "DEFAULT"));
+        Assert.IsAssignableFrom<ISimpleTrigger>(morning);
+        Assert.Equal(("holidays", 7, "Before the bank's cut-off", "eu"),
+            (morning!.CalendarName, morning.Priority, morning.Description, morning.JobDataMap.GetString("region")));
+        Assert.Equal("holidays", (await Triggers(client, "payroll"))["morning"].GetProperty("calendarName").GetString());
+    }
+
+    [Fact]
+    public async Task A_trigger_changed_to_run_only_at_times_its_calendar_excludes_is_refused()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        var scheduler = await host.Scheduler();
+        var holiday = DateTimeOffset.UtcNow.Date.AddDays(3);
+        var calendar = new HolidayCalendar { TimeZone = TimeZoneInfo.Utc };
+        calendar.AddExcludedDate(holiday);
+        await client.PostJson("api/jobs", new { type = Plain, name = "closing" });
+        await scheduler.AddCalendar("holidays", calendar, replace: false, updateTriggers: false);
+        await scheduler.ScheduleJob(TriggerBuilder.Create().WithIdentity("close", "DEFAULT").ForJob("closing", "DEFAULT")
+            .WithCronSchedule("0 0 18 * * ?", c => c.InTimeZone(TimeZoneInfo.Utc)).ModifiedByCalendar("holidays").Build());
+
+        var response = await client.PutJson("api/jobs/DEFAULT/closing", new
+        {
+            triggers = new[] { new { name = "close", kind = "Once", startAtUtc = new DateTimeOffset(holiday.AddHours(18), TimeSpan.Zero) } },
+            triggerKinds = new[] { "Cron", "Once", "Interval" }
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("calendar 'holidays'", await response.Content.ReadAsStringAsync());
+        Assert.IsAssignableFrom<ICronTrigger>(await scheduler.GetTrigger(new TriggerKey("close", "DEFAULT")));
+    }
+
     [Fact]
     public async Task A_jobs_next_fire_times_are_listed_for_each_trigger_skipping_what_its_calendar_excludes()
     {

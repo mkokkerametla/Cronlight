@@ -24,6 +24,7 @@ namespace Cronlight;
 /// <param name="IntervalSeconds">For Interval triggers: the time between runs.</param>
 /// <param name="RepeatCount">For Interval triggers: how many runs follow the first; null when it repeats forever.</param>
 /// <param name="SkipsMissed">A fire time the scheduler misses is skipped, rather than run as soon as it can.</param>
+/// <param name="CalendarName">The Quartz calendar whose excluded times the trigger skips, e.g. holidays.</param>
 public record TriggerDto(
     string Name,
     string Group,
@@ -38,7 +39,8 @@ public record TriggerDto(
     DateTimeOffset? StartTimeUtc = null,
     long? IntervalSeconds = null,
     int? RepeatCount = null,
-    bool SkipsMissed = false
+    bool SkipsMissed = false,
+    string? CalendarName = null
 );
 
 /// <summary>A trigger's next fire times, from its next one on, skipping the times its calendar excludes.</summary>
@@ -262,8 +264,8 @@ internal static class DashboardApi
             });
         });
 
-        api.MapGet("/job-types", (JobTypeCatalog catalog) =>
-            Results.Ok(catalog.All.Where(t => !t.Hidden).OrderBy(t => t.DisplayName)));
+        api.MapGet("/job-types", async (HttpContext http, JobTypeCatalog catalog) =>
+            Results.Ok(catalog.For((await Scheduler(http)).SchedulerName).Where(t => !t.Hidden).OrderBy(t => t.DisplayName)));
 
         api.MapGet("/jobs", async (HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
@@ -431,6 +433,9 @@ internal static class DashboardApi
                 return Results.BadRequest("A job name is required");
             if (!catalog.TryGet(typeName, out var type, out var info))
                 return Results.BadRequest($"Unknown job type '{typeName}'");
+            var scheduler = await Scheduler(http);
+            if (!catalog.Offers(scheduler.SchedulerName, typeName))
+                return Results.BadRequest($"Job type '{typeName}' is not offered for scheduler '{scheduler.SchedulerName}'");
 
             var data = request.Data ?? new();
             foreach (var p in info.Parameters.Where(p => p.DefaultValue != null && !data.ContainsKey(p.Key)))
@@ -450,7 +455,6 @@ internal static class DashboardApi
             if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
                 return Results.BadRequest(error);
 
-            var scheduler = await Scheduler(http);
             if (await scheduler.CheckExists(key))
                 return Results.Conflict($"Job {key} already exists");
             if (await FindTriggerConflict(scheduler, triggers, new HashSet<TriggerKey>()) is { } conflict)
@@ -512,6 +516,8 @@ internal static class DashboardApi
                 current = await scheduler.GetTriggersOfJob(key);
                 if (!TryBuildTriggers(key, request.Triggers, current, out requested, out var error))
                     return Results.BadRequest(error);
+                if (await FindExcludedTrigger(scheduler, requested) is { } excluded)
+                    return Results.BadRequest(excluded);
                 var own = current.Where(t => kinds.Contains(Kind(t))).Select(t => t.Key).ToHashSet();
                 if (await FindTriggerConflict(scheduler, requested, own) is { } conflict)
                     return Results.Conflict(conflict);
@@ -888,6 +894,21 @@ internal static class DashboardApi
     };
 
     /// <summary>
+    /// A trigger keeps its calendar when its schedule changes, so a new schedule may fall only on times the calendar
+    /// excludes (a one-time run on a holiday). Quartz would refuse it halfway through the save; checked up front instead.
+    /// </summary>
+    private static async Task<string?> FindExcludedTrigger(IScheduler scheduler, List<ITrigger> triggers)
+    {
+        foreach (var trigger in triggers.Where(t => t.CalendarName != null))
+        {
+            var calendar = await scheduler.GetCalendar(trigger.CalendarName!);
+            if (TriggerUtils.ComputeFireTimes((IOperableTrigger)trigger, calendar, 1).Count == 0)
+                return $"Trigger '{trigger.Key.Name}' would never fire: its calendar '{trigger.CalendarName}' excludes every time it runs";
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Trigger keys are unique across all jobs, so a name another job's trigger already uses would make
     /// the save fail halfway. Checked up front instead.
     /// </summary>
@@ -990,6 +1011,11 @@ internal static class DashboardApi
             var builder = TriggerBuilder.Create()
                 .WithIdentity(name, stored?.Key.Group ?? key.Group)
                 .ForJob(key);
+            // The editor changes only the schedule: what the host set in code stays, so a trigger whose calendar
+            // excludes holidays does not start firing on them
+            if (stored != null)
+                builder.ModifiedByCalendar(stored.CalendarName).WithPriority(stored.Priority)
+                    .WithDescription(stored.Description).UsingJobData(stored.JobDataMap);
             error = (r.Kind ?? "Cron").ToLowerInvariant() switch
             {
                 "cron" => Cron(r, builder),
@@ -1151,7 +1177,8 @@ internal static class DashboardApi
                 simple?.StartTimeUtc,
                 kind == "Interval" ? (long)simple!.RepeatInterval.TotalSeconds : null,
                 simple is { RepeatCount: > 0 } ? simple.RepeatCount : null,
-                Misfires.SkipsMissed(trigger)
+                Misfires.SkipsMissed(trigger),
+                trigger.CalendarName
             ));
         }
         return result;
