@@ -6,7 +6,7 @@ namespace Cronlight;
 /// <param name="SecondsSinceCheckin">By the server's clock, so a browser with a wrong clock does not misread it.</param>
 /// <param name="Alive">Checked in within its interval plus Quartz's check-in misfire threshold, so Quartz does not take it for failed.</param>
 /// <param name="ThisNode">This process's scheduler instance; a process that never starts its scheduler is never listed.</param>
-public record ClusterNodeDto(
+internal record ClusterNodeDto(
     string InstanceId,
     DateTimeOffset LastCheckinUtc,
     long CheckinIntervalMs,

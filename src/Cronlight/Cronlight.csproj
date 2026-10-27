@@ -26,6 +26,8 @@
   <ItemGroup>
     <!-- Shares QuartzDataSource (connections to the Quartz database) with the history package -->
     <InternalsVisibleTo Include="Cronlight.History" />
+    <!-- Tests the job type catalog's assembly scanning directly -->
+    <InternalsVisibleTo Include="Cronlight.Tests" />
   </ItemGroup>
 
   <!--

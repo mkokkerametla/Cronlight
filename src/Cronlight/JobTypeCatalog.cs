@@ -4,7 +4,7 @@ using Quartz;
 
 namespace Cronlight;
 
-public record JobParameterInfo(
+internal record JobParameterInfo(
     string Key,
     string Type,
     bool Required,
@@ -13,7 +13,7 @@ public record JobParameterInfo(
     IReadOnlyList<string>? Choices
 );
 
-public record JobTypeInfo(
+internal record JobTypeInfo(
     string TypeName,
     string DisplayName,
     string? Description,
@@ -27,7 +27,7 @@ public record JobTypeInfo(
 /// Discovers IJob implementations in the host. Only types in this catalog can be created
 /// through the API, so a caller can never instantiate an arbitrary type by name.
 /// </summary>
-public class JobTypeCatalog
+internal class JobTypeCatalog
 {
     // Framework and Quartz.NET assemblies: these names, and names under them ("System.Text.Json"). A host's own assembly
     // whose name only starts the same way ("QuartzJobs", "SystemSync") is scanned.

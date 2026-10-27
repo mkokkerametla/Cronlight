@@ -25,7 +25,7 @@ namespace Cronlight;
 /// <param name="RepeatCount">For Interval triggers: how many runs follow the first; null when it repeats forever.</param>
 /// <param name="SkipsMissed">A fire time the scheduler misses is skipped, rather than run as soon as it can.</param>
 /// <param name="CalendarName">The Quartz calendar whose excluded times the trigger skips, e.g. holidays.</param>
-public record TriggerDto(
+internal record TriggerDto(
     string Name,
     string Group,
     string Kind,
@@ -44,9 +44,9 @@ public record TriggerDto(
 );
 
 /// <summary>A trigger's next fire times, from its next one on, skipping the times its calendar excludes.</summary>
-public record TriggerFireTimesDto(string Group, string Name, IReadOnlyList<DateTimeOffset> FireTimesUtc);
+internal record TriggerFireTimesDto(string Group, string Name, IReadOnlyList<DateTimeOffset> FireTimesUtc);
 
-public record JobDto(
+internal record JobDto(
     string Name,
     string Group,
     string? Description,
@@ -66,7 +66,7 @@ public record JobDto(
 /// <summary>One page of the job list, with counts over every job for the dashboard's stat cards.</summary>
 /// <param name="Total">Jobs matching the search and filters, on every page.</param>
 /// <param name="Types">Every job type label in the scheduler, for the type filter.</param>
-public record JobPageDto(
+internal record JobPageDto(
     IReadOnlyList<JobDto> Jobs,
     int Total,
     int Page,
@@ -77,7 +77,7 @@ public record JobPageDto(
 
 /// <summary>Counts over every job, whatever the search and filters.</summary>
 /// <param name="Error">Jobs Quartz stopped because it could not create them to run (a trigger in its Error state).</param>
-public record JobCountsDto(int All, int Active, int Paused, int Unloadable, int Error = 0);
+internal record JobCountsDto(int All, int Active, int Paused, int Unloadable, int Error = 0);
 
 /// <param name="CronExpression">For Cron triggers.</param>
 /// <param name="TimeZone">For Cron triggers: the zone the expression is read in; UTC when left out.</param>
@@ -92,12 +92,12 @@ public record JobCountsDto(int All, int Active, int Paused, int Unloadable, int 
 /// </param>
 /// <param name="IntervalSeconds">For Interval triggers: the time between runs.</param>
 /// <param name="RepeatCount">For Interval triggers: how many runs follow the first; null (the default) repeats forever.</param>
-public record TriggerRequest(string? Name, string? CronExpression, string? TimeZone, bool SkipMissed = false,
+internal record TriggerRequest(string? Name, string? CronExpression, string? TimeZone, bool SkipMissed = false,
     string? Kind = null, DateTimeOffset? StartAtUtc = null, long? IntervalSeconds = null, int? RepeatCount = null);
 
 /// <param name="Type">The job's class, as listed by the job types endpoint. Required, unless JobType is sent.</param>
 /// <param name="JobType">The same as Type, under the name jobs are read back with.</param>
-public record CreateJobRequest(
+internal record CreateJobRequest(
     string? Type,
     string? Name,
     string? Group,
@@ -122,14 +122,14 @@ public record CreateJobRequest(
 /// The kinds of trigger Triggers replaces: Cron, Once and/or Interval. Left out, it replaces cron triggers and the kinds
 /// Triggers holds, so a client that only sends cron triggers keeps the job's others. The dashboard sends all three.
 /// </param>
-public record UpdateJobRequest(string? Description, Dictionary<string, string?>? Data, List<TriggerRequest>? Triggers,
+internal record UpdateJobRequest(string? Description, Dictionary<string, string?>? Data, List<TriggerRequest>? Triggers,
     JobRetryPolicy? Retry = null, IReadOnlyList<string>? TriggerKinds = null);
 
 /// <summary>Runs a job now. Data overrides the saved job data for this run (and its retries) only.</summary>
 /// <param name="RetryOf">The fire instance id of the failed run this one retries, for the audit log.</param>
-public record RunJobRequest(Dictionary<string, string>? Data, string? RetryOf = null);
+internal record RunJobRequest(Dictionary<string, string>? Data, string? RetryOf = null);
 
-public record CronPreviewDto(bool IsValid, string Expression, string? Description, IReadOnlyList<DateTimeOffset> NextFireTimes, string? ErrorMessage);
+internal record CronPreviewDto(bool IsValid, string Expression, string? Description, IReadOnlyList<DateTimeOffset> NextFireTimes, string? ErrorMessage);
 
 internal static class DashboardApi
 {
