@@ -219,11 +219,17 @@ internal static class DashboardApi
                 logger.LogError(ex, "Cronlight request {Method} {Path} failed",
                     context.HttpContext.Request.Method, context.HttpContext.Request.Path);
 
-                // Scheduler messages are useful to operators ("couldn't retrieve job ...") and contain no internals;
-                // anything else gets a generic message and a trace id to correlate with logs.
+                // Scheduler messages are useful to operators ("Job's trigger is not in a state to ...") and contain no
+                // internals, but a job store's quote the database (its tables, its values), so those stay in the log;
+                // everything comes with a trace id to find it there.
                 return Results.Problem(
                     title: "The scheduler operation failed.",
-                    detail: ex is SchedulerException ? ex.Message : null,
+                    detail: ex switch
+                    {
+                        JobPersistenceException => "The job store failed; the app's log says why, under this trace id.",
+                        SchedulerException => ex.Message,
+                        _ => null,
+                    },
                     statusCode: StatusCodes.Status500InternalServerError,
                     extensions: new Dictionary<string, object?> { ["traceId"] = context.HttpContext.TraceIdentifier }
                 );

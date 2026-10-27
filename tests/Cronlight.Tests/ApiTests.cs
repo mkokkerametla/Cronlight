@@ -185,6 +185,9 @@ public class ApiTests
         var body = await response.Content.ReadAsStringAsync();
         Assert.DoesNotContain("   at ", body);
         Assert.Contains("traceId", body);
+        // What the job store said can quote the database, its tables and its values: it goes to the log only
+        Assert.DoesNotContain("OtherApp", body);
+        Assert.Contains("The job store failed", body);
     }
 
     [Fact]
