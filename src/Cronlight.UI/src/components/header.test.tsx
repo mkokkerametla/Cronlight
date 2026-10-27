@@ -47,18 +47,28 @@ describe('Header', () => {
   })
 
   it.each([
-    [[node('a'), node('b')], 'Running · 2 nodes'],
-    [[node('a'), node('b', { alive: false })], 'Running · 1 node'],
-    [[node('a', { alive: false })], 'No nodes running'],
+    [[node('a'), node('b')], 'Running · 2 nodes', 'default', 'bg-emerald-400'],
+    [[node('a'), node('b', { alive: false })], 'Running · 1 node', 'default', 'bg-emerald-400'],
+    [[node('a', { alive: false })], 'No nodes running', 'secondary', 'bg-amber-500'],
   ])(
     'describes a cluster by its running nodes, whatever this process does: %#',
-    (clusterNodes, label) => {
+    (clusterNodes, label, variant, dot) => {
       renderHeader(scheduler({ jobStoreClustered: true, started: false, clusterNodes }))
 
-      expect(screen.getByText(label)).toBeInTheDocument()
+      const badge = screen.getByText(label)
+      expect(badge).toHaveAttribute('data-variant', variant)
+      expect(badge.querySelector('span')).toHaveClass(dot)
       expect(screen.queryByText('Stopped')).toBeNull()
     }
   )
+
+  it('says no nodes are running, and none checked in, for a cluster without nodes', async () => {
+    renderHeader(scheduler({ jobStoreClustered: true, started: false, clusterNodes: [] }))
+
+    expect(screen.getByText('No nodes running')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Scheduler details' }))
+    expect(screen.getByText('None checked in')).toBeInTheDocument()
+  })
 
   it('offers the other schedulers when the app serves more than one', async () => {
     const onSchedulerChange = vi.fn()
@@ -121,7 +131,8 @@ describe('Header', () => {
     expect(screen.getByText('worker-a')).toBeInTheDocument()
     expect(screen.getByText('checked in 3 sec. ago')).toBeInTheDocument()
     expect(screen.getByText('not responding')).toBeInTheDocument()
-    expect(screen.queryByText('Jobs executed')).toBeNull()
+    for (const perProcess of ['Instance', 'Threads', 'Jobs executed', 'Running since'])
+      expect(screen.queryByText(perProcess)).toBeNull()
   })
 
   it('marks this node, with its own state, when this process is one of the nodes', async () => {

@@ -25,7 +25,7 @@ import type { SchedulerInfo } from '@/types'
 
 type Tone = 'running' | 'idle' | 'warning'
 
-const dot: Record<Tone, string> = {
+const toneDot: Record<Tone, string> = {
   running: 'bg-emerald-400',
   idle: 'bg-muted-foreground',
   warning: 'bg-amber-500',
@@ -89,7 +89,7 @@ export function Header({
       <div className="ml-auto flex items-center gap-2">
         {state && (
           <Badge variant={state.tone === 'running' ? 'default' : 'secondary'} className="gap-1.5">
-            <span className={`size-1.5 rounded-full ${dot[state.tone]}`} />
+            <span className={`size-1.5 rounded-full ${toneDot[state.tone]}`} />
             {state.label}
           </Badge>
         )}
@@ -163,7 +163,7 @@ function SystemInfo({ scheduler }: { scheduler: SchedulerInfo }) {
           <Fragment key={section.label}>
             {i > 0 && <DropdownMenuSeparator />}
             <DropdownMenuLabel>{section.label}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
+            {!nodes && <DropdownMenuSeparator />}
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 px-2 py-1.5 text-sm">
               {section.rows.map(([label, value]) => (
                 <div key={label} className="contents">
@@ -180,24 +180,27 @@ function SystemInfo({ scheduler }: { scheduler: SchedulerInfo }) {
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Nodes</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <ul className="space-y-1.5 px-2 py-1.5 text-sm">
-              {nodes.map(n => (
-                <li key={n.instanceId} className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate font-mono text-xs" title={n.instanceId}>
-                    {n.instanceId}
-                  </span>
-                  <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-                    {n.thisNode && <Badge variant="outline">this node</Badge>}
-                    {n.alive ? (
-                      `checked in ${ago(n.secondsSinceCheckin)}`
-                    ) : (
-                      <span className="text-amber-700 dark:text-amber-400">not responding</span>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            {nodes.length === 0 ? (
+              <p className="px-2 py-1.5 text-sm text-muted-foreground">None checked in</p>
+            ) : (
+              <ul className="space-y-1.5 px-2 py-1.5 text-sm">
+                {nodes.map(n => (
+                  <li key={n.instanceId} className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-mono text-xs" title={n.instanceId}>
+                      {n.instanceId}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                      {n.thisNode && <Badge variant="outline">this node</Badge>}
+                      {n.alive ? (
+                        `checked in ${ago(n.secondsSinceCheckin)}`
+                      ) : (
+                        <span className="text-amber-700 dark:text-amber-400">not responding</span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </>
         )}
       </DropdownMenuContent>
