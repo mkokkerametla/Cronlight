@@ -14,8 +14,10 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
     <PackageTags>quartz;quartz.net;scheduler;jobs;cron;dashboard;aspnetcore;background-jobs</PackageTags>
-    <!-- Set from the GitHub Actions environment, so forks publish with their own links -->
+    <!-- Set from the GitHub Actions environment, so forks publish with their own links; this repository's packages
+         link to the website, and NuGet links the source repository from SourceLink -->
     <PackageProjectUrl Condition="'$(GITHUB_REPOSITORY)' != ''">$(GITHUB_SERVER_URL)/$(GITHUB_REPOSITORY)</PackageProjectUrl>
+    <PackageProjectUrl Condition="'$(GITHUB_REPOSITORY)' == 'mkokkerametla/Cronlight'">https://cronlight.pages.dev/</PackageProjectUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>

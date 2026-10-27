@@ -1,6 +1,7 @@
 # Cronlight documentation
 
 The [README](../README.md) covers what Cronlight is, what it needs and how to start. These pages cover the rest.
+They are also on the [website](https://cronlight.pages.dev/docs/), next to a [live demo](https://cronlight.pages.dev/demo/).
 
 ## Using Cronlight
 

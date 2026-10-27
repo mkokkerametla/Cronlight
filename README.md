@@ -11,6 +11,9 @@ scheduler: list, create, edit, pause, resume, run and delete jobs, and see what 
 It uses the scheduler you already configured. It needs no connection string or schema of its own and never starts a
 second scheduler.
 
+**[Website](https://cronlight.pages.dev/) · [Live demo](https://cronlight.pages.dev/demo/) ·
+[Documentation](https://cronlight.pages.dev/docs/)**
+
 ## Features
 
 - **Jobs:** search, filter and page through thousands of jobs; create and edit them with cron, one-time and interval

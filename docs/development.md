@@ -149,6 +149,12 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
 6. End-to-end tests (a separate job): Playwright runs `tests/Cronlight.E2E` against the sample host and
    uploads its report when a test fails.
 
+**Website**: [cronlight.pages.dev](https://cronlight.pages.dev/) is built from the latest release by a separate
+repository, within a day of it. Its docs pages are `docs/*.md` and the README, its home page quotes the README's
+install, quick start, features and requirements, and its live demo is `src/Cronlight.UI` with the API simulated in
+the browser. So changes to the docs and README show there after the next release, and a release that changes the
+API or the dashboard may need the demo changed too.
+
 **Release** ([`release.yml`](../.github/workflows/release.yml)) runs when a `v*.*.*` tag is pushed:
 
 ```bash
