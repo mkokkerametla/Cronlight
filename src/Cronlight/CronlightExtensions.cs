@@ -61,7 +61,9 @@ public static class CronlightExtensions
         if (configure != null)
             services.Configure(configure);
 
-        services.AddHttpClient(AlertWorker.HttpClientName);
+        // HttpClient's own logging writes each request's URL, and a webhook's URL is its password (Slack's carries its
+        // secret in the path, which the logging's query-string redaction does not cover)
+        services.AddHttpClient(AlertWorker.HttpClientName).RemoveAllLoggers();
         services.TryAddSingleton<AlertQueue>();
         services.TryAddSingleton<AlertListener>();
         services.AddSchedulerAttachment<AlertAttachment>();

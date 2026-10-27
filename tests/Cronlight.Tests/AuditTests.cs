@@ -173,7 +173,7 @@ public class AuditTests
             throw new InvalidOperationException("audit store is down");
     }
 
-    private sealed class CapturingLoggerProvider : ILoggerProvider
+    internal sealed class CapturingLoggerProvider : ILoggerProvider
     {
         private readonly ConcurrentQueue<(string Category, LogLevel Level, string Message)> entries = new();
         public List<(string Category, LogLevel Level, string Message)> Entries => entries.ToList();

@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using Quartz.Impl.Matchers;
 
@@ -226,6 +228,29 @@ public class AlertTests
         var email = new CronlightEmailAlertOptions { Host = "127.0.0.1", Port = port, UseTls = false, From = "Cronlight <cronlight@example.com>" };
         email.To.AddRange(["ops@example.com", "oncall@example.com"]);
         return email;
+    }
+
+    [Fact]
+    public async Task A_webhook_url_never_reaches_the_log_since_its_path_can_be_its_password()
+    {
+        var handler = new RecordingHandler();
+        var sink = new RecordingAlertSink();
+        var logs = new AuditTests.CapturingLoggerProvider();
+        await using var host = await TestHost.Start(services: s =>
+        {
+            s.Replace(ServiceDescriptor.Singleton<ILoggerFactory>(LoggerFactory.Create(b => b.AddProvider(logs))));
+            // As Slack's incoming webhooks are: whoever has the URL can post to the channel
+            Alerts(sink, o => o.Webhooks.Add(new CronlightWebhook { Url = "https://hooks.example/services/T000/B000/s3cr3tPath" }))(s);
+            s.AddHttpClient("Cronlight.Alerts").ConfigurePrimaryHttpMessageHandler(() => handler);
+        });
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(FailingJob), "broken");
+        await Run(client, "broken");
+        await sink.WaitFor(1);
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); handler.Requests.IsEmpty; await Task.Delay(50))
+            Assert.True(DateTime.UtcNow < deadline, "The webhook was not called");
+
+        Assert.DoesNotContain(logs.Entries, e => e.Message.Contains("s3cr3tPath"));
     }
 
     [Fact]
