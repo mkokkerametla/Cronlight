@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cronlight AI Mode — Wireframes (v3 proposal)</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #e8e8e8; color: #222; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .page { max-width: 1060px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #555; font-size: 14px; margin-bottom: 28px; }
+  .frame-label { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #444; margin: 34px 0 8px; }
+  .frame-label span { font-weight: 400; text-transform: none; letter-spacing: 0; color: #777; }
+  .frame { background: #fff; border: 2px solid #333; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.12); }
+  .frame-narrow { max-width: 400px; }
+  /* dashboard chrome */
+  .topbar { display: flex; align-items: center; gap: 18px; padding: 10px 16px; border-bottom: 2px solid #333; font-size: 14px; }
+  .topbar .brand { font-weight: 800; }
+  .topbar .nav { color: #666; }
+  .topbar .nav b { color: #111; }
+  .topbar .ai-toggle { margin-left: auto; background: #123F6D; color: #fff; border-radius: 20px; padding: 5px 14px; font-weight: 700; font-size: 13px; }
+  .body { padding: 16px; }
+  /* insights */
+  .insights { display: flex; gap: 12px; margin-bottom: 16px; }
+  .card { flex: 1; border: 1.5px dashed #888; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  .card h3 { font-size: 12px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: .05em; color: #555; }
+  .card .big { font-size: 22px; font-weight: 800; }
+  .card ul { margin: 6px 0 0; padding-left: 16px; }
+  .card li { margin-bottom: 3px; }
+  .card a { color: #123F6D; text-decoration: underline; }
+  /* chat */
+  .msg { max-width: 88%; border-radius: 12px; padding: 10px 12px; font-size: 14px; margin-bottom: 12px; line-height: 1.45; }
+  .msg.user { background: #123F6D; color: #fff; margin-left: auto; }
+  .msg.ai { background: #f2f2f2; border: 1.5px solid #ccc; }
+  .msg .who { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; opacity: .7; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 8px; background: #fff; }
+  th, td { border: 1px solid #bbb; padding: 6px 8px; text-align: left; }
+  th { background: #eee; }
+  td a { color: #123F6D; }
+  .note { font-size: 12px; color: #666; margin-top: 6px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
+  .chip { border: 1.5px solid #123F6D; color: #123F6D; border-radius: 20px; padding: 5px 12px; font-size: 13px; }
+  .inputrow { display: flex; gap: 8px; border-top: 2px solid #333; padding-top: 12px; }
+  .inputrow .box { flex: 1; border: 1.5px solid #999; border-radius: 8px; padding: 10px 12px; color: #888; font-size: 14px; }
+  .inputrow .send { background: #F5B81D; border: 2px solid #333; border-radius: 8px; padding: 10px 18px; font-weight: 800; font-size: 14px; }
+  /* suggestion + action cards */
+  .suggest { border: 1.5px solid #b8860b; background: #fffbe6; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 8px; }
+  .suggest b.tag { background: #F5B81D; padding: 1px 7px; border-radius: 4px; font-size: 11px; }
+  .action { border: 2px solid #123F6D; border-radius: 8px; padding: 12px; font-size: 14px; margin-top: 8px; background: #f7f9fc; }
+  .btns { display: flex; gap: 8px; margin-top: 10px; }
+  .btn { border: 2px solid #333; border-radius: 8px; padding: 8px 16px; font-weight: 700; font-size: 13px; }
+  .btn.go { background: #F5B81D; }
+  .btn.no { background: #fff; }
+  .warn { font-size: 12px; color: #666; margin-top: 8px; }
+  /* mobile */
+  .insights.stack { flex-direction: column; }
+  .footnote { font-size: 12px; color: #666; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Cronlight AI Mode — wireframes</h1>
+  <div class="sub">v3 proposal. Wireframes only — not visual design. Dashed boxes are
+  placeholders; solid boxes are interactive elements. Example data uses the
+  sample app's jobs (HelloJob, FlakyJob).</div>
+
+  <div class="frame-label">Frame 1 — AI Mode, desktop <span>· insights strip + chat + table answer with links back to runs</span></div>
+  <div class="frame">
+    <div class="topbar">
+      <span class="brand">Cronlight</span>
+      <span class="nav">Jobs &nbsp; History &nbsp; <b>AI Mode</b></span>
+      <span class="ai-toggle">AI Mode ON</span>
+    </div>
+    <div class="body">
+      <div class="insights">
+        <div class="card">
+          <h3>Status · last 24h</h3>
+          <div class="big">128 runs · 12 failed</div>
+          <div class="note">3 running now · <a href="#">view runs →</a></div>
+        </div>
+        <div class="card">
+          <h3>Frequently failing · 7 days</h3>
+          <ul>
+            <li><b>FlakyJob</b> — 18 failures <a href="#">view →</a></li>
+            <li><b>HelloJob</b> — 2 failures <a href="#">view →</a></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Top error pattern</h3>
+          <div>"boom: simulated failure" × 18</div>
+          <div class="note">Affects FlakyJob only · <a href="#">view runs →</a></div>
+        </div>
+      </div>
+
+      <div class="msg user"><div class="who">You</div>What are the most failed jobs on last Tuesday?</div>
+      <div class="msg ai">
+        <div class="who">Cronlight AI</div>
+        Last Tuesday, Oct 20, 2026 (00:00–23:59 local). 96 runs total, 19 failed.
+        <table>
+          <tr><th>Job</th><th>Failures</th><th>Last error</th><th></th></tr>
+          <tr><td>FlakyJob</td><td>18</td><td>boom: simulated failure</td><td><a href="#">view runs →</a></td></tr>
+          <tr><td>HelloJob</td><td>1</td><td>timeout after 30s</td><td><a href="#">view runs →</a></td></tr>
+        </table>
+        <div class="note">Answer built from history data. Click any row to see the actual runs.</div>
+      </div>
+
+      <div class="chips">
+        <span class="chip">Why did FlakyJob fail?</span>
+        <span class="chip">What's running right now?</span>
+        <span class="chip">Slowest jobs this week?</span>
+      </div>
+      <div class="inputrow">
+        <div class="box">Ask about jobs, history, errors…</div>
+        <div class="send">Send</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame-label">Frame 2 — Log-based suggestion, Phase 3 <span>· always attached to its evidence, labelled as a suggestion</span></div>
+  <div class="frame">
+    <div class="topbar">
+      <span class="brand">Cronlight</span>
+      <span class="nav">Jobs &nbsp; History &nbsp; <b>AI Mode</b></span>
+      <span class="ai-toggle">AI Mode ON</span>
+    </div>
+    <div class="body">
+      <div class="msg user"><div class="who">You</div>Why does FlakyJob keep failing?</div>
+      <div class="msg ai">
+        <div class="who">Cronlight AI</div>
+        FlakyJob failed 18 times in the last 7 days, always with the same error:
+        <div class="suggest">
+          <b class="tag">SUGGESTION — NOT A DIAGNOSIS</b><br><br>
+          <b>Error:</b> "boom: simulated failure" — identical on all 18 runs.<br>
+          <b>Likely causes:</b> a dependency that is always unavailable in this
+          environment, or a code path that throws before doing any work.<br>
+          <b>Next checks:</b> 1) run the job's first step manually outside the
+          scheduler &nbsp; 2) check the dependency's health in this environment
+          &nbsp; 3) look at the full log of the latest run below.<br>
+          <a href="#">View latest failed run + full log →</a>
+        </div>
+      </div>
+      <div class="inputrow">
+        <div class="box">Ask about jobs, history, errors…</div>
+        <div class="send">Send</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame-label">Frame 3 — Human-confirmed action, Phase 4 <span>· the model proposes, only your click executes</span></div>
+  <div class="frame">
+    <div class="topbar">
+      <span class="brand">Cronlight</span>
+      <span class="nav">Jobs &nbsp; History &nbsp; <b>AI Mode</b></span>
+      <span class="ai-toggle">AI Mode ON</span>
+    </div>
+    <div class="body">
+      <div class="msg user"><div class="who">You</div>FlakyJob is just noise. Can we stop it?</div>
+      <div class="msg ai">
+        <div class="who">Cronlight AI</div>
+        I can propose that, but I can't do it on my own. Confirm below and it
+        will pause through the normal dashboard action:
+        <div class="action">
+          <b>Pause job "FlakyJob" (group: demo)?</b>
+          <div class="note">It will stop firing until resumed. Its history is kept.</div>
+          <div class="btns">
+            <span class="btn go">Pause FlakyJob</span>
+            <span class="btn no">Cancel</span>
+          </div>
+          <div class="warn">Every executed action is audit-logged with your name and the question that prompted it.</div>
+        </div>
+      </div>
+      <div class="inputrow">
+        <div class="box">Ask about jobs, history, errors…</div>
+        <div class="send">Send</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="frame-label">Frame 4 — AI Mode, mobile (390px) <span>· insights stack, chat full-width, input pinned</span></div>
+  <div class="frame frame-narrow">
+    <div class="topbar">
+      <span class="brand">Cronlight</span>
+      <span class="ai-toggle">AI Mode ON</span>
+    </div>
+    <div class="body">
+      <div class="insights stack">
+        <div class="card"><h3>Status · last 24h</h3><div class="big">128 runs · 12 failed</div></div>
+        <div class="card"><h3>Frequently failing · 7 days</h3><b>FlakyJob</b> — 18 failures <a href="#">view →</a></div>
+      </div>
+      <div class="msg user"><div class="who">You</div>Most failed jobs last Tuesday?</div>
+      <div class="msg ai">
+        <div class="who">Cronlight AI</div>
+        Oct 20, 2026: FlakyJob 18 failures, HelloJob 1.
+        <div class="note"><a href="#">View runs →</a></div>
+      </div>
+      <div class="inputrow">
+        <div class="box">Ask…</div>
+        <div class="send">Send</div>
+      </div>
+      <div class="footnote">Full tables open as a scrollable sheet on mobile — the
+      dashboard's clipped-actions issue should be fixed before AI Mode ships.</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
