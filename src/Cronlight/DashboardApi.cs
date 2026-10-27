@@ -283,32 +283,14 @@ internal static class DashboardApi
             ClusterNodesReader cluster, ILoggerFactory loggers, CancellationToken ct) =>
         {
             var scheduler = await Scheduler(http);
-            var meta = await scheduler.GetMetaData();
             var all = await schedulers.All();
             WarnAboutSettingsForNoScheduler(options.Value, all, loggers);
             var visible = new List<string>();
             foreach (var s in all)
                 if (await CanView(http, options.Value, s.SchedulerName))
                     visible.Add(s.SchedulerName);
-            return Results.Ok(new SchedulerDto(
-                meta.SchedulerName,
-                meta.SchedulerInstanceId,
-                meta.Version,
-                meta.Started,
-                meta.InStandbyMode,
-                meta.JobStoreType.Name,
-                meta.JobStoreClustered,
-                meta.JobStoreSupportsPersistence,
-                meta.ThreadPoolSize,
-                meta.NumberOfJobsExecuted,
-                meta.RunningSince,
-                await cluster.Read(scheduler, ct),
-                await CanManage(http, options.Value, scheduler.SchedulerName),
-                http.RequestServices.GetService<IJobHistoryStore>() != null,
-                SecretReferences.Enabled(options.Value),
-                Math.Clamp(options.Value.RefreshSeconds, 1, 300),
-                // For the dashboard's scheduler picker
-                visible));
+            // The visible schedulers are for the dashboard's scheduler picker
+            return Results.Ok(await DescribeScheduler(http, scheduler, options.Value, cluster, visible, ct));
         })
             .WithTags(Tags.Scheduler).WithSummary("The scheduler, and what the user may do in it")
             .Produces<SchedulerDto>().ProducesProblem(StatusCodes.Status404NotFound);
@@ -690,6 +672,31 @@ internal static class DashboardApi
             if (request.Triggers != null)
                 await ReplaceTriggers(s, key, requested, kinds);
         }), null);
+    }
+
+    /// <summary>The scheduler as api/scheduler describes it, with what this user may do in it.</summary>
+    internal static async Task<SchedulerDto> DescribeScheduler(HttpContext http, IScheduler scheduler, CronlightOptions options,
+        ClusterNodesReader cluster, IReadOnlyList<string> visible, CancellationToken cancellationToken)
+    {
+        var meta = await scheduler.GetMetaData(cancellationToken);
+        return new SchedulerDto(
+            meta.SchedulerName,
+            meta.SchedulerInstanceId,
+            meta.Version,
+            meta.Started,
+            meta.InStandbyMode,
+            meta.JobStoreType.Name,
+            meta.JobStoreClustered,
+            meta.JobStoreSupportsPersistence,
+            meta.ThreadPoolSize,
+            meta.NumberOfJobsExecuted,
+            meta.RunningSince,
+            await cluster.Read(scheduler, cancellationToken),
+            await CanManage(http, options, scheduler.SchedulerName),
+            http.RequestServices.GetService<IJobHistoryStore>() != null,
+            SecretReferences.Enabled(options),
+            Math.Clamp(options.RefreshSeconds, 1, 300),
+            visible);
     }
 
     /// <summary>Whether a cron expression is valid, and its next fire times in the time zone (UTC when null).</summary>

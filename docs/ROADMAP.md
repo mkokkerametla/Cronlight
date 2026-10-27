@@ -63,7 +63,9 @@ These are listed so the roadmap below is read against them:
   out. See [Setup and options](configuration.md#the-apis-description).
 - An MCP server for AI assistants, in its own package (`Cronlight.Quartz.Dashboard.Mcp`): read-only tools for jobs,
   runs, logs and failure and status summaries, and opt-in pause, resume, run and run again, on the dashboard's
-  permissions and audit log. See [AI assistants (MCP server)](mcp.md).
+  permissions and audit log, and history analytics: per-job run statistics (success rate, average, median and P95
+  duration, compared with the window before), runs over time, and errors grouped across jobs. See
+  [AI assistants (MCP server)](mcp.md). The dashboard itself does not show these statistics yet (#29).
 
 ## How Cronlight compares
 
@@ -159,7 +161,8 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 - Branding options and an embedded mode for showing the dashboard inside an app's own layout ([#23](https://github.com/mkokkerametla/Cronlight/issues/23)).
 - Cancelling a run on any node of a cluster, through the store ([#27](https://github.com/mkokkerametla/Cronlight/issues/27); Quartz 4 does this).
 - An Activity tab showing the audit trail in the dashboard ([#28](https://github.com/mkokkerametla/Cronlight/issues/28)).
-- Run statistics: success rate and average and P95 duration over History and per job ([#29](https://github.com/mkokkerametla/Cronlight/issues/29)).
+- Run statistics in the dashboard: success rate and average and P95 duration over History and per job ([#29](https://github.com/mkokkerametla/Cronlight/issues/29)).
+  The MCP server's `run_statistics` already counts them, which the dashboard could show.
 - Attaching to a Quartz database and listing every scheduler in it ([#39](https://github.com/mkokkerametla/Cronlight/issues/39); Quartz 4 does this).
 
 ## 2.0

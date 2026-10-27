@@ -14,7 +14,8 @@ namespace Cronlight.Tests;
 public class McpTests
 {
     private static readonly string[] ReadTools =
-        ["failure_summary", "get_job", "get_run_log", "list_jobs", "list_schedulers", "preview_cron", "query_runs", "running_now", "status_summary"];
+        ["error_patterns", "failure_summary", "get_job", "get_run_log", "get_scheduler", "list_jobs", "list_schedulers", "preview_cron",
+         "query_runs", "run_statistics", "run_timeline", "running_now", "status_summary", "upcoming_runs"];
 
     private static readonly string[] ActionTools = ["pause_job", "resume_job", "run_again", "run_job"];
 
@@ -131,6 +132,105 @@ public class McpTests
         Assert.Contains("Job billing.nope does not exist", await Refused(client, "get_job", new() { ["group"] = "billing", ["name"] = "nope" }));
         Assert.Contains("There is no scheduler 'other'", await Refused(client, "list_jobs", new() { ["scheduler"] = "other" }));
         Assert.Contains("Unknown status 'Exploded'", await Refused(client, "query_runs", new() { ["status"] = "Exploded" }));
+    }
+
+    [Fact]
+    public async Task History_analytics_are_counted_on_the_server()
+    {
+        await using var host = await Start();
+        var api = host.Client();
+        await HistoryScenarios.Create(api, typeof(PlainJob), "plain");
+        await HistoryScenarios.Create(api, typeof(FailingJob), "broken");
+        var key = Guid.NewGuid().ToString("N");
+        RetriedJob.FailuresLeft[key] = 2;
+        await HistoryScenarios.Create(api, typeof(RetriedJob), "retried", new { key });
+        foreach (var name in new[] { "plain", "plain", "broken", "broken", "retried" })
+        {
+            await api.PostAsync($"api/jobs/DEFAULT/{name}/trigger", null);
+            // One at a time, so each run's outcome is in before the next starts
+            await Task.Delay(300);
+        }
+        // Two runs of each of plain and broken, and retried's two retried attempts and its success
+        await HistoryScenarios.WaitForHistory(api, "?limit=100", r => r.Count(x => x.GetProperty("status").GetString() != "Running") >= 7);
+        await using var client = await Connect(host);
+
+        var stats = await Call(client, "run_statistics", new() { ["hours"] = 1, ["compare"] = true });
+        var totals = stats.GetProperty("totals");
+        Assert.Equal((5, 3, 2, 2), (totals.GetProperty("runs").GetInt32(), totals.GetProperty("succeeded").GetInt32(),
+            totals.GetProperty("failed").GetInt32(), totals.GetProperty("retries").GetInt32()));
+        Assert.Equal(0.6, totals.GetProperty("successRate").GetDouble());
+        Assert.True(totals.TryGetProperty("p95DurationMs", out _));
+        Assert.Equal(0, stats.GetProperty("previousTotals").GetProperty("runs").GetInt32());
+        Assert.Equal(3, stats.GetProperty("totalJobs").GetInt32());
+        var jobs = stats.GetProperty("jobs").EnumerateArray().ToList();
+        // Most failures first
+        Assert.Equal("broken", jobs[0].GetProperty("jobName").GetString());
+        Assert.Equal(0, jobs[0].GetProperty("stats").GetProperty("successRate").GetDouble());
+        var retried = jobs.Single(j => j.GetProperty("jobName").GetString() == "retried").GetProperty("stats");
+        Assert.Equal((1, 2, 1.0), (retried.GetProperty("runs").GetInt32(), retried.GetProperty("retries").GetInt32(),
+            retried.GetProperty("successRate").GetDouble()));
+
+        var one = await Call(client, "run_statistics", new() { ["group"] = "DEFAULT", ["name"] = "plain" });
+        Assert.Equal(2, one.GetProperty("totals").GetProperty("succeeded").GetInt32());
+        Assert.Contains("set compare to true", await Refused(client, "run_statistics", new() { ["sort"] = "slowdown" }));
+        Assert.Contains("Unknown sort", await Refused(client, "run_statistics", new() { ["sort"] = "fastest" }));
+
+        var timeline = await Call(client, "run_timeline", new() { ["hours"] = 2 });
+        var buckets = timeline.GetProperty("buckets").EnumerateArray().ToList();
+        Assert.InRange(buckets.Count, 2, 3);
+        Assert.Equal((3, 2, 2), (buckets.Sum(b => b.GetProperty("succeeded").GetInt32()), buckets.Sum(b => b.GetProperty("failed").GetInt32()),
+            buckets.Sum(b => b.GetProperty("retried").GetInt32())));
+        Assert.Equal(0, buckets[0].GetProperty("startUtc").GetDateTimeOffset().Minute);
+
+        // Errors that differ only in their numbers and ids count together
+        var errors = await Call(client, "error_patterns");
+        var patterns = errors.GetProperty("patterns").EnumerateArray()
+            .ToDictionary(p => p.GetProperty("pattern").GetString()!, p => (p.GetProperty("count").GetInt32(), p.GetProperty("failed").GetInt32()));
+        Assert.Equal((2, 2), patterns["InvalidOperationException: Boom: invoice # could not be sent"]);
+        Assert.Equal((2, 0), patterns["InvalidOperationException: # failed, # failures to go"]);
+
+        var page = await Call(client, "query_runs", new() { ["status"] = "Failed", ["fromUtc"] = DateTimeOffset.UtcNow.AddHours(-1), ["limit"] = 1 });
+        Assert.Single(page.GetProperty("runs").EnumerateArray());
+        var rest = await Call(client, "query_runs", new()
+        {
+            ["status"] = "Failed", ["fromUtc"] = DateTimeOffset.UtcNow.AddHours(-1), ["before"] = page.GetProperty("nextBefore").GetInt64(),
+        });
+        Assert.Single(rest.GetProperty("runs").EnumerateArray());
+        Assert.False(rest.TryGetProperty("nextBefore", out _));
+        var earlier = await Call(client, "query_runs", new() { ["fromUtc"] = DateTimeOffset.UtcNow.AddDays(-2), ["toUtc"] = DateTimeOffset.UtcNow.AddDays(-1) });
+        Assert.Empty(earlier.GetProperty("runs").EnumerateArray());
+        Assert.Contains("starts", await Refused(client, "query_runs", new() { ["fromUtc"] = DateTimeOffset.UtcNow, ["toUtc"] = DateTimeOffset.UtcNow.AddDays(-1) }));
+    }
+
+    [Fact]
+    public async Task The_scheduler_and_its_upcoming_runs_are_described()
+    {
+        await using var host = await Start();
+        Assert.Equal(HttpStatusCode.Created, (await host.Client().PostJson("api/jobs", new
+        {
+            type = typeof(PlainJob).FullName, name = "every-minute", triggers = new[] { new { name = "minutely", cronExpression = "0 * * * * ?" } }
+        })).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await host.Client().PostJson("api/jobs", new
+        {
+            type = typeof(PlainJob).FullName, name = "paused", triggers = new[] { new { name = "also-minutely", cronExpression = "30 * * * * ?" } }
+        })).StatusCode);
+        await host.Client().PostAsync("api/jobs/DEFAULT/paused/pause", null);
+        await using var client = await Connect(host);
+
+        var scheduler = await Call(client, "get_scheduler");
+        Assert.Equal(host.SchedulerName, scheduler.GetProperty("schedulerName").GetString());
+        Assert.True(scheduler.GetProperty("started").GetBoolean());
+
+        var upcoming = await Call(client, "upcoming_runs", new() { ["hours"] = 1, ["limit"] = 5 });
+        Assert.True(upcoming.GetProperty("truncated").GetBoolean());
+        var runs = upcoming.GetProperty("runs").EnumerateArray().ToList();
+        Assert.Equal(5, runs.Count);
+        // Paused triggers do not fire
+        Assert.All(runs, r => Assert.Equal(("every-minute", "minutely", "Cron"),
+            (r.GetProperty("jobName").GetString(), r.GetProperty("trigger").GetString(), r.GetProperty("kind").GetString())));
+        var times = runs.Select(r => r.GetProperty("fireTimeUtc").GetDateTimeOffset()).ToList();
+        Assert.Equal(times.Order(), times);
+        Assert.All(times, t => Assert.Equal(0, t.Second));
     }
 
     [Fact]

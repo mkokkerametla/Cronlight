@@ -3,6 +3,8 @@ using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using Quartz;
+using Quartz.Impl.Matchers;
+using Quartz.Spi;
 
 namespace Cronlight.Mcp;
 
@@ -30,8 +32,15 @@ internal record RunSummary(long Id, string JobGroup, string JobName, string Stat
     DateTimeOffset FiredTimeUtc, DateTimeOffset? FinishedTimeUtc, long? DurationMs, int Attempt, string? Error, string InstanceName, bool HasLog);
 
 /// <param name="NextBefore">Pass as before to get the next, older page; null when there are no more.</param>
-/// <param name="SinceUtc">The start of the window asked for, when one was.</param>
-internal record RunList(IReadOnlyList<RunSummary> Runs, long? NextBefore, DateTimeOffset? SinceUtc);
+/// <param name="Window">The window asked for, when one was.</param>
+internal record RunList(IReadOnlyList<RunSummary> Runs, long? NextBefore, TimeWindow? Window);
+
+/// <summary>A fire time coming up.</summary>
+/// <param name="Kind">Cron, Once, Interval, Retry (a failed run's waiting retry) or RunNow (a manual run waiting to start).</param>
+internal record UpcomingRun(DateTimeOffset FireTimeUtc, string JobGroup, string JobName, string Trigger, string Kind);
+
+/// <param name="Truncated">More fire times fall in the window than Runs lists.</param>
+internal record UpcomingRuns(TimeWindow Window, bool Truncated, IReadOnlyList<UpcomingRun> Runs);
 
 /// <param name="Truncated">The log is longer than what is returned: its first entries, up to 50,000 characters.</param>
 internal record RunLog(long RunId, int TotalEntries, bool Truncated, IReadOnlyList<JobRunLogEntry> Entries);
@@ -39,8 +48,8 @@ internal record RunLog(long RunId, int TotalEntries, bool Truncated, IReadOnlyLi
 /// <param name="Runs">Outcomes of the runs since SinceUtc; null when execution history is not enabled.</param>
 internal record StatusSummary(DateTimeOffset SinceUtc, JobCountsDto Jobs, int RunningNow, bool HistoryEnabled, JobHistorySummary? Runs);
 
-/// <param name="Truncated">More failures happened than were read (the newest 5,000), so the counts are lower bounds.</param>
-internal record FailureSummary(DateTimeOffset SinceUtc, int Failures, bool Truncated, IReadOnlyList<JobFailures> Jobs);
+/// <param name="Truncated">More failures happened than were read (the newest 20,000), so the counts are lower bounds.</param>
+internal record FailureSummary(TimeWindow Window, int Failures, bool Truncated, IReadOnlyList<JobFailures> Jobs);
 
 /// <param name="Errors">Its most common errors, by their first line, with how often each happened.</param>
 internal record JobFailures(string JobGroup, string JobName, int Failures, DateTimeOffset LastFailedUtc, string? LastError,
@@ -54,11 +63,10 @@ internal record ErrorCount(string Error, int Count);
 /// </summary>
 [McpServerToolType]
 internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, JobTypeCatalog catalog, RunningJobsReader running,
-    IServiceProvider services)
+    ClusterNodesReader cluster, IServiceProvider services)
 {
     private const int MaxLogCharacters = 50_000;
     private const int MaxErrorCharacters = 2_000;
-    private const int MaxFailuresRead = 5_000;
 
     private IJobHistoryStore History => services.GetService<IJobHistoryStore>()
         ?? throw new McpException("Execution history is not enabled in this app, so there are no recorded runs.");
@@ -73,6 +81,49 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
         for (var i = 0; i < visible.Count; i++)
             result.Add(new SchedulerSummary(visible[i].SchedulerName, i == 0, await access.CanManage(visible[i])));
         return result;
+    }
+
+    [McpServerTool(Name = "get_scheduler", Title = "Get the scheduler", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("The scheduler's health and setup: started or in standby, its Quartz version, job store, thread pool, how many " +
+                 "jobs it has run, and for a cluster each node with when it last checked in. Answers 'is the scheduler up', " +
+                 "'are all nodes alive'.")]
+    public async Task<SchedulerDto> GetScheduler(
+        [Description("The scheduler; the default one when left out.")] string? scheduler = null,
+        CancellationToken cancellationToken = default)
+    {
+        var s = await access.View(scheduler, cancellationToken);
+        var visible = (await access.Visible(cancellationToken)).Select(v => v.SchedulerName).ToList();
+        return await DashboardApi.DescribeScheduler(access.Http, s, access.Options, cluster, visible, cancellationToken);
+    }
+
+    [McpServerTool(Name = "upcoming_runs", Title = "Upcoming runs", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("The fire times coming up across every job, soonest first: 'what runs in the next 6 hours', 'is anything " +
+                 "scheduled tonight'. Paused triggers and dates their calendars exclude are left out. Reads every trigger, so it is " +
+                 "slower on schedulers with thousands of jobs.")]
+    public async Task<UpcomingRuns> GetUpcomingRuns(
+        [Description("How far ahead to look, in hours; 6 when left out, at most 168 (a week).")] int hours = 6,
+        [Description("How many fire times to list, at most 200.")] int limit = 50,
+        [Description("Only jobs in this group.")] string? group = null,
+        [Description("The scheduler; the default one when left out.")] string? scheduler = null,
+        CancellationToken cancellationToken = default)
+    {
+        var s = await access.View(scheduler, cancellationToken);
+        var size = Math.Clamp(limit, 1, 200);
+        var now = DateTimeOffset.UtcNow;
+        var window = new TimeWindow(now, now.AddHours(Math.Clamp(hours, 1, 168)));
+        var runs = new List<UpcomingRun>();
+        foreach (var job in await s.GetJobKeys(group == null ? GroupMatcher<JobKey>.AnyGroup() : GroupMatcher<JobKey>.GroupEquals(group), cancellationToken))
+        foreach (var trigger in await s.GetTriggersOfJob(job, cancellationToken))
+        {
+            if (await s.GetTriggerState(trigger.Key, cancellationToken) is not (TriggerState.Normal or TriggerState.Blocked))
+                continue;
+            var calendar = trigger.CalendarName == null ? null : await s.GetCalendar(trigger.CalendarName, cancellationToken);
+            // At most a page's worth from each trigger: one firing every second would otherwise fill the week
+            foreach (var time in TriggerUtils.ComputeFireTimes((IOperableTrigger)trigger, calendar, size + 1).Where(t => t < window.ToUtc))
+                runs.Add(new UpcomingRun(time, job.Group, job.Name, trigger.Key.Name, DashboardApi.Kind(trigger)));
+        }
+        var sorted = runs.OrderBy(r => r.FireTimeUtc).ThenBy(r => r.JobGroup).ThenBy(r => r.JobName).ToList();
+        return new UpcomingRuns(window, sorted.Count > size, sorted.Take(size).ToList());
     }
 
     [McpServerTool(Name = "list_jobs", Title = "List jobs", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
@@ -132,6 +183,8 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
         [Description("Only runs of jobs with this name; give the group too.")] string? name = null,
         [Description("Only runs with this status.")] string? status = null,
         [Description("Only runs that started in the last this many hours.")] int? sinceHours = null,
+        [Description("Only runs that started at or after this time, in UTC; overrides sinceHours.")] DateTimeOffset? fromUtc = null,
+        [Description("Only runs that started before this time, in UTC.")] DateTimeOffset? toUtc = null,
         [Description("Only runs older than this run id: the last page's nextBefore.")] long? before = null,
         [Description("Runs per page, at most 100.")] int limit = 20,
         [Description("The scheduler; the default one when left out.")] string? scheduler = null,
@@ -145,13 +198,15 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
                 : throw new McpException($"Unknown status '{status}'; expected one of {string.Join(", ", Enum.GetNames<JobExecutionStatus>())}");
 
         var size = Math.Clamp(limit, 1, 100);
-        var since = sinceHours is { } hours ? DateTimeOffset.UtcNow.AddHours(-Math.Clamp(hours, 1, 24 * 90)) : (DateTimeOffset?)null;
-        var records = await History.Query(s.SchedulerName,
-            new JobHistoryQuery { JobGroup = group, JobName = name, Status = statusFilter, BeforeId = before, Limit = size }, cancellationToken);
-        var inWindow = records.Where(r => since == null || r.FiredTimeUtc >= since).ToList();
-        // Newest first: once a run is older than the window, so is every later page
-        var more = records.Count == size && inWindow.Count == records.Count;
-        return new RunList(inWindow.Select(Summarize).ToList(), more ? records[^1].Id : null, since);
+        if (sinceHours == null && fromUtc == null && toUtc == null)
+        {
+            var page = await History.Query(s.SchedulerName,
+                new JobHistoryQuery { JobGroup = group, JobName = name, Status = statusFilter, BeforeId = before, Limit = size }, cancellationToken);
+            return new RunList(page.Select(Summarize).ToList(), page.Count == size ? page[^1].Id : null, null);
+        }
+        var window = TimeWindow.Resolve(sinceHours, fromUtc, toUtc);
+        var (records, more) = await HistoryScan.Read(History, s.SchedulerName, window, group, name, statusFilter, cancellationToken, size, before);
+        return new RunList(records.Select(Summarize).ToList(), more ? records[^1].Id : null, window);
     }
 
     [McpServerTool(Name = "get_run_log", Title = "Get a run's log", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
@@ -204,32 +259,17 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
     [Description("The jobs that failed in the last hours, most failures first, each with its last error and most common errors. " +
                  "Counted on the server from history, so use it rather than counting runs from query_runs.")]
     public async Task<FailureSummary> GetFailureSummary(
-        [Description("The window, in hours back from now; 24 when left out, at most 2,160 (90 days).")] int hours = 24,
+        [Description("The window, in hours back from now (or from toUtc); 24 when left out.")] int? hours = null,
+        [Description("The window's start, in UTC; overrides hours.")] DateTimeOffset? fromUtc = null,
+        [Description("The window's end, in UTC; now when left out.")] DateTimeOffset? toUtc = null,
         [Description("How many jobs to list, at most 50.")] int limit = 10,
         [Description("The scheduler; the default one when left out.")] string? scheduler = null,
         CancellationToken cancellationToken = default)
     {
         var s = await access.View(scheduler, cancellationToken);
-        var store = History;
-        var since = DateTimeOffset.UtcNow.AddHours(-Math.Clamp(hours, 1, 24 * 90));
-
-        var failures = new List<JobExecutionRecord>();
-        long? before = null;
-        var truncated = false;
-        while (true)
-        {
-            var page = await store.Query(s.SchedulerName,
-                new JobHistoryQuery { Status = JobExecutionStatus.Failed, BeforeId = before, Limit = 500 }, cancellationToken);
-            failures.AddRange(page.Where(r => r.FiredTimeUtc >= since));
-            if (page.Count < 500 || page[^1].FiredTimeUtc < since)
-                break;
-            if (failures.Count >= MaxFailuresRead)
-            {
-                truncated = true;
-                break;
-            }
-            before = page[^1].Id;
-        }
+        var window = TimeWindow.Resolve(hours, fromUtc, toUtc);
+        var (failures, truncated) = await HistoryScan.Read(History, s.SchedulerName, window, null, null, JobExecutionStatus.Failed,
+            cancellationToken);
 
         var jobs = failures
             .GroupBy(r => (r.JobGroup, r.JobName))
@@ -239,7 +279,7 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
             .OrderByDescending(j => j.Failures).ThenByDescending(j => j.LastFailedUtc)
             .Take(Math.Clamp(limit, 1, 50))
             .ToList();
-        return new FailureSummary(since, failures.Count, truncated, jobs);
+        return new FailureSummary(window, failures.Count, truncated, jobs);
     }
 
     [McpServerTool(Name = "preview_cron", Title = "Preview a cron expression", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
