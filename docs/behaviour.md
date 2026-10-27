@@ -50,8 +50,8 @@ headers and cross-site requests.
   asked for only when opened, so the job list costs no more.
 - **Undo** follows pausing or resuming a job, in the toast that confirms it. A job Quartz stopped (in Error) has no
   undo for Resume, since pausing it would not stop it again.
-- **Layout:** the Layout menu in the header uses the window's full width and makes table rows compact. Both are
-  remembered in the browser, as the theme is.
+- **Layout:** the dashboard uses the window's full width; the Layout menu in the header narrows it to a centred
+  column, and makes table rows compact. Both are remembered in the browser, as the theme is.
 - **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.
