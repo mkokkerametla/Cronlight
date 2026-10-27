@@ -23,3 +23,7 @@ Anyone who can create jobs chooses the URL, so the job only calls what you allow
   at an internal address is refused too. Set `AllowPrivateNetworks = true` only if job authors may
   call internal services.
 - **Redirects are not followed**, and no proxy is used: a 3xx response is a status like any other.
+- **Headers that decide where or how the request is sent are refused** in `headers`: `Host` (which would reach
+  another site behind the same address, such as a shared proxy), `Connection`, `Transfer-Encoding`,
+  `Proxy-Authorization` and the like. An `authorization` value that is not an Authorization header fails the run
+  without quoting it.
