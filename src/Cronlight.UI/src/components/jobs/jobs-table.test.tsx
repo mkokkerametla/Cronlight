@@ -64,6 +64,23 @@ describe('JobsTable', () => {
     expect(within(row('send-invoices')).getByText('Send invoices')).toBeInTheDocument()
     expect(within(row('cleanup')).getByText('Paused')).toBeInTheDocument()
     expect(within(row('foreign')).getByText('Unloadable')).toBeInTheDocument()
+    // Why a job from another app cannot be loaded, on hover
+    expect(within(row('foreign')).getByText('Unloadable')).toHaveAttribute(
+      'title',
+      'Type not found'
+    )
+  })
+
+  it('stops moving through the jobs with Esc, so Enter opens nothing', async () => {
+    const { onSelect } = renderTable()
+
+    await userEvent.keyboard('j')
+    expect(row('send-invoices')).toHaveAttribute('data-active', 'true')
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryAllByRole('row').filter(r => r.dataset.active === 'true')).toEqual([])
+
+    await userEvent.keyboard('{Enter}')
+    expect(onSelect).not.toHaveBeenCalled()
   })
 
   it('moves to the search box with /, through the jobs with j and k, and opens one with Enter', async () => {
@@ -119,6 +136,20 @@ describe('JobsTable', () => {
     await userEvent.click(screen.getByRole('combobox', { name: 'Filter by status' }))
     await userEvent.click(screen.getByRole('option', { name: 'Error' }))
     expect(onQueryChange).toHaveBeenLastCalledWith({ ...emptyQuery, status: 'Error' })
+  })
+
+  it('lifts a type or status filter when All is chosen', async () => {
+    const { onQueryChange } = renderTable({
+      query: { ...emptyQuery, type: 'NightlyJob', status: 'Paused' },
+    })
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by type' }))
+    await userEvent.click(screen.getByRole('option', { name: 'All types' }))
+    expect(onQueryChange).toHaveBeenLastCalledWith({ ...emptyQuery, status: 'Paused' })
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by status' }))
+    await userEvent.click(screen.getByRole('option', { name: 'All statuses' }))
+    expect(onQueryChange).toHaveBeenLastCalledWith({ ...emptyQuery, type: 'NightlyJob' })
   })
 
   it('shows a job Quartz stopped as Error, and resumes it from its row', async () => {
@@ -193,6 +224,50 @@ describe('JobsTable', () => {
     expect(screen.queryByText(/selected$/)).toBeNull()
   })
 
+  it('selects jobs one by one, without opening them, and resumes them in bulk', async () => {
+    const { actions, onSelect } = renderTable()
+    const selectAll = screen.getByRole('checkbox', { name: 'Select all' })
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select cleanup' }))
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    expect(selectAll).toHaveAttribute('aria-checked', 'mixed')
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select send-invoices' }))
+    expect(selectAll).toBeChecked()
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select send-invoices' }))
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /^Resume$/ }))
+    expect(actions.bulk).toHaveBeenCalledWith('resume', [
+      expect.objectContaining({ name: 'cleanup' }),
+    ])
+  })
+
+  it('clears the selection from its bar, or by unticking Select all', async () => {
+    renderTable()
+    const selectAll = screen.getByRole('checkbox', { name: 'Select all' })
+
+    await userEvent.click(selectAll)
+    await userEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
+    expect(screen.queryByText(/selected$/)).toBeNull()
+
+    await userEvent.click(selectAll)
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    await userEvent.click(selectAll)
+    expect(screen.queryByText(/selected$/)).toBeNull()
+    expect(selectAll).not.toBeChecked()
+  })
+
+  it('opens a job from its row’s menu', async () => {
+    const { onSelect } = renderTable()
+
+    await userEvent.click(screen.getByRole('button', { name: 'More actions for cleanup' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Open details' }))
+
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ name: 'cleanup' }))
+  })
+
   it('opens a job when its row is clicked', async () => {
     const { onSelect } = renderTable()
 
@@ -228,6 +303,20 @@ describe('JobsTable', () => {
 
     await userEvent.click(within(dialog).getByRole('button', { name: 'Resume group' }))
     expect(actions.group).toHaveBeenCalledWith('maintenance', 'resume')
+  })
+
+  it("pauses a job's group once asked, saying it reaches every node", async () => {
+    const { actions } = renderTable()
+
+    await userEvent.click(screen.getByRole('button', { name: 'More actions for send-invoices' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Pause group billing/ }))
+    const dialog = await screen.findByRole('alertdialog', { name: 'Pause group billing?' })
+    expect(
+      within(dialog).getByText(/runs on schedule until the group is resumed, on any node/)
+    ).toBeInTheDocument()
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Pause group' }))
+    expect(actions.group).toHaveBeenCalledWith('billing', 'pause')
   })
 
   it('offers to pause a group only when it has a job running, and to resume it only when it has one paused', async () => {
@@ -279,5 +368,19 @@ describe('JobsTable', () => {
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Pause all jobs' })
     )
     expect(actions.all).toHaveBeenCalledWith('pause')
+  })
+
+  it('resumes every job after confirming, saying it undoes pauses of single jobs', async () => {
+    const { actions } = renderTable()
+
+    await userEvent.click(screen.getByRole('button', { name: 'All jobs' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Resume all jobs/ }))
+    const dialog = await screen.findByRole('alertdialog', { name: 'Resume every job?' })
+    expect(
+      within(dialog).getByText(/including jobs that were paused one by one/)
+    ).toBeInTheDocument()
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Resume all jobs' }))
+    expect(actions.all).toHaveBeenCalledWith('resume')
   })
 })
