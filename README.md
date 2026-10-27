@@ -83,7 +83,7 @@ app.UseAuthorization();
 app.MapCronlight("/ops/jobs");
 ```
 
-Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`.
+Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`, described by an OpenAPI document at `/ops/jobs/api/openapi.json`.
 
 - **Access:** without a `ViewPolicy`, the dashboard answers 403 outside the Development environment.
 - **Scripts:** requests that change jobs must send an `X-Cronlight-Request` header (any value), which keeps other

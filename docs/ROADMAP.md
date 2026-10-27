@@ -59,6 +59,8 @@ These are listed so the roadmap below is read against them:
 - Export and import of jobs as JSON or YAML (`api/jobs/export`, `api/jobs/import`, and the All jobs menu): an import
   creates and updates jobs to match the file, never deletes one, checks every job before changing any, and can be
   checked first with a dry run. See [Exporting and importing jobs](export-import.md).
+- An OpenAPI 3.1 description of the API at `api/openapi.json`, a document of its own that the host's documents leave
+  out. See [Setup and options](configuration.md#the-apis-description).
 
 ## How Cronlight compares
 
@@ -160,7 +162,6 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 ## 2.0
 
 - **Permissions per group**, and a "can run, can't edit" role.
-- **OpenAPI description** of the API.
 - **Schedules in plain words**: type "every weekday at 9:30" and an AI integration the host sets up turns it into
   cron, shown in the cron box with its preview to check before saving. Off unless the host turns it on, since
   what users type goes to that AI service. Until then, the trigger editor links to Quartz.NET's cron syntax.

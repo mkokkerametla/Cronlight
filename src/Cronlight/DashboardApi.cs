@@ -138,6 +138,40 @@ internal record RunJobRequest(Dictionary<string, string>? Data, string? RetryOf 
 internal sealed record JobChange(JobKey Key, Dictionary<string, CronlightAuditChange> Changes, IReadOnlyList<TriggerKey> Triggers,
     Func<IScheduler, Task> Apply);
 
+/// <summary>The scheduler the dashboard shows, and what the user may do in it.</summary>
+/// <param name="ClusterNodes">The cluster's nodes, for a dashboard whose own process may not run the scheduler at all; null when not read from the job store.</param>
+/// <param name="CanManage">Whether the user may change jobs: lets the dashboard hide what they cannot use. The server checks it anyway.</param>
+/// <param name="SecretReferences">Whether secret parameters may name a secret from configuration (secret:Name).</param>
+/// <param name="RefreshSeconds">How often the dashboard refreshes.</param>
+/// <param name="Schedulers">Every scheduler served that the user may see, the host's own first.</param>
+internal record SchedulerDto(
+    string SchedulerName,
+    string SchedulerInstanceId,
+    string Version,
+    bool Started,
+    bool InStandbyMode,
+    string JobStore,
+    bool JobStoreClustered,
+    bool JobStoreSupportsPersistence,
+    int ThreadPoolSize,
+    int NumberOfJobsExecuted,
+    DateTimeOffset? RunningSince,
+    IReadOnlyList<ClusterNodeDto>? ClusterNodes,
+    bool CanManage,
+    bool HistoryEnabled,
+    bool SecretReferences,
+    int RefreshSeconds,
+    IReadOnlyList<string> Schedulers
+);
+
+/// <summary>One page of history, newest first.</summary>
+/// <param name="NextBefore">The before= value of the next page; null on the last page.</param>
+internal record HistoryPageDto(IReadOnlyList<JobExecutionRecord> Records, long? NextBefore);
+
+internal record JobKeyDto(string Name, string Group);
+
+internal record MessageDto(string Message);
+
 internal record CronPreviewDto(bool IsValid, string Expression, string? Description, IReadOnlyList<DateTimeOffset> NextFireTimes, string? ErrorMessage);
 
 internal static class DashboardApi
@@ -256,33 +290,33 @@ internal static class DashboardApi
             foreach (var s in all)
                 if (await CanView(http, options.Value, s.SchedulerName))
                     visible.Add(s.SchedulerName);
-            return Results.Ok(new
-            {
+            return Results.Ok(new SchedulerDto(
                 meta.SchedulerName,
                 meta.SchedulerInstanceId,
                 meta.Version,
                 meta.Started,
                 meta.InStandbyMode,
-                JobStore = meta.JobStoreType.Name,
+                meta.JobStoreType.Name,
                 meta.JobStoreClustered,
                 meta.JobStoreSupportsPersistence,
                 meta.ThreadPoolSize,
                 meta.NumberOfJobsExecuted,
                 meta.RunningSince,
-                // The cluster's nodes, for a dashboard whose own process may not run the scheduler at all
-                ClusterNodes = await cluster.Read(scheduler, ct),
-                // Lets the UI hide controls the user cannot use; the server still enforces it
-                CanManage = await CanManage(http, options.Value, scheduler.SchedulerName),
-                HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null,
-                SecretReferences = SecretReferences.Enabled(options.Value),
-                RefreshSeconds = Math.Clamp(options.Value.RefreshSeconds, 1, 300),
-                // Every scheduler served that the user may see, the host's own first, for the dashboard's scheduler picker
-                Schedulers = visible
-            });
-        });
+                await cluster.Read(scheduler, ct),
+                await CanManage(http, options.Value, scheduler.SchedulerName),
+                http.RequestServices.GetService<IJobHistoryStore>() != null,
+                SecretReferences.Enabled(options.Value),
+                Math.Clamp(options.Value.RefreshSeconds, 1, 300),
+                // For the dashboard's scheduler picker
+                visible));
+        })
+            .WithTags(Tags.Scheduler).WithSummary("The scheduler, and what the user may do in it")
+            .Produces<SchedulerDto>().ProducesProblem(StatusCodes.Status404NotFound);
 
         api.MapGet("/job-types", async (HttpContext http, JobTypeCatalog catalog) =>
-            Results.Ok(catalog.For((await Scheduler(http)).SchedulerName).Where(t => !t.Hidden).OrderBy(t => t.DisplayName)));
+            Results.Ok(catalog.For((await Scheduler(http)).SchedulerName).Where(t => !t.Hidden).OrderBy(t => t.DisplayName)))
+            .WithTags(Tags.Jobs).WithSummary("The job types new jobs can be created with, and their parameters")
+            .Produces<IEnumerable<JobTypeInfo>>();
 
         api.MapGet("/jobs", async (HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
@@ -295,7 +329,10 @@ internal static class DashboardApi
                     jobs.Add(job);
             }
             return Results.Ok(jobs);
-        });
+        })
+            .WithTags(Tags.Jobs).WithSummary("Every job, with its triggers")
+            .WithDescription("Loads every job one by one, which suits small schedulers. The dashboard uses jobs/search.")
+            .Produces<List<JobDto>>();
 
         // What the dashboard uses: searches, filters, counts and pages over a cheap index of every job, and
         // loads full details only for the page shown. GET /jobs loads every job and suits small schedulers.
@@ -331,7 +368,11 @@ internal static class DashboardApi
                 all.Count(j => j.Status == "Unloadable"), all.Count(j => j.Status == "Error"));
             var types = all.Select(j => j.TypeLabel).Distinct().Order().ToList();
             return Results.Ok(new JobPageDto(jobs, matching.Count, current, size, counts, types));
-        });
+        })
+            .WithTags(Tags.Jobs).WithSummary("Searches, filters and pages the jobs")
+            .WithDescription("search matches names and groups; type is a job type label; status is Active, Paused, Unloadable or Error. " +
+                "Pages hold 50 jobs unless pageSize says otherwise, at most 200. The counts are over every job, whatever the filters.")
+            .Produces<JobPageDto>().ProducesProblem(StatusCodes.Status400BadRequest);
 
         api.MapGet("/jobs/{group}/{name}", async (string group, string name, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
@@ -340,7 +381,9 @@ internal static class DashboardApi
             return await LoadJob(scheduler, key, catalog, options.Value) is { } job
                 ? Results.Ok(job)
                 : NoSuchJob(key);
-        });
+        })
+            .WithTags(Tags.Jobs).WithSummary("A job, with its triggers")
+            .Produces<JobDto>().ProducesProblem(StatusCodes.Status404NotFound);
 
         api.MapGet("/jobs/{group}/{name}/fire-times", async (string group, string name, HttpContext http) =>
         {
@@ -357,10 +400,15 @@ internal static class DashboardApi
                     TriggerUtils.ComputeFireTimes((IOperableTrigger)trigger, calendar, UpcomingFireTimes)));
             }
             return Results.Ok(result);
-        });
+        })
+            .WithTags(Tags.Jobs).WithSummary("Each trigger's next five fire times, skipping those its calendar excludes")
+            .Produces<List<TriggerFireTimesDto>>().ProducesProblem(StatusCodes.Status404NotFound);
 
         api.MapGet("/running", async (HttpContext http, RunningJobsReader reader, CancellationToken ct) =>
-            Results.Ok(await reader.Read(await Scheduler(http, ct), ct)));
+            Results.Ok(await reader.Read(await Scheduler(http, ct), ct)))
+            .WithTags(Tags.Runs).WithSummary("The runs going on now")
+            .WithDescription("Read from the job store, which covers every node of a cluster (source: cluster), or else this node's runs (source: local).")
+            .Produces<RunningJobsDto>();
 
         // History is optional: these return 404 unless the Cronlight.History package is registered
         api.MapGet("/history", async (HttpContext http, string? group, string? name, string? status, long? before, int? limit, CancellationToken ct) =>
@@ -387,12 +435,12 @@ internal static class DashboardApi
                 Limit = pageSize
             }, ct);
 
-            return Results.Ok(new
-            {
-                Records = records,
-                NextBefore = records.Count == pageSize ? records[^1].Id : (long?)null
-            });
-        });
+            return Results.Ok(new HistoryPageDto(records, records.Count == pageSize ? records[^1].Id : null));
+        })
+            .WithTags(Tags.History).WithSummary("Recorded runs, newest first")
+            .WithDescription("group and name pick one job's runs, and status one outcome. Pages hold 50 runs unless limit says otherwise, " +
+                "at most 500; before= takes the last page's nextBefore. 404 when execution history is not enabled.")
+            .Produces<HistoryPageDto>().ProducesProblem(StatusCodes.Status400BadRequest).ProducesProblem(StatusCodes.Status404NotFound);
 
         api.MapGet("/history/{id:long}/log", async (long id, HttpContext http, CancellationToken ct) =>
         {
@@ -402,7 +450,9 @@ internal static class DashboardApi
             return await store.GetLog(scheduler.SchedulerName, id, ct) is { } log
                 ? Results.Ok(log)
                 : Missing("This run has no log.");
-        });
+        })
+            .WithTags(Tags.History).WithSummary("What a run logged while it ran")
+            .Produces<IReadOnlyList<JobRunLogEntry>>().ProducesProblem(StatusCodes.Status404NotFound);
 
         api.MapGet("/history/summary", async (HttpContext http, int? hours, CancellationToken ct) =>
         {
@@ -412,9 +462,15 @@ internal static class DashboardApi
             var scheduler = await Scheduler(http, ct);
             var since = DateTimeOffset.UtcNow.AddHours(-Math.Clamp(hours ?? 24, 1, 24 * 90));
             return Results.Ok(await store.Summarize(scheduler.SchedulerName, since, ct));
-        });
+        })
+            .WithTags(Tags.History).WithSummary("How many runs succeeded and failed in the last hours (24 unless hours says otherwise)")
+            .Produces<JobHistorySummary>().ProducesProblem(StatusCodes.Status404NotFound);
 
-        api.MapGet("/jobs/export", JobTransfer.Export);
+        api.MapGet("/jobs/export", JobTransfer.Export)
+            .WithTags(Tags.Transfer).WithSummary("Exports the jobs to a JSON or YAML file")
+            .WithDescription("format is json (the default) or yaml, and group picks one group. Secrets are masked, except secret references.")
+            .Produces<JobFile>(StatusCodes.Status200OK, "application/json", JobTransfer.YamlContentType)
+            .ProducesProblem(StatusCodes.Status400BadRequest);
 
         api.MapGet("/cron/preview", (string expression, string? timeZone, int? count) =>
         {
@@ -438,7 +494,10 @@ internal static class DashboardApi
             {
                 return Results.Ok(new CronPreviewDto(false, expression, null, [], ex.Message));
             }
-        });
+        })
+            .WithTags(Tags.Cron).WithSummary("Checks a cron expression and lists its next fire times")
+            .WithDescription("timeZone is the zone it is read in, UTC when left out; count is how many fire times, 5 unless it says otherwise, at most 10.")
+            .Produces<CronPreviewDto>();
     }
 
     public static void MapManageEndpoints(this RouteGroupBuilder api)
@@ -452,8 +511,11 @@ internal static class DashboardApi
             Audit.RecordChanges(http, change.Changes);
             await change.Apply(scheduler);
             return Results.Created($"jobs/{Uri.EscapeDataString(change.Key.Group)}/{Uri.EscapeDataString(change.Key.Name)}",
-                new { change.Key.Name, change.Key.Group });
-        });
+                new JobKeyDto(change.Key.Name, change.Key.Group));
+        })
+            .WithTags(Tags.Jobs).WithSummary("Creates a job")
+            .Produces<JobKeyDto>(StatusCodes.Status201Created).ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
         api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
@@ -464,29 +526,57 @@ internal static class DashboardApi
             Audit.RecordChanges(http, change.Changes);
             await change.Apply(scheduler);
             return Results.NoContent();
-        });
+        })
+            .WithTags(Tags.Jobs).WithSummary("Changes a job")
+            .WithDescription("Properties left out are left as they are. Job data keys sent are set, or removed when null, and others kept; " +
+                "a masked secret (********) keeps its value. Triggers replaces the job's triggers of the kinds triggerKinds names.")
+            .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound).ProducesProblem(StatusCodes.Status409Conflict);
 
-        api.MapPost("/jobs/import", JobTransfer.Import);
+        api.MapPost("/jobs/import", JobTransfer.Import)
+            .WithTags(Tags.Transfer).WithSummary("Imports jobs from a JSON or YAML file")
+            .WithDescription("Creates the file's jobs the scheduler does not have and updates the others to match it; never deletes a job. " +
+                "Every job is checked before any is changed: if one cannot be imported, none is, and the 400 answer lists each job's problem " +
+                "under jobs. dryRun=true answers with what importing would do, and changes nothing. Send YAML as application/yaml.")
+            .Accepts<JobFile>("application/json", JobTransfer.YamlContentType)
+            .Produces<ImportResultDto>().ProducesProblem(StatusCodes.Status400BadRequest);
 
         api.MapPost("/jobs/{group}/{name}/pause", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
-            OnJob(http, o.Value, group, name, (s, k) => s.PauseJob(k)));
+            OnJob(http, o.Value, group, name, (s, k) => s.PauseJob(k)))
+            .WithTags(Tags.Jobs).WithSummary("Pauses a job's triggers").OnOneJob();
         api.MapPost("/jobs/{group}/{name}/resume", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
-            OnJob(http, o.Value, group, name, ResumeJob));
-        api.MapPost("/jobs/{group}/{name}/trigger", RunJob);
+            OnJob(http, o.Value, group, name, ResumeJob))
+            .WithTags(Tags.Jobs).WithSummary("Resumes a job's triggers, and those Quartz stopped (Error)").OnOneJob();
+        api.MapPost("/jobs/{group}/{name}/trigger", RunJob)
+            .WithTags(Tags.Runs).WithSummary("Runs a job now, optionally with some of its data replaced for this run only")
+            .OnOneJob().ProducesProblem(StatusCodes.Status400BadRequest);
         api.MapDelete("/jobs/{group}/{name}", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
-            OnJob(http, o.Value, group, name, DeleteJob));
+            OnJob(http, o.Value, group, name, DeleteJob))
+            .WithTags(Tags.Jobs).WithSummary("Deletes a job and its triggers").OnOneJob();
 
-        api.MapPost("/jobs/{group}/{name}/runs/{fireInstanceId}/cancel", CancelRun);
-        api.MapPost("/jobs/{group}/{name}/retries/{trigger}/cancel-retry", CancelRetry);
+        api.MapPost("/jobs/{group}/{name}/runs/{fireInstanceId}/cancel", CancelRun)
+            .WithTags(Tags.Runs).WithSummary("Asks a running job to stop")
+            .WithDescription("Cancels the run's cancellation token; the job stops when it next checks it. Only the node running it can, so a " +
+                "run on another node is refused with 409.")
+            .Produces<MessageDto>(StatusCodes.Status202Accepted).ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
+        api.MapPost("/jobs/{group}/{name}/retries/{trigger}/cancel-retry", CancelRetry)
+            .WithTags(Tags.Runs).WithSummary("Cancels a waiting retry").OnOneJob();
 
         api.MapPost("/groups/{group}/pause", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, FromRoute(group), (s, m) => s.PauseJobs(m, ct), resume: false, ct));
+            OnJobs(http, index, o.Value, FromRoute(group), (s, m) => s.PauseJobs(m, ct), resume: false, ct))
+            .WithTags(Tags.Jobs).WithSummary("Pauses every job in a group").OnOneJob();
         api.MapPost("/groups/{group}/resume", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, FromRoute(group), (s, m) => s.ResumeJobs(m, ct), resume: true, ct));
+            OnJobs(http, index, o.Value, FromRoute(group), (s, m) => s.ResumeJobs(m, ct), resume: true, ct))
+            .WithTags(Tags.Jobs).WithSummary("Resumes every job in a group").OnOneJob();
         api.MapPost("/scheduler/pause", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, null, (s, _) => s.PauseAll(ct), resume: false, ct));
+            OnJobs(http, index, o.Value, null, (s, _) => s.PauseAll(ct), resume: false, ct))
+            .WithTags(Tags.Scheduler).WithSummary("Pauses every job in the scheduler")
+            .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status409Conflict);
         api.MapPost("/scheduler/resume", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, null, (s, _) => s.ResumeAll(ct), resume: true, ct));
+            OnJobs(http, index, o.Value, null, (s, _) => s.ResumeAll(ct), resume: true, ct))
+            .WithTags(Tags.Scheduler).WithSummary("Resumes every job in the scheduler")
+            .Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status409Conflict);
     }
 
     /// <summary>
@@ -622,6 +712,22 @@ internal static class DashboardApi
                 await ReplaceTriggers(s, key, requested, kinds);
         }), null);
     }
+
+    /// <summary>The groups of endpoints the OpenAPI description lists.</summary>
+    private static class Tags
+    {
+        public const string Scheduler = "Scheduler";
+        public const string Jobs = "Jobs";
+        public const string Runs = "Runs";
+        public const string History = "History";
+        public const string Transfer = "Export and import";
+        public const string Cron = "Cron";
+    }
+
+    /// <summary>What an action on one job, or one group, answers.</summary>
+    private static RouteHandlerBuilder OnOneJob(this RouteHandlerBuilder endpoint) =>
+        endpoint.Produces(StatusCodes.Status204NoContent).ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
 
     /// <summary>
     /// Pauses or resumes every job in a group, or with a null group every job in the scheduler. Quartz does it in the
@@ -796,10 +902,10 @@ internal static class DashboardApi
         if (local != null)
         {
             if (local.CancellationToken.IsCancellationRequested)
-                return Results.Accepted(value: new { Message = "Cancellation was already requested." });
+                return Results.Accepted(value: new MessageDto("Cancellation was already requested."));
             local.Put(CronlightContextKeys.CancelledBy, Audit.UserName(http.User));
             await scheduler.Interrupt(fireInstanceId, ct);
-            return Results.Accepted(value: new { Message = "Cancellation requested. The job stops when it next checks its cancellation token." });
+            return Results.Accepted(value: new MessageDto("Cancellation requested. The job stops when it next checks its cancellation token."));
         }
 
         var elsewhere = (await reader.Read(scheduler, ct)).Jobs

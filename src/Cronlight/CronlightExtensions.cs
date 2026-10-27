@@ -43,6 +43,7 @@ public static class CronlightExtensions
         services.AddSchedulerAttachment<MetricsAttachment>();
         services.AddJobNotCreatedHandler<MetricsListener>();
         services.TryAddEnumerable(ServiceDescriptor.Transient<IStartupFilter, SecurityHeadersStartupFilter>());
+        services.AddCronlightOpenApi();
         return services;
     }
 
@@ -110,6 +111,7 @@ public static class CronlightExtensions
         var api = group.MapGroup("/api");
         api.AddErrorHandling(logger);
         api.RequireSchedulerAccess(manage: false);
+        api.MapOpenApiDocument();
         api.MapReadEndpoints();
 
         var manage = api.MapGroup("");
