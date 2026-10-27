@@ -85,6 +85,11 @@ public class SecretReferenceTests
         var updated = await client.PutJson("api/jobs/DEFAULT/ok", new { data = new { run = "x", smtpPassword = reference } });
         Assert.Equal(HttpStatusCode.BadRequest, updated.StatusCode);
         Assert.Contains(error, await updated.Content.ReadAsStringAsync());
+
+        // Nor can a run with different data use one
+        var run = await client.PostJson("api/jobs/DEFAULT/ok/trigger", new { data = new { smtpPassword = reference } });
+        Assert.Equal(HttpStatusCode.BadRequest, run.StatusCode);
+        Assert.Contains(error, await run.Content.ReadAsStringAsync());
     }
 
     [Fact]
