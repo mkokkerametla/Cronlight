@@ -165,7 +165,8 @@ public static class CronlightExtensions
                 return Results.Redirect($"{ctx.Request.PathBase}{ctx.Request.Path}/");
 
             if (path?.StartsWith("api/", StringComparison.OrdinalIgnoreCase) == true)
-                return Results.NotFound();
+                return Results.Problem(title: "Not found.", detail: $"There is no API endpoint {ctx.Request.Method} {path}.",
+                    statusCode: StatusCodes.Status404NotFound);
 
             var file = string.IsNullOrEmpty(path) ? null : files.GetFileInfo(path);
             if (file is not { Exists: true })

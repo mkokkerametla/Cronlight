@@ -93,11 +93,46 @@ public class ApiTests
         Assert.False(foreign.GetProperty("loadable").GetBoolean());
         Assert.Contains("OtherApp", foreign.GetProperty("loadError").GetString());
 
-        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsync("api/jobs/other/report/pause", null)).StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsync("api/jobs/other/report/trigger", null)).StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, (await client.PutJson("api/jobs/other/report", new { description = "x" })).StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, (await client.DeleteAsync("api/jobs/other/report")).StatusCode);
+        // Refused in one wording, whatever was asked
+        foreach (var response in new[]
+        {
+            await client.PostAsync("api/jobs/other/report/pause", null),
+            await client.PostAsync("api/jobs/other/report/trigger", null),
+            await client.PutJson("api/jobs/other/report", new { description = "x" }),
+            await client.DeleteAsync("api/jobs/other/report"),
+        })
+        {
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal("Job is read-only in this dashboard.", problem.GetProperty("title").GetString());
+            Assert.Contains("belongs to another application sharing this scheduler, so it cannot be",
+                problem.GetProperty("detail").GetString());
+        }
         Assert.Equal(1, await host.CountJobRows("other", "report"));
+    }
+
+    [Fact]
+    public async Task Errors_are_problem_details_whose_detail_says_what_is_wrong()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "taken" });
+
+        foreach (var (response, status, title, detail) in new[]
+        {
+            (await client.PostJson("api/jobs", new { type = "Nope.Job", name = "bad" }), HttpStatusCode.BadRequest, "Invalid request.",
+                "Unknown job type 'Nope.Job'"),
+            (await client.GetAsync("api/jobs/DEFAULT/missing"), HttpStatusCode.NotFound, "Not found.", "Job DEFAULT.missing does not exist."),
+            (await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "taken" }), HttpStatusCode.Conflict,
+                "Not possible as things stand.", "Job DEFAULT.taken already exists"),
+            (await client.GetAsync("api/no-such-thing"), HttpStatusCode.NotFound, "Not found.", "There is no API endpoint GET api/no-such-thing."),
+        })
+        {
+            Assert.Equal(status, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
+            var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal((title, detail), (problem.GetProperty("title").GetString(), problem.GetProperty("detail").GetString()));
+        }
     }
 
     [Fact]
@@ -466,7 +501,9 @@ public class ApiTests
         var response = await host.Client().PutJson("api/jobs/other/report", new { description = "x" });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        Assert.Contains("cannot be edited", await response.Content.ReadAsStringAsync());
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Job is read-only in this dashboard.", problem.GetProperty("title").GetString());
+        Assert.EndsWith("so it cannot be edited here.", problem.GetProperty("detail").GetString());
     }
 
     [Fact]

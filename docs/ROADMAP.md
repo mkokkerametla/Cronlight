@@ -170,13 +170,6 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 - **Time zones**: show and edit schedules in a chosen zone, and warn about daylight-saving gaps and repeats.
 - **Accessibility**: an axe scan in the tests, and tests at phone width.
 
-## Simplify
-
-- Remove `AllowManagingUnloadableJobs`.
-- Use one wording for refusing to change another app's job. Today there are two: "Job is read-only in this
-  dashboard." and "...cannot be loaded here and cannot be edited."
-- Clearer error messages in general.
-
 ## Known gaps
 
 - No end-to-end tests yet for run logs, one-time and interval triggers, or pausing groups.

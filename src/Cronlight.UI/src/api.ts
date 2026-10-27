@@ -49,8 +49,9 @@ async function errorMessage(res: Response): Promise<string> {
   try {
     const problem: unknown = JSON.parse(text)
     if (typeof problem === 'string') return problem
+    // The detail says what is wrong; the title only names the kind of error
     const { title, detail } = problem as { title?: string; detail?: string }
-    return [title, detail].filter(Boolean).join(' ') || `${res.status}`
+    return detail || title || `${res.status}`
   } catch {
     return text || `${res.status} ${res.statusText}`
   }

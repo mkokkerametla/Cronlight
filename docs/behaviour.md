@@ -59,7 +59,10 @@ headers and cross-site requests.
   in), and say "Not started (manages only)" for a dashboard that only manages schedulers other apps run. Other
   schedulers (including one added with `UseCronlight(services)`, without its properties) show this process's state:
   Running, Standby or Stopped.
-- **Errors** are returned as ProblemDetails with a trace id, never stack traces.
+- **Errors** are ProblemDetails (`application/problem+json`): `detail` says what is wrong ("Job DEFAULT.nightly does
+  not exist.") and `title` names the kind of error ("Not found."). A server error also has a `traceId` to find it in
+  the app's log, and never a stack trace. A job of another app sharing the scheduler is refused as "Job is read-only
+  in this dashboard.", saying what cannot be done to it.
 - **Security headers** are sent on every dashboard response: a Content-Security-Policy that allows only
   the dashboard's own files and API and no embedding in other sites (`frame-ancestors 'none'`, plus
   `X-Frame-Options: DENY`), `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. To

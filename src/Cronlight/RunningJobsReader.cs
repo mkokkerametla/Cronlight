@@ -4,7 +4,7 @@ using Quartz;
 
 namespace Cronlight;
 
-public record RunningJobDto(
+internal record RunningJobDto(
     string Name,
     string Group,
     string? JobType,
@@ -19,7 +19,7 @@ public record RunningJobDto(
 /// <param name="Source">
 /// cluster when read from the Quartz tables, which list every node's runs; local when only this node's are known.
 /// </param>
-public record RunningJobsDto(string Source, IReadOnlyList<RunningJobDto> Jobs)
+internal record RunningJobsDto(string Source, IReadOnlyList<RunningJobDto> Jobs)
 {
     public const string Cluster = "cluster";
     public const string Local = "local";

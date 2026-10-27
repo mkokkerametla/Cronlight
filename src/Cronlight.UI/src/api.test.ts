@@ -79,10 +79,13 @@ describe('api', () => {
 
   it('turns problem details, plain JSON strings and text into error messages', async () => {
     stub()
-    respond(JSON.stringify({ title: 'Invalid job', detail: "Unknown type 'Nope'" }), {
+    respond(JSON.stringify({ title: 'Invalid request.', detail: "Unknown job type 'Nope'" }), {
       status: 400,
     })
-    await expect(api('jobs')).rejects.toThrow("Invalid job Unknown type 'Nope'")
+    await expect(api('jobs')).rejects.toThrow(/^Unknown job type 'Nope'$/)
+
+    respond(JSON.stringify({ title: 'The scheduler operation failed.' }), { status: 500 })
+    await expect(api('jobs')).rejects.toThrow('The scheduler operation failed.')
 
     respond(JSON.stringify('Job not found'), { status: 404 })
     await expect(api('jobs')).rejects.toThrow('Job not found')

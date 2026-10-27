@@ -33,7 +33,7 @@ test('changes made elsewhere show up without a reload', async ({ page, request }
 
   // Acting on a job that is gone reports it...
   await details.getByRole('button', { name: 'Pause' }).click()
-  await expect(page.getByText('404 Not Found')).toBeVisible()
+  await expect(page.getByText(`Job DEFAULT.${name} does not exist.`)).toBeVisible()
   // ...and the next refresh closes its sheet and drops it from the list
   await expect(details).toBeHidden()
   await expect(jobRow(page, name)).toHaveCount(0)
@@ -42,6 +42,8 @@ test('changes made elsewhere show up without a reload', async ({ page, request }
 test('a lost connection keeps the last data on screen until the scheduler is back', async ({ page, request }) => {
   const name = uniqueName('offline')
   await createJob(request, { type: jobTypes.plain, name })
+  // Slower than the tests' usual second, so the next refresh does not clear the banner before Try again is pressed
+  await refreshEvery(page, 5)
   await openDashboard(page)
   await expect(jobRow(page, name)).toBeVisible()
 
