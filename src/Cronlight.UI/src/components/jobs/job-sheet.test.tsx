@@ -211,6 +211,20 @@ describe('JobSheet', () => {
     expect(sheet().getByRole('button', { name: /Run with different data/ })).toBeInTheDocument()
   })
 
+  it('keeps the data entered when the run could not be started', async () => {
+    const { actions } = renderSheet(job({ data: { region: 'eu' } }))
+    vi.mocked(actions.runWithData).mockResolvedValue(false)
+
+    await userEvent.click(sheet().getByRole('button', { name: /Run with different data/ }))
+    await userEvent.clear(sheet().getByLabelText('Value for region'))
+    await userEvent.type(sheet().getByLabelText('Value for region'), 'us')
+    await userEvent.click(sheet().getByRole('button', { name: /Run now/ }))
+
+    expect(actions.runWithData).toHaveBeenCalledOnce()
+    expect(sheet().getByLabelText('Value for region')).toHaveValue('us')
+    expect(sheet().getByRole('button', { name: /Run now/ })).toBeEnabled()
+  })
+
   it('runs with what was changed in the form, not values the job saved meanwhile', async () => {
     const { actions, poll } = renderSheet(job({ data: { cursor: '400', region: 'eu' } }))
     await userEvent.click(sheet().getByRole('button', { name: /Run with different data/ }))
@@ -404,6 +418,18 @@ describe('JobSheet', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Delete job' }))
     expect(actions.remove).toHaveBeenCalledOnce()
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  it('stays open when the job could not be deleted', async () => {
+    const { actions, onClose } = renderSheet(job())
+    vi.mocked(actions.remove).mockResolvedValue(false)
+
+    await userEvent.click(sheet().getByRole('button', { name: /Delete/ }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete job' }))
+
+    expect(actions.remove).toHaveBeenCalledOnce()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'nightly' })).toBeInTheDocument()
   })
 
   it('leaves edit mode when closed, so the next job opens on its details', async () => {
