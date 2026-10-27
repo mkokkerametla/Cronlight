@@ -69,6 +69,26 @@ public class ClusterTests
         }
     }
 
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task A_node_is_alive_within_the_check_in_misfire_threshold_Quartz_is_configured_with(string name)
+    {
+        await using var host = await TestHost.Start(database: DatabaseTests.Require(name), clustered: true, startScheduler: false,
+            clusterCheckinMisfireThreshold: TimeSpan.FromMinutes(1));
+        try
+        {
+            // Past the 7.5-second interval plus the default 7.5-second threshold, within the configured minute
+            await Node(host, "worker-a", TimeSpan.FromSeconds(20));
+
+            var node = Assert.Single((await ClusterNodes(host)).EnumerateArray());
+            Assert.True(node.GetProperty("alive").GetBoolean());
+        }
+        finally
+        {
+            await ForgetNodes(host);
+        }
+    }
+
     [Fact]
     public async Task A_scheduler_that_is_not_clustered_lists_no_nodes()
     {

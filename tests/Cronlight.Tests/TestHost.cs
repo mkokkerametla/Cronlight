@@ -52,7 +52,8 @@ public sealed class TestHost : IAsyncDisposable
         Dictionary<string, string?>? settings = null,
         bool clustered = false,
         TimeSpan? misfireThreshold = null,
-        bool startScheduler = true)
+        bool startScheduler = true,
+        TimeSpan? clusterCheckinMisfireThreshold = null)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
         var schedulerName = $"test-{id}";
@@ -83,7 +84,11 @@ public sealed class TestHost : IAsyncDisposable
                 database.UseFor(store, $"ds-{id}");
                 store.UseNewtonsoftJsonSerializer();
                 if (clustered)
-                    store.UseClustering();
+                    store.UseClustering(c =>
+                    {
+                        if (clusterCheckinMisfireThreshold is { } allowance)
+                            c.CheckinMisfireThreshold = allowance;
+                    });
             });
         });
         if (startScheduler)

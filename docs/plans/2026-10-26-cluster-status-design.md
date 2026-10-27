@@ -24,9 +24,9 @@ Otherwise it returns null.
 
 For each node it returns the instance name, the last check-in (Quartz stores UTC ticks), the check-in interval
 (milliseconds), the seconds since that check-in by the server's clock, whether it is alive, and whether it is this
-process's instance. A node is alive while its last check-in plus its interval plus 7.5 seconds has not passed:
-Quartz's own rule before it treats a node as failed. A process that never starts its scheduler never checks in, so
-it is not in the table.
+process's instance. A node is alive while its last check-in plus its interval plus Quartz's check-in misfire
+threshold (7.5 s by default) has not passed: Quartz's own rule before it treats a node as failed. A process that never
+starts its scheduler never checks in, so it is not in the table.
 
 When the table cannot be read, the reader logs a warning and returns null, and the dashboard shows this process's
 state as it does today. The status line never breaks the dashboard.

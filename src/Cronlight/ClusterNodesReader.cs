@@ -5,7 +5,7 @@ using Quartz;
 namespace Cronlight;
 
 /// <param name="SecondsSinceCheckin">By the server's clock, so a browser with a wrong clock does not misread it.</param>
-/// <param name="Alive">Checked in within its interval plus Quartz's allowance, so Quartz does not take it for failed.</param>
+/// <param name="Alive">Checked in within its interval plus Quartz's check-in misfire threshold, so Quartz does not take it for failed.</param>
 /// <param name="ThisNode">This process's scheduler instance; a process that never starts its scheduler is never listed.</param>
 public record ClusterNodeDto(
     string InstanceId,
@@ -22,10 +22,7 @@ public record ClusterNodeDto(
 /// </summary>
 internal sealed class ClusterNodesReader(QuartzDataSource hostDataSource, CronlightSchedulers schedulers, ILogger<ClusterNodesReader> logger)
 {
-    // Quartz's allowance past a node's check-in interval before it treats the node as failed
-    private static readonly TimeSpan Allowance = TimeSpan.FromMilliseconds(7500);
-
-    /// <summary>Null unless the scheduler is clustered on a database store Cronlight can read, and when that read fails.</summary>
+    /// <summary>Null when the scheduler is not clustered on a database store Cronlight can read, or when reading it fails.</summary>
     public async Task<IReadOnlyList<ClusterNodeDto>?> Read(IScheduler scheduler, CancellationToken cancellationToken)
     {
         var meta = await scheduler.GetMetaData(cancellationToken);
@@ -56,6 +53,7 @@ internal sealed class ClusterNodesReader(QuartzDataSource hostDataSource, Cronli
             """;
         dataSource.AddParameter(command, "schedName", schedulerName);
 
+        var allowance = dataSource.ClusterCheckinMisfireThreshold;
         var now = DateTimeOffset.UtcNow;
         var nodes = new List<ClusterNodeDto>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -70,7 +68,7 @@ internal sealed class ClusterNodesReader(QuartzDataSource hostDataSource, Cronli
                 checkin,
                 interval,
                 (long)Math.Max(0, (now - checkin).TotalSeconds),
-                checkin + TimeSpan.FromMilliseconds(interval) + Allowance >= now,
+                checkin + TimeSpan.FromMilliseconds(interval) + allowance >= now,
                 instance == instanceId
             ));
         }
