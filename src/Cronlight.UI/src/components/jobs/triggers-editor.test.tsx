@@ -5,7 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { TriggersEditor } from '@/components/jobs/triggers-editor'
 import { formatDateTime } from '@/lib/format'
-import { draftsToRequest, emptyTrigger, type TriggerDraft } from '@/lib/job-form'
+import {
+  draftsFromTriggers,
+  draftsToRequest,
+  emptyTrigger,
+  type TriggerDraft,
+} from '@/lib/job-form'
+import { trigger } from '@/test/fixtures'
 
 // The cron preview asks the server; answer every expression as valid
 vi.mock('@/api', () => ({ api: vi.fn() }))
@@ -141,6 +147,28 @@ describe('TriggersEditor', () => {
     await userEvent.clear(screen.getByLabelText('Number of runs'))
     await userEvent.type(screen.getByLabelText('Number of runs'), '3')
     expect(screen.getByText(/Every 5m, starting now, 3 runs in all/)).toBeInTheDocument()
+  })
+
+  it('says a trigger keeps the calendar set on it, which the form does not send', () => {
+    render(
+      <Editor
+        initial={draftsFromTriggers([
+          trigger({
+            name: 'payroll',
+            cronExpression: '0 0 9 ? * MON-FRI',
+            calendarName: 'holidays',
+          }),
+          trigger({ name: 'audit', cronExpression: '0 0 18 * * ?' }),
+        ])}
+      />
+    )
+
+    expect(screen.getAllByText(/Skips the times excluded by its calendar/)).toHaveLength(1)
+    expect(screen.getByText('holidays')).toBeInTheDocument()
+    expect(sent()).toEqual([
+      expect.not.objectContaining({ calendarName: expect.anything() }),
+      expect.not.objectContaining({ calendarName: expect.anything() }),
+    ])
   })
 
   it('sends the name, time zone and skip choice of a cron trigger', async () => {

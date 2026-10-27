@@ -84,6 +84,7 @@ describe('JobSheet', () => {
             name: 'weekdays',
             cronExpression: '0 0 6 ? * MON-FRI',
             timeZone: 'Europe/Paris',
+            calendarName: 'holidays',
           }),
           trigger({
             name: 'once',
@@ -102,6 +103,8 @@ describe('JobSheet', () => {
     expect(sheet().getByText('Triggers (2)')).toBeInTheDocument()
     expect(sheet().getByText('0 0 6 ? * MON-FRI')).toBeInTheDocument()
     expect(sheet().getByText('Europe/Paris')).toBeInTheDocument()
+    expect(sheet().getByText('Skips times excluded by').nextSibling).toHaveTextContent('holidays')
+    expect(sheet().getAllByText('Skips times excluded by')).toHaveLength(1)
     expect(sheet().getByText('Not scheduled')).toBeInTheDocument()
     expect(sheet().getByText(/^Once, /)).toBeInTheDocument()
     expect(sheet().getByText('eu-west')).toBeInTheDocument()

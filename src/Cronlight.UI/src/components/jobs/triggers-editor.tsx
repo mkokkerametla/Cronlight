@@ -207,6 +207,13 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
               {skipLabels[trigger.kind]}
             </Label>
           </div>
+          {trigger.calendarName && (
+            <p className="text-xs text-muted-foreground">
+              Skips the times excluded by its calendar,{' '}
+              <span className="font-medium text-foreground">{trigger.calendarName}</span>, kept
+              while the trigger keeps its name
+            </p>
+          )}
         </div>
       ))}
       <Button

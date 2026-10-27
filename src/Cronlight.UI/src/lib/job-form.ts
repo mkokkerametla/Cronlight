@@ -78,6 +78,8 @@ export interface TriggerDraft {
   runs: string
   /** Skip a fire time the scheduler missed, instead of running once as soon as it can */
   skipMissed: boolean
+  /** The stored trigger's calendar, shown only: the server keeps it */
+  calendarName: string | null
 }
 
 let lastDraftId = 0
@@ -95,6 +97,7 @@ export const emptyTrigger = (kind: EditableTriggerKind = 'Cron'): TriggerDraft =
   unit: 'minutes',
   runs: '',
   skipMissed: false,
+  calendarName: null,
 })
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -130,6 +133,7 @@ export const draftsFromTriggers = (triggers: Trigger[]): TriggerDraft[] => {
       unit,
       runs: t.repeatCount != null ? String(t.repeatCount + 1) : '',
       skipMissed: t.skipsMissed ?? t.misfireInstruction === 'DoNothing',
+      calendarName: t.calendarName ?? null,
     }
   })
   return drafts.length ? drafts : [emptyTrigger()]
