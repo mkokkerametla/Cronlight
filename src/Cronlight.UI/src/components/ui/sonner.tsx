@@ -12,9 +12,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = 'system' } = useTheme()
 
   return (
+    // An open panel turns off pointer events on the page behind it, toasts included; they take clicks regardless
     <Sonner
       theme={theme as ToasterProps['theme']}
-      className="toaster group"
+      className="toaster group pointer-events-auto"
       icons={{
         success: <CircleCheckIcon className="size-4" />,
         info: <InfoIcon className="size-4" />,
