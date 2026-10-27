@@ -18,7 +18,7 @@ public static class CronlightHealthCheckExtensions
     /// For a clustered scheduler this process has not started, check the cluster's nodes instead: healthy while any
     /// node is alive, degraded when none is. For a host that manages schedulers other processes run and never starts
     /// them. It applies to a clustered scheduler whose connection Cronlight has: the host's own, or one added with its
-    /// properties through UseCronlight; others are checked per process as before. A host that has started the scheduler
+    /// properties through UseCronlight; others are checked by this process's state, as without the option. A host that has started the scheduler
     /// is still checked by its own state.
     /// </param>
     public static IHealthChecksBuilder AddCronlight(this IHealthChecksBuilder builder, string name = "cronlight",
