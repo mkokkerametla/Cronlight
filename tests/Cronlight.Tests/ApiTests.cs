@@ -112,6 +112,42 @@ public class ApiTests
     }
 
     [Fact]
+    public async Task A_job_named_in_any_script_is_created_and_answered_with_where_to_find_it()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+
+        var created = await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "café ünd 报告", group = "ventes/eu" });
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal("jobs/ventes%2Feu/caf%C3%A9%20%C3%BCnd%20%E6%8A%A5%E5%91%8A", created.Headers.Location!.OriginalString);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("api/" + created.Headers.Location.OriginalString)).StatusCode);
+        // The slash in the group arrives escaped, as the dashboard sends it
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync($"api/{created.Headers.Location.OriginalString}/pause", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("api/groups/ventes%2Feu/resume", null)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("forged\nAudit: alice delete billing.invoices", "DEFAULT", null)]
+    [InlineData("tab\tname", "DEFAULT", null)]
+    [InlineData("report", "bill\ring", null)]
+    [InlineData("report", "DEFAULT", "line\nbreak")]
+    public async Task Names_with_control_characters_are_refused_so_they_cannot_forge_log_lines(string name, string group, string? trigger)
+    {
+        await using var host = await TestHost.Start();
+
+        var response = await host.Client().PostJson("api/jobs", new
+        {
+            type = typeof(PlainJob).FullName, name, group,
+            triggers = trigger == null ? null : new[] { new { name = trigger, cronExpression = "0 0 6 * * ?" } }
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("control characters", (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString());
+        Assert.Empty(await (await host.Scheduler()).GetJobGroupNames());
+    }
+
+    [Fact]
     public async Task Errors_are_problem_details_whose_detail_says_what_is_wrong()
     {
         await using var host = await TestHost.Start();

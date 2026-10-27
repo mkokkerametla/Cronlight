@@ -324,7 +324,7 @@ internal static class DashboardApi
         api.MapGet("/jobs/{group}/{name}", async (string group, string name, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             var scheduler = await Scheduler(http);
-            var key = new JobKey(name, group);
+            var key = JobKeyFrom(group, name);
             return await LoadJob(scheduler, key, catalog, options.Value) is { } job
                 ? Results.Ok(job)
                 : NoSuchJob(key);
@@ -333,7 +333,7 @@ internal static class DashboardApi
         api.MapGet("/jobs/{group}/{name}/fire-times", async (string group, string name, HttpContext http) =>
         {
             var scheduler = await Scheduler(http);
-            var key = new JobKey(name, group);
+            var key = JobKeyFrom(group, name);
             if (!await scheduler.CheckExists(key))
                 return NoSuchJob(key);
             var result = new List<TriggerFireTimesDto>();
@@ -436,6 +436,8 @@ internal static class DashboardApi
                 return Invalid("A job type is required: set 'type' to one of the types listed by api/job-types");
             if (string.IsNullOrWhiteSpace(request.Name))
                 return Invalid("A job name is required");
+            if (HasControlCharacters(request.Name) || HasControlCharacters(request.Group))
+                return Invalid("Job names and groups cannot contain control characters, such as line breaks or tabs");
             if (!catalog.TryGet(typeName, out var type, out var info))
                 return Invalid($"Unknown job type '{typeName}'");
             var scheduler = await Scheduler(http);
@@ -484,13 +486,13 @@ internal static class DashboardApi
             // One call stores the job and its triggers together, so a failure leaves nothing behind
             await scheduler.ScheduleJob(job, triggers, replace: false);
 
-            return Results.Created($"jobs/{key.Group}/{key.Name}", new { key.Name, key.Group });
+            return Results.Created($"jobs/{Uri.EscapeDataString(key.Group)}/{Uri.EscapeDataString(key.Name)}", new { key.Name, key.Group });
         });
 
         api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             var scheduler = await Scheduler(http);
-            var key = new JobKey(name, group);
+            var key = JobKeyFrom(group, name);
             var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
             if (problem != null)
                 return problem;
@@ -573,9 +575,9 @@ internal static class DashboardApi
         api.MapPost("/jobs/{group}/{name}/retries/{trigger}/cancel-retry", CancelRetry);
 
         api.MapPost("/groups/{group}/pause", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, group, (s, m) => s.PauseJobs(m, ct), resume: false, ct));
+            OnJobs(http, index, o.Value, FromRoute(group), (s, m) => s.PauseJobs(m, ct), resume: false, ct));
         api.MapPost("/groups/{group}/resume", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, group, (s, m) => s.ResumeJobs(m, ct), resume: true, ct));
+            OnJobs(http, index, o.Value, FromRoute(group), (s, m) => s.ResumeJobs(m, ct), resume: true, ct));
         api.MapPost("/scheduler/pause", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
             OnJobs(http, index, o.Value, null, (s, _) => s.PauseAll(ct), resume: false, ct));
         api.MapPost("/scheduler/resume", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
@@ -668,7 +670,7 @@ internal static class DashboardApi
         IOptions<CronlightOptions> options)
     {
         var scheduler = await Scheduler(http);
-        var key = new JobKey(name, group);
+        var key = JobKeyFrom(group, name);
         var (_, problem) = await GetManageableJob(scheduler, key, options.Value);
         if (problem != null)
             return problem;
@@ -692,7 +694,7 @@ internal static class DashboardApi
         JobTypeCatalog catalog, IOptions<CronlightOptions> options)
     {
         var scheduler = await Scheduler(http);
-        var key = new JobKey(name, group);
+        var key = JobKeyFrom(group, name);
         var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
         if (problem != null)
             return problem;
@@ -745,7 +747,7 @@ internal static class DashboardApi
         RunningJobsReader reader, IOptions<CronlightOptions> options, CancellationToken ct)
     {
         var scheduler = await Scheduler(http, ct);
-        var key = new JobKey(name, group);
+        var key = JobKeyFrom(group, name);
         var (_, problem) = await GetManageableJob(scheduler, key, options.Value);
         if (problem != null)
             return problem;
@@ -799,7 +801,7 @@ internal static class DashboardApi
     private static async Task<IResult> OnJob(HttpContext http, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)
     {
         var scheduler = await Scheduler(http);
-        var key = new JobKey(name, group);
+        var key = JobKeyFrom(group, name);
         var (_, problem) = await GetManageableJob(scheduler, key, options);
         if (problem != null)
             return problem;
@@ -1027,6 +1029,11 @@ internal static class DashboardApi
                 do name = $"{key.Name}-trigger-{next++}";
                 while (!taken.Add(name));
             }
+            if (HasControlCharacters(name))
+            {
+                error = "Trigger names cannot contain control characters, such as line breaks or tabs";
+                return false;
+            }
             if (triggers.Any(t => t.Key.Name == name))
             {
                 error = $"Duplicate trigger name '{name}'";
@@ -1231,6 +1238,19 @@ internal static class DashboardApi
     private static bool IsManualRun(ITrigger trigger) =>
         trigger.Key.Group == SchedulerConstants.DefaultGroup && trigger.Key.Name.StartsWith("MT_", StringComparison.Ordinal)
         && long.TryParse(trigger.Key.Name.AsSpan(3), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _);
+
+    /// <summary>
+    /// A job's group or name as the route gives it. ASP.NET Core decodes a request's path but leaves %2F as it is, so a
+    /// slash in a group or name, which the dashboard escapes, arrives as %2F.
+    /// </summary>
+    internal static string FromRoute(string value) => value.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase);
+
+    private static JobKey JobKeyFrom(string group, string name) => new(FromRoute(name), FromRoute(group));
+
+    /// <summary>
+    /// Names are written into the audit log and other logs as they are, so a line break in one could forge a log line.
+    /// </summary>
+    private static bool HasControlCharacters(string? name) => name != null && name.Any(char.IsControl);
 
     // Names already warned about, so each is logged once per process
     private static readonly ConcurrentDictionary<string, bool> SettingsWarned = new(StringComparer.OrdinalIgnoreCase);
