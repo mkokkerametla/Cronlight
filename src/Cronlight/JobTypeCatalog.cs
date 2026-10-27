@@ -85,13 +85,13 @@ internal class JobTypeCatalog
                 .ToList());
         var bySchedulerName = options.Schedulers
             .Where(s => s.Value.JobAssemblies.Count > 0)
-            .ToDictionary(s => s.Key, s => JobTypes(s.Value.JobAssemblies), StringComparer.Ordinal);
+            .ToDictionary(s => s.Key, s => JobTypes(s.Value.JobAssemblies), StringComparer.OrdinalIgnoreCase);
 
         var types = shared.Concat(bySchedulerName.Values.SelectMany(t => t))
             .DistinctBy(t => t.FullName)
             .ToDictionary(t => t.FullName!, t => (t, ToInfo(t)));
         return new Catalog(types, Names(shared),
-            bySchedulerName.ToDictionary(s => s.Key, s => Names(s.Value), StringComparer.Ordinal));
+            bySchedulerName.ToDictionary(s => s.Key, s => Names(s.Value), StringComparer.OrdinalIgnoreCase));
 
         static IReadOnlySet<string> Names(List<Type> types) => types.Select(t => t.FullName!).ToHashSet();
     }

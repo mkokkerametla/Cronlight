@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
@@ -233,12 +234,14 @@ internal static class DashboardApi
     public static void MapReadEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/scheduler", async (HttpContext http, CronlightSchedulers schedulers, IOptions<CronlightOptions> options,
-            ClusterNodesReader cluster, CancellationToken ct) =>
+            ClusterNodesReader cluster, ILoggerFactory loggers, CancellationToken ct) =>
         {
             var scheduler = await Scheduler(http);
             var meta = await scheduler.GetMetaData();
+            var all = await schedulers.All();
+            WarnAboutSettingsForNoScheduler(options.Value, all, loggers);
             var visible = new List<string>();
-            foreach (var s in await schedulers.All())
+            foreach (var s in all)
                 if (await CanView(http, options.Value, s.SchedulerName))
                     visible.Add(s.SchedulerName);
             return Results.Ok(new
@@ -1228,6 +1231,25 @@ internal static class DashboardApi
     private static bool IsManualRun(ITrigger trigger) =>
         trigger.Key.Group == SchedulerConstants.DefaultGroup && trigger.Key.Name.StartsWith("MT_", StringComparison.Ordinal)
         && long.TryParse(trigger.Key.Name.AsSpan(3), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _);
+
+    // Names already warned about, so each is logged once per process
+    private static readonly ConcurrentDictionary<string, bool> SettingsWarned = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Settings for a name no scheduler is served by protect nothing, which is easily missed with a typo. Checked when
+    /// the dashboard asks for its scheduler, by which time schedulers added after startup are there too.
+    /// </summary>
+    private static void WarnAboutSettingsForNoScheduler(CronlightOptions options, IReadOnlyList<IScheduler> served, ILoggerFactory loggers)
+    {
+        foreach (var name in options.Schedulers.Keys)
+        {
+            if (served.Any(s => string.Equals(s.SchedulerName, name, StringComparison.OrdinalIgnoreCase)) || !SettingsWarned.TryAdd(name, true))
+                continue;
+            loggers.CreateLogger("Cronlight").LogWarning(
+                "Cronlight has settings for scheduler '{Scheduler}' (o.Schedulers), but no scheduler by that name is served here, so its " +
+                "policies and job types apply to nothing. Served: {Served}", name, string.Join(", ", served.Select(s => s.SchedulerName)));
+        }
+    }
 
     private static async Task<bool> CanManage(HttpContext http, CronlightOptions options, string schedulerName)
     {
