@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -14,6 +14,8 @@ function Editor({ initial }: { initial: TriggerDraft[] }) {
   return <TriggersEditor triggers={triggers} onChange={setTriggers} />
 }
 
+const syntaxLinks = () => screen.queryAllByRole('link', { name: /Quartz cron syntax/ })
+
 describe('TriggersEditor', () => {
   beforeEach(() => {
     vi.mocked(api).mockImplementation(async path => {
@@ -26,6 +28,48 @@ describe('TriggersEditor', () => {
         errorMessage: null,
       }
     })
+  })
+
+  it("links to Quartz.NET's cron documentation, in a new tab", () => {
+    render(<Editor initial={[emptyTrigger()]} />)
+
+    for (const link of syntaxLinks()) {
+      expect(link).toHaveAttribute(
+        'href',
+        'https://www.quartz-scheduler.net/documentation/quartz-3.x/tutorial/crontriggers.html'
+      )
+      expect(link).toHaveAttribute('target', '_blank')
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    }
+  })
+
+  it('offers the cron syntax under a cron box while it is empty or invalid', async () => {
+    vi.mocked(api).mockImplementation(async path => {
+      const expression = new URLSearchParams((path as string).split('?')[1]).get('expression')
+      const isValid = expression === '0 0 9 * * ?'
+      return {
+        isValid,
+        expression,
+        description: null,
+        nextFireTimes: isValid ? ['2030-01-01T09:00:00Z'] : [],
+        errorMessage: isValid ? null : 'Unexpected end of expression.',
+      }
+    })
+    render(<Editor initial={[emptyTrigger()]} />)
+    const cron = screen.getByLabelText('Cron expression')
+    // Under the box, and in the help text below the triggers
+    expect(syntaxLinks()).toHaveLength(2)
+
+    await userEvent.type(cron, '0 0 9 * * ?')
+    // The preview waits for typing to pause before it asks the server
+    await screen.findByText('At 09:00', {}, { timeout: 3000 })
+    expect(syntaxLinks()).toHaveLength(1)
+
+    await userEvent.clear(cron)
+    await userEvent.type(cron, '0 0/30 * * *')
+    // The preview reports the expression invalid to the editor in the render after it shows the error
+    await waitFor(() => expect(syntaxLinks()).toHaveLength(2), { timeout: 3000 })
+    expect(screen.getByText('Unexpected end of expression.')).toBeInTheDocument()
   })
 
   it('adds and removes trigger rows', async () => {

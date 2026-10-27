@@ -1,4 +1,4 @@
-import { Plus, X } from 'lucide-react'
+import { ExternalLink, Plus, X } from 'lucide-react'
 import { useCallback, useEffect, useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -28,6 +28,10 @@ interface Props {
   /** Told whether a cron expression is shown as invalid, so the form can refuse to save */
   onInvalidChange?: (invalid: boolean) => void
 }
+
+// Quartz.NET's own reference, for the version Cronlight runs on
+const cronSyntax =
+  'https://www.quartz-scheduler.net/documentation/quartz-3.x/tutorial/crontriggers.html'
 
 const kindLabels: Record<EditableTriggerKind, string> = {
   Cron: 'Cron',
@@ -185,6 +189,13 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
               onInvalidChange={value => markInvalid(trigger.id, value)}
             />
           )}
+          {/* Where someone is stuck on cron, not only in the help text below */}
+          {trigger.kind === 'Cron' &&
+            (!trigger.cronExpression.trim() || invalid.has(trigger.id)) && (
+              <p className="text-xs text-muted-foreground">
+                Not sure? See <CronSyntaxLink />
+              </p>
+            )}
           {trigger.kind !== 'Cron' && <SchedulePreview trigger={trigger} />}
           <div className="flex items-center gap-2">
             <Checkbox
@@ -207,11 +218,24 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
         <Plus /> Add trigger
       </Button>
       <p className="text-xs text-muted-foreground">
-        Cron: Quartz cron (with seconds) and an IANA time zone such as America/Chicago. One time and
-        interval: times in your local time. Names are optional. No triggers means the job only runs
-        when triggered manually.
+        Cron: Quartz cron, with seconds (<CronSyntaxLink />
+        ), and an IANA time zone such as America/Chicago. One time and interval: times in your local
+        time. Names are optional. No triggers means the job only runs when triggered manually.
       </p>
     </div>
+  )
+}
+
+function CronSyntaxLink() {
+  return (
+    <a
+      href={cronSyntax}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-0.5 underline hover:text-foreground"
+    >
+      Quartz cron syntax <ExternalLink className="size-3" />
+    </a>
   )
 }
 
