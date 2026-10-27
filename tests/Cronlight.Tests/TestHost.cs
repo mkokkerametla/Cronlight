@@ -86,8 +86,8 @@ public sealed class TestHost : IAsyncDisposable
                 if (clustered)
                     store.UseClustering(c =>
                     {
-                        if (clusterCheckinMisfireThreshold is { } allowance)
-                            c.CheckinMisfireThreshold = allowance;
+                        if (clusterCheckinMisfireThreshold is { } threshold)
+                            c.CheckinMisfireThreshold = threshold;
                     });
             });
         });

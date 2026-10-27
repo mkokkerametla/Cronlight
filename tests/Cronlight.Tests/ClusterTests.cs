@@ -1,7 +1,11 @@
+using System.Collections.Specialized;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
+using Quartz;
+using Quartz.Impl;
 
 namespace Cronlight.Tests;
 
@@ -31,9 +35,14 @@ public class ClusterTests
     {
         await using var host = await TestHost.Start(database: DatabaseTests.Require(name), clustered: true);
         // The node checks in as the scheduler starts; allow for that to land
-        var nodes = await ClusterNodes(host);
-        for (var deadline = DateTime.UtcNow.AddSeconds(15); nodes.GetArrayLength() == 0 && DateTime.UtcNow < deadline; await Task.Delay(200))
+        JsonElement nodes;
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(200))
+        {
             nodes = await ClusterNodes(host);
+            Assert.Equal(JsonValueKind.Array, nodes.ValueKind);
+            if (nodes.GetArrayLength() > 0 || DateTime.UtcNow > deadline)
+                break;
+        }
 
         var node = Assert.Single(nodes.EnumerateArray());
         Assert.Equal((await host.Scheduler()).SchedulerInstanceId, node.GetProperty("instanceId").GetString());
@@ -62,6 +71,58 @@ public class ClusterTests
             Assert.False(nodes["worker-b"].GetProperty("alive").GetBoolean());
             Assert.InRange(nodes["worker-b"].GetProperty("secondsSinceCheckin").GetInt64(), 295, 330);
             Assert.All(nodes.Values, n => Assert.False(n.GetProperty("thisNode").GetBoolean()));
+        }
+        finally
+        {
+            await ForgetNodes(host);
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task A_clustered_scheduler_added_with_its_properties_and_never_started_lists_the_nodes_that_run_it(string name)
+    {
+        await using var host = await TestHost.Start(database: DatabaseTests.Require(name), clustered: true, startScheduler: false);
+        // The host's own settings, clustering included, as another scheduler on the same database would have them
+        var properties = new NameValueCollection();
+        foreach (var (key, value) in host.Services.GetRequiredService<IOptions<QuartzOptions>>().Value)
+            if (!key.Contains("jobFactory", StringComparison.Ordinal))
+                properties[key] = value;
+        var added = $"{host.SchedulerName}-added";
+        properties["quartz.scheduler.instanceName"] = added;
+        var scheduler = await new StdSchedulerFactory(properties).GetScheduler();
+        try
+        {
+            await scheduler.UseCronlight(host.Services, properties);
+            await Node(host, "worker-a", TimeSpan.FromSeconds(2), scheduler: added);
+
+            var info = await host.Client().GetFromJsonAsync<JsonElement>($"api/scheduler?scheduler={added}");
+
+            Assert.True(info.GetProperty("jobStoreClustered").GetBoolean());
+            var node = Assert.Single(info.GetProperty("clusterNodes").EnumerateArray());
+            Assert.Equal("worker-a", node.GetProperty("instanceId").GetString());
+            Assert.True(node.GetProperty("alive").GetBoolean());
+        }
+        finally
+        {
+            await ForgetNodes(host);
+            await scheduler.Shutdown();
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task A_node_row_that_cannot_be_read_shows_this_process_state_instead_of_failing(string name)
+    {
+        await using var host = await TestHost.Start(database: DatabaseTests.Require(name), clustered: true, startScheduler: false);
+        try
+        {
+            // Ticks before year 1, which no DateTimeOffset can hold
+            await host.Database.Execute(
+                "INSERT INTO QRTZ_SCHEDULER_STATE (SCHED_NAME, INSTANCE_NAME, LAST_CHECKIN_TIME, CHECKIN_INTERVAL) " +
+                $"VALUES ('{host.SchedulerName}', 'odd', -1, 7500)");
+
+            Assert.Equal(JsonValueKind.Null, (await ClusterNodes(host)).ValueKind);
         }
         finally
         {

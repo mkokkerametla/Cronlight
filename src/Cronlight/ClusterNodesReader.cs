@@ -1,4 +1,3 @@
-using System.Data.Common;
 using Microsoft.Extensions.Logging;
 using Quartz;
 
@@ -32,7 +31,8 @@ internal sealed class ClusterNodesReader(QuartzDataSource hostDataSource, Cronli
         {
             return await ReadNodes(dataSource, meta.SchedulerName, meta.SchedulerInstanceId, cancellationToken);
         }
-        catch (Exception ex) when (ex is DbException or SchedulerException or InvalidOperationException)
+        // Any failure, an odd value in a row included: the node table must never break the dashboard
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Could not read {Prefix}SCHEDULER_STATE, so this node's state is shown instead", dataSource.TablePrefix);
             return null;
@@ -53,7 +53,7 @@ internal sealed class ClusterNodesReader(QuartzDataSource hostDataSource, Cronli
             """;
         dataSource.AddParameter(command, "schedName", schedulerName);
 
-        var allowance = dataSource.ClusterCheckinMisfireThreshold;
+        var threshold = dataSource.ClusterCheckinMisfireThreshold;
         var now = DateTimeOffset.UtcNow;
         var nodes = new List<ClusterNodeDto>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -68,7 +68,7 @@ internal sealed class ClusterNodesReader(QuartzDataSource hostDataSource, Cronli
                 checkin,
                 interval,
                 (long)Math.Max(0, (now - checkin).TotalSeconds),
-                checkin + TimeSpan.FromMilliseconds(interval) + allowance >= now,
+                checkin + TimeSpan.FromMilliseconds(interval) + threshold >= now,
                 instance == instanceId
             ));
         }
