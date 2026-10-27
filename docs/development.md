@@ -104,10 +104,11 @@ npm run test:coverage   # report in coverage/
 each worker starts its own on a fresh SQLite database, so test files run in parallel. The hosts refresh
 the dashboard every second (`RefreshSeconds`) so tests wait less. The tests drive the dashboard in
 Chromium: creating, editing, pausing, running and deleting jobs (several triggers and time zones,
-manual-only jobs, secrets kept on edit, secret references), cron schedules firing on their own, bulk
-pause and resume, search, filters and paging of the job list, the stat cards, the running jobs view and
-cancelling a run, history (paging, job filter, failing and succeeding HTTP jobs), retries, running a
-job with different data, running a failed run again, read-only jobs from other apps sharing the
+one-time and interval triggers, the next five fire times, manual-only jobs, secrets kept on edit, secret
+references), cron schedules firing on their own, bulk pause and resume, pausing a group or every job,
+search, filters and paging of the job list, the stat cards, the running jobs view and cancelling a run,
+history (paging, job filter, failing and succeeding HTTP jobs, run logs with secrets masked), retries,
+running a job with different data, running a failed run again, read-only jobs from other apps sharing the
 scheduler, server errors, changes made elsewhere, a lost connection, viewer and anonymous access, the
 scheduler details and the theme switch.
 They need Node.js 22.13 or later, for its built-in SQLite module.

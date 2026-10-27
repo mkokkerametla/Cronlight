@@ -172,7 +172,6 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 
 ## Known gaps
 
-- No end-to-end tests yet for run logs, one-time and interval triggers, or pausing groups.
 - Run logs are shown once a run has finished; a running job's log so far is not visible.
 - The misfire counter can count a misfire twice when a database store rolls back its misfire handling and
   reports it again; history keeps one record per misfire.
