@@ -168,7 +168,8 @@ internal static class Audit
 
     private static string? ErrorMessage(object? result) => result switch
     {
-        ProblemHttpResult problem => string.Join(" ", new[] { problem.ProblemDetails.Title, problem.ProblemDetails.Detail }.Where(s => !string.IsNullOrEmpty(s))),
+        // The detail says what is wrong; the title only names the kind of error
+        ProblemHttpResult problem => string.IsNullOrEmpty(problem.ProblemDetails.Detail) ? problem.ProblemDetails.Title : problem.ProblemDetails.Detail,
         IValueHttpResult { Value: string message } => message,
         _ => null,
     };

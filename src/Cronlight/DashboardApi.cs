@@ -286,7 +286,7 @@ internal static class DashboardApi
             HttpContext http, JobIndexReader index, JobTypeCatalog catalog, IOptions<CronlightOptions> options, CancellationToken ct) =>
         {
             if (status != null && !JobStatuses.Contains(status, StringComparer.OrdinalIgnoreCase))
-                return Results.BadRequest($"Unknown status '{status}'; expected one of {string.Join(", ", JobStatuses)}");
+                return Invalid($"Unknown status '{status}'; expected one of {string.Join(", ", JobStatuses)}");
 
             var scheduler = await Scheduler(http, ct);
             var all = await index.Read(scheduler, ct);
@@ -322,7 +322,7 @@ internal static class DashboardApi
             var key = new JobKey(name, group);
             return await LoadJob(scheduler, key, catalog, options.Value) is { } job
                 ? Results.Ok(job)
-                : Results.NotFound();
+                : NoSuchJob(key);
         });
 
         api.MapGet("/jobs/{group}/{name}/fire-times", async (string group, string name, HttpContext http) =>
@@ -330,7 +330,7 @@ internal static class DashboardApi
             var scheduler = await Scheduler(http);
             var key = new JobKey(name, group);
             if (!await scheduler.CheckExists(key))
-                return Results.NotFound();
+                return NoSuchJob(key);
             var result = new List<TriggerFireTimesDto>();
             foreach (var trigger in await scheduler.GetTriggersOfJob(key))
             {
@@ -349,13 +349,13 @@ internal static class DashboardApi
         api.MapGet("/history", async (HttpContext http, string? group, string? name, string? status, long? before, int? limit, CancellationToken ct) =>
         {
             if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
-                return Results.NotFound("Execution history is not enabled.");
+                return Missing("Execution history is not enabled.");
 
             JobExecutionStatus? statusFilter = null;
             if (status != null)
             {
                 if (!Enum.TryParse<JobExecutionStatus>(status, ignoreCase: true, out var parsed))
-                    return Results.BadRequest($"Unknown status '{status}'");
+                    return Invalid($"Unknown status '{status}'");
                 statusFilter = parsed;
             }
 
@@ -380,17 +380,17 @@ internal static class DashboardApi
         api.MapGet("/history/{id:long}/log", async (long id, HttpContext http, CancellationToken ct) =>
         {
             if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
-                return Results.NotFound("Execution history is not enabled.");
+                return Missing("Execution history is not enabled.");
             var scheduler = await Scheduler(http, ct);
             return await store.GetLog(scheduler.SchedulerName, id, ct) is { } log
                 ? Results.Ok(log)
-                : Results.NotFound("This run has no log.");
+                : Missing("This run has no log.");
         });
 
         api.MapGet("/history/summary", async (HttpContext http, int? hours, CancellationToken ct) =>
         {
             if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
-                return Results.NotFound("Execution history is not enabled.");
+                return Missing("Execution history is not enabled.");
 
             var scheduler = await Scheduler(http, ct);
             var since = DateTimeOffset.UtcNow.AddHours(-Math.Clamp(hours ?? 24, 1, 24 * 90));
@@ -428,37 +428,37 @@ internal static class DashboardApi
         {
             var typeName = string.IsNullOrWhiteSpace(request.Type) ? request.JobType : request.Type;
             if (string.IsNullOrWhiteSpace(typeName))
-                return Results.BadRequest("A job type is required: set 'type' to one of the types listed by api/job-types");
+                return Invalid("A job type is required: set 'type' to one of the types listed by api/job-types");
             if (string.IsNullOrWhiteSpace(request.Name))
-                return Results.BadRequest("A job name is required");
+                return Invalid("A job name is required");
             if (!catalog.TryGet(typeName, out var type, out var info))
-                return Results.BadRequest($"Unknown job type '{typeName}'");
+                return Invalid($"Unknown job type '{typeName}'");
             var scheduler = await Scheduler(http);
             if (!catalog.Offers(scheduler.SchedulerName, typeName))
-                return Results.BadRequest($"Job type '{typeName}' is not offered for scheduler '{scheduler.SchedulerName}'");
+                return Invalid($"Job type '{typeName}' is not offered for scheduler '{scheduler.SchedulerName}'");
 
             var data = request.Data ?? new();
             foreach (var p in info.Parameters.Where(p => p.DefaultValue != null && !data.ContainsKey(p.Key)))
                 data[p.Key] = p.DefaultValue!;
 
             if (ReservedKey(data.Keys) is { } reserved)
-                return Results.BadRequest(reserved);
+                return Invalid(reserved);
             if (ValidateParameters(info, data) is { } invalid)
-                return Results.BadRequest(invalid);
+                return Invalid(invalid);
             if (request.Retry?.Problem() is { } badRetry)
-                return Results.BadRequest(badRetry);
+                return Invalid(badRetry);
             var secretKeys = SecretKeys(info);
             if (CheckSecretReferences(http, data, secretKeys, options.Value) is { } unresolved)
-                return Results.BadRequest(unresolved);
+                return Invalid(unresolved);
 
             var key = new JobKey(request.Name, string.IsNullOrWhiteSpace(request.Group) ? "DEFAULT" : request.Group);
             if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
-                return Results.BadRequest(error);
+                return Invalid(error);
 
             if (await scheduler.CheckExists(key))
-                return Results.Conflict($"Job {key} already exists");
+                return Refused($"Job {key} already exists");
             if (await FindTriggerConflict(scheduler, triggers, new HashSet<TriggerKey>()) is { } conflict)
-                return Results.Conflict(conflict);
+                return Refused(conflict);
 
             var jobData = ToJobDataMap(data);
             if (request.Retry != null && Retries.Store(request.Retry, type) is { } policy)
@@ -490,21 +490,21 @@ internal static class DashboardApi
             if (problem != null)
                 return problem;
             if (existing == null)
-                return Results.Conflict($"Job {key} has a type that cannot be loaded here and cannot be edited.");
+                return ReadOnlyJob(key, "edited");
 
             // Validate everything before mutating anything
             var info = catalog.Describe(existing.JobType);
             var secretKeys = SecretKeys(info);
             var setValues = request.Data?.Where(kv => kv.Value != null).ToDictionary(kv => kv.Key, kv => kv.Value!);
             if (request.Data != null && ReservedKey(request.Data.Keys) is { } reserved)
-                return Results.BadRequest(reserved);
+                return Invalid(reserved);
             // The data the job will have, so a required parameter cannot be removed either
             if (request.Data != null && info != null && ValidateParameters(info, Merged(existing.JobDataMap, request.Data)) is { } invalid)
-                return Results.BadRequest(invalid);
+                return Invalid(invalid);
             if (request.Retry?.Problem() is { } badRetry)
-                return Results.BadRequest(badRetry);
+                return Invalid(badRetry);
             if (setValues != null && CheckSecretReferences(http, setValues, secretKeys, options.Value) is { } unresolved)
-                return Results.BadRequest(unresolved);
+                return Invalid(unresolved);
 
             var requested = new List<ITrigger>();
             IReadOnlyCollection<ITrigger> current = [];
@@ -512,15 +512,15 @@ internal static class DashboardApi
             if (request.Triggers != null)
             {
                 if (!TryReplacedKinds(request, out kinds, out var badKinds))
-                    return Results.BadRequest(badKinds);
+                    return Invalid(badKinds);
                 current = await scheduler.GetTriggersOfJob(key);
                 if (!TryBuildTriggers(key, request.Triggers, current, out requested, out var error))
-                    return Results.BadRequest(error);
+                    return Invalid(error);
                 if (await FindExcludedTrigger(scheduler, requested) is { } excluded)
-                    return Results.BadRequest(excluded);
+                    return Invalid(excluded);
                 var own = current.Where(t => kinds.Contains(Kind(t))).Select(t => t.Key).ToHashSet();
                 if (await FindTriggerConflict(scheduler, requested, own) is { } conflict)
-                    return Results.Conflict(conflict);
+                    return Refused(conflict);
             }
 
             var data = request.Data == null ? new JobDataMap((IDictionary<string, object>)existing.JobDataMap) : MergeJobData(existing.JobDataMap, request.Data);
@@ -589,7 +589,7 @@ internal static class DashboardApi
         var scheduler = await Scheduler(http, cancellationToken);
         var jobs = (await index.Read(scheduler, cancellationToken)).Where(j => group == null || j.Group == group).ToList();
         if (group != null && jobs.Count == 0)
-            return Results.NotFound($"Group '{group}' has no jobs.");
+            return Missing($"Group '{group}' has no jobs.");
 
         var foreign = jobs.Where(j => !j.Loadable).ToList();
         if (foreign.Count > 0 && !options.AllowManagingUnloadableJobs)
@@ -597,7 +597,8 @@ internal static class DashboardApi
                 title: "Some jobs are read-only in this dashboard.",
                 detail: $"{(group == null ? "The scheduler" : $"Group '{group}'")} has {foreign.Count} job(s) whose type cannot be loaded in " +
                         $"this application, such as {foreign[0].Group}.{foreign[0].Name}. They probably belong to another application " +
-                        "sharing this scheduler. Pause or resume jobs one by one instead.",
+                        "sharing this scheduler, so they cannot be paused or resumed here. Pause or resume this application's jobs one " +
+                        "by one instead.",
                 statusCode: StatusCodes.Status409Conflict);
 
         Audit.RecordChanges(http, new Dictionary<string, CronlightAuditChange> { ["jobs"] = new(null, jobs.Count.ToString()) });
@@ -669,10 +670,10 @@ internal static class DashboardApi
 
         var triggerKey = new TriggerKey(trigger, Retries.TriggerGroup);
         if (await scheduler.GetTrigger(triggerKey) is not { } retry || !retry.JobKey.Equals(key))
-            return Results.NotFound($"Job {key} has no waiting retry {trigger}; it may have run already.");
+            return Missing($"Job {key} has no waiting retry {trigger}; it may have run already.");
         // Quartz deletes a non-durable job together with its last trigger
         if (await scheduler.GetJobDetail(key) is { Durable: false } && (await scheduler.GetTriggersOfJob(key)).Count == 1)
-            return Results.Conflict($"The retry is job {key}'s only trigger, and the job is not durable: cancelling it would delete the job.");
+            return Refused($"The retry is job {key}'s only trigger, and the job is not durable: cancelling it would delete the job.");
 
         await scheduler.UnscheduleJob(triggerKey);
         return Results.NoContent();
@@ -700,9 +701,9 @@ internal static class DashboardApi
         if (requested.Count > 0)
         {
             if (existing == null)
-                return Results.Conflict($"Job {key} has a type that cannot be loaded here and cannot be run with different data.");
+                return ReadOnlyJob(key, "run with different data");
             if (ReservedKey(requested.Keys) is { } reserved)
-                return Results.BadRequest(reserved);
+                return Invalid(reserved);
 
             var saved = existing.JobDataMap;
             // A masked or unchanged value is the saved one: nothing to replace
@@ -713,9 +714,9 @@ internal static class DashboardApi
             var info = catalog.Describe(existing.JobType);
             var secretKeys = SecretKeys(info);
             if (info != null && ValidateParameters(info, Merged(saved, overrides!)) is { } invalid)
-                return Results.BadRequest(invalid);
+                return Invalid(invalid);
             if (CheckSecretReferences(http, overrides, secretKeys, options.Value) is { } unresolved)
-                return Results.BadRequest(unresolved);
+                return Invalid(unresolved);
 
             foreach (var (k, v) in overrides)
             {
@@ -760,11 +761,11 @@ internal static class DashboardApi
         return elsewhere != null
             ? Results.Problem(
                 title: "This run is on another node.",
-                detail: $"It runs on {elsewhere.InstanceName}. Only the node running a job can cancel it; open the dashboard there.",
+                detail: $"This run is on node {elsewhere.InstanceName}. Only the node running a job can cancel it; open the dashboard there.",
                 statusCode: StatusCodes.Status409Conflict)
             : Results.Problem(
                 title: "This run is not running.",
-                detail: "It has already finished, or was never started.",
+                detail: "This run has already finished, or was never started.",
                 statusCode: StatusCodes.Status404NotFound);
     }
 
@@ -808,7 +809,7 @@ internal static class DashboardApi
     private static async Task<(IJobDetail? Detail, IResult? Problem)> GetManageableJob(IScheduler scheduler, JobKey key, CronlightOptions options)
     {
         if (!await scheduler.CheckExists(key))
-            return (null, Results.NotFound());
+            return (null, NoSuchJob(key));
         try
         {
             return (await scheduler.GetJobDetail(key), null);
@@ -817,13 +818,33 @@ internal static class DashboardApi
         {
             if (options.AllowManagingUnloadableJobs)
                 return (null, null);
-            return (null, Results.Problem(
-                title: "Job is read-only in this dashboard.",
-                detail: $"The type of job {key} cannot be loaded in this application ({ex.InnerException?.Message ?? ex.Message}). " +
-                        "It probably belongs to another application sharing this scheduler.",
-                statusCode: StatusCodes.Status409Conflict));
+            return (null, ReadOnlyJob(key, "changed", ex.InnerException?.Message ?? ex.Message));
         }
     }
+
+    // Every error is ProblemDetails: its title names the kind of error and its detail says what is wrong, so a client
+    // can show the detail alone
+
+    private static IResult Invalid(string detail) =>
+        Results.Problem(title: "Invalid request.", detail: detail, statusCode: StatusCodes.Status400BadRequest);
+
+    private static IResult Missing(string detail) =>
+        Results.Problem(title: "Not found.", detail: detail, statusCode: StatusCodes.Status404NotFound);
+
+    private static IResult Refused(string detail) =>
+        Results.Problem(title: "Not possible as things stand.", detail: detail, statusCode: StatusCodes.Status409Conflict);
+
+    private static IResult NoSuchJob(JobKey key) => Missing($"Job {key} does not exist.");
+
+    /// <summary>A job of another application sharing the scheduler, whose type cannot be loaded here.</summary>
+    /// <param name="cannotBe">What cannot be done to it, e.g. "edited".</param>
+    /// <param name="reason">Why its type cannot be loaded, when known.</param>
+    private static IResult ReadOnlyJob(JobKey key, string cannotBe, string? reason = null) =>
+        Results.Problem(
+            title: "Job is read-only in this dashboard.",
+            detail: $"The type of job {key} cannot be loaded in this application{(reason == null ? "" : $" ({reason})")}. It probably " +
+                    $"belongs to another application sharing this scheduler, so it cannot be {cannotBe} here.",
+            statusCode: StatusCodes.Status409Conflict);
 
     /// <summary>The kinds of trigger the dashboard creates and edits (see <see cref="Kind"/>).</summary>
     private static readonly IReadOnlySet<string> EditableKinds = new HashSet<string> { "Cron", "Once", "Interval" };

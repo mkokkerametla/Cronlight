@@ -100,7 +100,7 @@ public class AuditTests
             new[] { ("pause", 403, "DEFAULT.x"), ("trigger", 404, "DEFAULT.missing"), ("create", 400, "DEFAULT.bad") },
             sink.Events.Select(e => (e.Action, e.StatusCode, $"{e.JobGroup}.{e.JobName}")));
         Assert.Contains("X-Cronlight-Request", sink.Events[0].Error);
-        Assert.Equal("Not Found", sink.Events[1].Error);
+        Assert.Equal("Job DEFAULT.missing does not exist.", sink.Events[1].Error);
         Assert.Equal("Unknown job type 'Nope.Job'", sink.Events[2].Error);
     }
 
