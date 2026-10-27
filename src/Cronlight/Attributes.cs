@@ -9,7 +9,7 @@ public sealed class CronlightJobAttribute : Attribute
     public string DisplayName { get; }
     public string? Description { get; set; }
 
-    /// <summary>Hide this job type from the "create job" picker (existing jobs still show).</summary>
+    /// <summary>Leaves this job type out of New job; the API refuses to create it too. Existing jobs still show.</summary>
     public bool Hidden { get; set; }
 }
 

@@ -42,6 +42,7 @@ public static class CronlightExtensions
         services.TryAddSingleton<MetricsListener>();
         services.AddSchedulerAttachment<MetricsAttachment>();
         services.AddJobNotCreatedHandler<MetricsListener>();
+        services.TryAddEnumerable(ServiceDescriptor.Transient<IStartupFilter, SecurityHeadersStartupFilter>());
         return services;
     }
 
@@ -61,7 +62,9 @@ public static class CronlightExtensions
         if (configure != null)
             services.Configure(configure);
 
-        services.AddHttpClient(AlertWorker.HttpClientName);
+        // HttpClient's own logging writes each request's URL, and a webhook's URL is its password (Slack's carries its
+        // secret in the path, which the logging's query-string redaction does not cover)
+        services.AddHttpClient(AlertWorker.HttpClientName).RemoveAllLoggers();
         services.TryAddSingleton<AlertQueue>();
         services.TryAddSingleton<AlertListener>();
         services.AddSchedulerAttachment<AlertAttachment>();
@@ -83,8 +86,8 @@ public static class CronlightExtensions
         var logger = endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Cronlight");
 
         var group = endpoints.MapGroup(prefix);
-        // First, so every response carries them, including refusals
-        group.AddSecurityHeaders(options);
+        // Every response carries them, refusals included: see SecurityHeadersStartupFilter
+        group.WithMetadata(new SecurityHeaders(options.ContentSecurityPolicy));
 
         if (options.ViewPolicy != null)
         {
@@ -131,26 +134,6 @@ public static class CronlightExtensions
         return group;
     }
 
-    private static void AddSecurityHeaders(this RouteGroupBuilder group, CronlightOptions options)
-    {
-        var policy = options.ContentSecurityPolicy;
-        group.AddEndpointFilter((context, next) =>
-        {
-            var headers = context.HttpContext.Response.Headers;
-            headers.XContentTypeOptions = "nosniff";
-            // Links out of the dashboard do not reveal where it is hosted
-            headers["Referrer-Policy"] = "no-referrer";
-            if (!string.IsNullOrEmpty(policy))
-            {
-                headers.ContentSecurityPolicy = policy;
-                // For browsers without frame-ancestors; only when it says the same, so it cannot contradict a changed policy
-                if (policy.Contains("frame-ancestors 'none'"))
-                    headers.XFrameOptions = "DENY";
-            }
-            return next(context);
-        });
-    }
-
     private static void MapStaticUi(this RouteGroupBuilder group)
     {
         var files = new ManifestEmbeddedFileProvider(typeof(CronlightExtensions).Assembly, "wwwroot");
@@ -182,4 +165,43 @@ public static class CronlightExtensions
             return Results.Stream(file.CreateReadStream(), contentType);
         }).ExcludeFromDescription();
     }
+}
+
+/// <summary>The security headers of the dashboard's responses, as metadata on its endpoints.</summary>
+internal sealed record SecurityHeaders(string? ContentSecurityPolicy)
+{
+    public void Apply(IHeaderDictionary headers)
+    {
+        headers.XContentTypeOptions = "nosniff";
+        // Links out of the dashboard do not reveal where it is hosted
+        headers["Referrer-Policy"] = "no-referrer";
+        if (string.IsNullOrEmpty(ContentSecurityPolicy))
+            return;
+        headers.ContentSecurityPolicy = ContentSecurityPolicy;
+        // For browsers without frame-ancestors; only when it says the same, so it cannot contradict a changed policy
+        if (ContentSecurityPolicy.Contains("frame-ancestors 'none'"))
+            headers.XFrameOptions = "DENY";
+    }
+}
+
+/// <summary>
+/// Adds the security headers to every response for a dashboard endpoint, as it starts. A middleware rather than an
+/// endpoint filter, since the authorization middleware's challenges and refusals, and requests whose body cannot be
+/// read, are answered before the endpoint's filters run.
+/// </summary>
+internal sealed class SecurityHeadersStartupFilter : IStartupFilter
+{
+    public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+    {
+        app.Use((context, nextMiddleware) =>
+        {
+            context.Response.OnStarting(() =>
+            {
+                context.GetEndpoint()?.Metadata.GetMetadata<SecurityHeaders>()?.Apply(context.Response.Headers);
+                return Task.CompletedTask;
+            });
+            return nextMiddleware(context);
+        });
+        next(app);
+    };
 }

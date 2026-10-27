@@ -137,7 +137,7 @@ internal static class Audit
     {
         var route = context.HttpContext.Request.RouteValues;
         if (route["group"] is string group)
-            return (group, route["name"] as string ?? "");
+            return (DashboardApi.FromRoute(group), route["name"] is string name ? DashboardApi.FromRoute(name) : "");
         // Creating: the job is named in the body. Pausing or resuming the whole scheduler names no job
         if (context.Arguments.OfType<CreateJobRequest>().FirstOrDefault() is not { } create)
             return ("", "");

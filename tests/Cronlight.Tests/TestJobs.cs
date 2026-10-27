@@ -224,3 +224,23 @@ public class LoggingJob(Microsoft.Extensions.Logging.ILogger<LoggingJob> logger)
             Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(logger, "Line {Line}", i);
     }
 }
+
+/// <summary>Fails with an exception whose message quotes its secret, as a parser rejecting a bad value does.</summary>
+[JobParameter("authorization", Type = JobParameterType.Secret)]
+public class LeakingJob : IJob
+{
+    public Task Execute(IJobExecutionContext context) =>
+        throw new FormatException($"The format of value '{context.MergedJobDataMap.GetString("authorization")}' is invalid.");
+}
+
+[CronlightJob("Hidden", Hidden = true)]
+public class HiddenJob : IJob
+{
+    public Task Execute(IJobExecutionContext context) => Task.CompletedTask;
+}
+
+/// <summary>A job type the host keeps to itself: not public, so never offered or created from the dashboard.</summary>
+internal class InternalJob : IJob
+{
+    public Task Execute(IJobExecutionContext context) => Task.CompletedTask;
+}

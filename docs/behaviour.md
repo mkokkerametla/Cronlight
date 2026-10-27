@@ -4,7 +4,11 @@ How the dashboard and its API behave: secrets, editing, triggers, pausing, cance
 headers and cross-site requests.
 
 - **Secrets** are shown as `********`. Saving a masked value back keeps the stored value. To keep them
-  out of the database too, use [secret references](job-types.md#secret-references).
+  out of the database too, use [secret references](job-types.md#secret-references). A secret is a value whose key
+  the job type marks `[JobParameter(Type = Secret)]`, whether or not the dashboard offers that type, or whose key
+  matches `SensitiveKeyPatterns`. A run's secrets, resolved references included, are also masked in what it logs and
+  in why it failed, as History and alerts show it. Quartz itself logs the exception a job throws, at Error level in
+  the app's log, which Cronlight does not change: keep secrets out of exception messages, or filter that log.
 - **Editing job data** changes only what is edited. `PUT api/jobs/{group}/{name}` sets the data keys it sends and
   keeps the others: `{"data": {"region": "us"}}` changes one value, and a key sent as `null` is removed. Required
   parameters are checked on the data the job ends up with. The dashboard's edit form sends only the fields, values
@@ -24,7 +28,8 @@ headers and cross-site requests.
   (`GET api/jobs/search?search=&type=&status=&page=&pageSize=`). For database stores it reads every job's
   type and trigger states in two queries, and loads full details only for the page shown (50 jobs), so
   thousands of jobs cost about as much as fifty. `GET api/jobs` still returns every job with full
-  details, for scripts and small schedulers.
+  details, for scripts and small schedulers: on a large one, each call loads every job, so scripts should page
+  through `api/jobs/search` instead.
 - **Polling** happens every 10 seconds (`RefreshSeconds`) only while the dashboard is visible: a tab in the background asks
   nothing, and refreshes as soon as it is shown again. The 24-hour failure count is refreshed once a minute.
 - **History holds still under the pointer.** While the pointer is over History, a refresh moves no row: it updates
@@ -45,8 +50,8 @@ headers and cross-site requests.
   asked for only when opened, so the job list costs no more.
 - **Undo** follows pausing or resuming a job, in the toast that confirms it. A job Quartz stopped (in Error) has no
   undo for Resume, since pausing it would not stop it again.
-- **Layout:** the Layout menu in the header uses the window's full width and makes table rows compact. Both are
-  remembered in the browser, as the theme is.
+- **Layout:** the dashboard uses the window's full width; the Layout menu in the header narrows it to a centred
+  column, and makes table rows compact. Both are remembered in the browser, as the theme is.
 - **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.

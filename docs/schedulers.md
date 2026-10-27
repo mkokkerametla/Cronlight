@@ -31,7 +31,9 @@ history and failure streaks, and audit events and alerts name the scheduler.
   `o.Schedulers["Billing"].ViewPolicy = "BillingTeam"` and `o.Schedulers["Billing"].ManagePolicy = "BillingAdmins"`
   (or `"Cronlight:Schedulers:Billing:ViewPolicy"` in configuration). A user without its view policy does not see it
   in the picker and gets 403 from its API; one without its manage policy (falling back to its view policy) sees it
-  read-only. Schedulers not listed are open to everyone the dashboard admits. Refusals are audited.
+  read-only. Schedulers not listed are open to everyone the dashboard admits. Refusals are audited. Names match
+  whatever their case, and settings for a name no scheduler is served by are logged as a warning when the dashboard
+  is first opened, since they protect nothing.
 - **Job types per scheduler.** A dashboard that manages the schedulers of several apps would offer every app's job
   types in each scheduler's New job. Give a scheduler its app's job library instead:
   `o.Schedulers["Billing"].JobAssemblies.Add(typeof(InvoiceJob).Assembly)`. It then offers only the job types in

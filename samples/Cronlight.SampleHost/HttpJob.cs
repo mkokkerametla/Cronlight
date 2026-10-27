@@ -39,6 +39,38 @@ public class HttpJob(IHttpClientFactory httpClientFactory, IOptions<HttpJobOptio
 {
     public const string ClientName = "Cronlight.HttpJob";
 
+    // Headers that decide where or how the request is sent, not what it says: Host would reach another site behind the
+    // same address (a shared proxy or CDN), past AllowedHosts
+    private static readonly HashSet<string> RefusedHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Host", "Connection", "Keep-Alive", "Proxy-Authorization", "Proxy-Connection", "TE", "Trailer",
+        "Transfer-Encoding", "Upgrade", "Content-Length",
+    };
+
+    /// <summary>Adds the headers of the job's "headers" parameter, one "Name: value" per line.</summary>
+    public static void AddHeaders(HttpRequestMessage request, string? headers)
+    {
+        foreach (var line in (headers ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separator = line.IndexOf(':');
+            if (separator <= 0)
+                throw new JobExecutionException($"Header line '{line}' is not in 'Name: value' form");
+            var (name, value) = (line[..separator].Trim(), line[(separator + 1)..].Trim());
+            if (RefusedHeaders.Contains(name))
+                throw new JobExecutionException($"Header {name} cannot be set: it decides where or how the request is sent");
+            if (!request.Headers.TryAddWithoutValidation(name, value))
+                request.Content?.Headers.TryAddWithoutValidation(name, value);
+        }
+    }
+
+    /// <summary>Sets the Authorization header. A value that is not one is refused without quoting it, as it is a secret.</summary>
+    public static void SetAuthorization(HttpRequestMessage request, string authorization)
+    {
+        if (!AuthenticationHeaderValue.TryParse(authorization, out var header))
+            throw new JobExecutionException("The authorization parameter is not an Authorization header value, such as 'Bearer <token>'");
+        request.Headers.Authorization = header;
+    }
+
     public async Task Execute(IJobExecutionContext context)
     {
         var map = context.MergedJobDataMap;
@@ -61,17 +93,9 @@ public class HttpJob(IHttpClientFactory httpClientFactory, IOptions<HttpJobOptio
         if (Get("body") is { Length: > 0 } body && method != HttpMethod.Get && method != HttpMethod.Delete)
             request.Content = new StringContent(body, null, Get("contentType") ?? "application/json");
 
-        foreach (var line in (Get("headers") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var separator = line.IndexOf(':');
-            if (separator <= 0)
-                throw new JobExecutionException($"Header line '{line}' is not in 'Name: value' form");
-            var (name, value) = (line[..separator].Trim(), line[(separator + 1)..].Trim());
-            if (!request.Headers.TryAddWithoutValidation(name, value))
-                request.Content?.Headers.TryAddWithoutValidation(name, value);
-        }
+        AddHeaders(request, Get("headers"));
         if (Get("authorization") is { Length: > 0 } authorization)
-            request.Headers.Authorization = AuthenticationHeaderValue.Parse(authorization);
+            SetAuthorization(request, authorization);
 
         var timeout = TimeSpan.FromSeconds(int.TryParse(Get("timeoutSeconds"), out var seconds) && seconds > 0 ? seconds : 30);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);

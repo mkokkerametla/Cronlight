@@ -21,8 +21,14 @@ internal static class RunOutcome
         : exception == null ? JobExecutionStatus.Succeeded
         : JobExecutionStatus.Failed;
 
-    /// <summary>Why the run did not succeed, or null when it did.</summary>
-    public static string? Error(IJobExecutionContext context, JobExecutionException? exception) =>
+    /// <summary>
+    /// Why the run did not succeed, or null when it did. Its secrets are masked, since an exception message can quote
+    /// them (a parser rejecting a bad value), and history and alerts show it to people who may not see them.
+    /// </summary>
+    public static string? Error(IJobExecutionContext context, JobExecutionException? exception, CronlightOptions options) =>
+        Error(context, exception) is { } error ? RunSecrets.Masker(context, options)(error) : null;
+
+    private static string? Error(IJobExecutionContext context, JobExecutionException? exception) =>
         Status(context, exception) switch
         {
             JobExecutionStatus.Succeeded => null,

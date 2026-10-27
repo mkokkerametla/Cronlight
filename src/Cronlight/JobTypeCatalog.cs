@@ -55,8 +55,9 @@ internal class JobTypeCatalog
     public IEnumerable<JobTypeInfo> For(string schedulerName) =>
         Offered(schedulerName).Select(name => catalog.Value.Types[name].Info);
 
-    /// <summary>Whether a scheduler offers a job type for new jobs.</summary>
-    public bool Offers(string schedulerName, string typeName) => Offered(schedulerName).Contains(typeName);
+    /// <summary>Whether a scheduler offers a job type for new jobs: one hidden from New job is not offered either.</summary>
+    public bool Offers(string schedulerName, string typeName) =>
+        Offered(schedulerName).Contains(typeName) && !catalog.Value.Types[typeName].Info.Hidden;
 
     private IReadOnlySet<string> Offered(string schedulerName) =>
         catalog.Value.BySchedulerName.GetValueOrDefault(schedulerName) ?? catalog.Value.Shared;
@@ -85,13 +86,13 @@ internal class JobTypeCatalog
                 .ToList());
         var bySchedulerName = options.Schedulers
             .Where(s => s.Value.JobAssemblies.Count > 0)
-            .ToDictionary(s => s.Key, s => JobTypes(s.Value.JobAssemblies), StringComparer.Ordinal);
+            .ToDictionary(s => s.Key, s => JobTypes(s.Value.JobAssemblies), StringComparer.OrdinalIgnoreCase);
 
         var types = shared.Concat(bySchedulerName.Values.SelectMany(t => t))
             .DistinctBy(t => t.FullName)
             .ToDictionary(t => t.FullName!, t => (t, ToInfo(t)));
         return new Catalog(types, Names(shared),
-            bySchedulerName.ToDictionary(s => s.Key, s => Names(s.Value), StringComparer.Ordinal));
+            bySchedulerName.ToDictionary(s => s.Key, s => Names(s.Value), StringComparer.OrdinalIgnoreCase));
 
         static IReadOnlySet<string> Names(List<Type> types) => types.Select(t => t.FullName!).ToHashSet();
     }
@@ -99,7 +100,8 @@ internal class JobTypeCatalog
     private static List<Type> JobTypes(IEnumerable<Assembly> assemblies) =>
         assemblies
             .SelectMany(LoadableTypes)
-            .Where(t => t is { IsClass: true, IsAbstract: false, IsGenericTypeDefinition: false }
+            // Public types only: a type the host keeps internal (as Cronlight keeps its own) is not one to create by name
+            .Where(t => t is { IsClass: true, IsAbstract: false, IsGenericTypeDefinition: false, IsVisible: true }
                 && typeof(IJob).IsAssignableFrom(t))
             .DistinctBy(t => t.FullName)
             .ToList();

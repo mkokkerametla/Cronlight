@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Reflection;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -216,11 +219,17 @@ internal static class DashboardApi
                 logger.LogError(ex, "Cronlight request {Method} {Path} failed",
                     context.HttpContext.Request.Method, context.HttpContext.Request.Path);
 
-                // Scheduler messages are useful to operators ("couldn't retrieve job ...") and contain no internals;
-                // anything else gets a generic message and a trace id to correlate with logs.
+                // Scheduler messages are useful to operators ("Job's trigger is not in a state to ...") and contain no
+                // internals, but a job store's quote the database (its tables, its values), so those stay in the log;
+                // everything comes with a trace id to find it there.
                 return Results.Problem(
                     title: "The scheduler operation failed.",
-                    detail: ex is SchedulerException ? ex.Message : null,
+                    detail: ex switch
+                    {
+                        JobPersistenceException => "The job store failed; the app's log says why, under this trace id.",
+                        SchedulerException => ex.Message,
+                        _ => null,
+                    },
                     statusCode: StatusCodes.Status500InternalServerError,
                     extensions: new Dictionary<string, object?> { ["traceId"] = context.HttpContext.TraceIdentifier }
                 );
@@ -231,12 +240,14 @@ internal static class DashboardApi
     public static void MapReadEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/scheduler", async (HttpContext http, CronlightSchedulers schedulers, IOptions<CronlightOptions> options,
-            ClusterNodesReader cluster, CancellationToken ct) =>
+            ClusterNodesReader cluster, ILoggerFactory loggers, CancellationToken ct) =>
         {
             var scheduler = await Scheduler(http);
             var meta = await scheduler.GetMetaData();
+            var all = await schedulers.All();
+            WarnAboutSettingsForNoScheduler(options.Value, all, loggers);
             var visible = new List<string>();
-            foreach (var s in await schedulers.All())
+            foreach (var s in all)
                 if (await CanView(http, options.Value, s.SchedulerName))
                     visible.Add(s.SchedulerName);
             return Results.Ok(new
@@ -319,7 +330,7 @@ internal static class DashboardApi
         api.MapGet("/jobs/{group}/{name}", async (string group, string name, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             var scheduler = await Scheduler(http);
-            var key = new JobKey(name, group);
+            var key = JobKeyFrom(group, name);
             return await LoadJob(scheduler, key, catalog, options.Value) is { } job
                 ? Results.Ok(job)
                 : NoSuchJob(key);
@@ -328,7 +339,7 @@ internal static class DashboardApi
         api.MapGet("/jobs/{group}/{name}/fire-times", async (string group, string name, HttpContext http) =>
         {
             var scheduler = await Scheduler(http);
-            var key = new JobKey(name, group);
+            var key = JobKeyFrom(group, name);
             if (!await scheduler.CheckExists(key))
                 return NoSuchJob(key);
             var result = new List<TriggerFireTimesDto>();
@@ -431,6 +442,8 @@ internal static class DashboardApi
                 return Invalid("A job type is required: set 'type' to one of the types listed by api/job-types");
             if (string.IsNullOrWhiteSpace(request.Name))
                 return Invalid("A job name is required");
+            if (HasControlCharacters(request.Name) || HasControlCharacters(request.Group))
+                return Invalid("Job names and groups cannot contain control characters, such as line breaks or tabs");
             if (!catalog.TryGet(typeName, out var type, out var info))
                 return Invalid($"Unknown job type '{typeName}'");
             var scheduler = await Scheduler(http);
@@ -447,7 +460,7 @@ internal static class DashboardApi
                 return Invalid(invalid);
             if (request.Retry?.Problem() is { } badRetry)
                 return Invalid(badRetry);
-            var secretKeys = SecretKeys(info);
+            var secretKeys = SecretKeys(type);
             if (CheckSecretReferences(http, data, secretKeys, options.Value) is { } unresolved)
                 return Invalid(unresolved);
 
@@ -479,13 +492,13 @@ internal static class DashboardApi
             // One call stores the job and its triggers together, so a failure leaves nothing behind
             await scheduler.ScheduleJob(job, triggers, replace: false);
 
-            return Results.Created($"jobs/{key.Group}/{key.Name}", new { key.Name, key.Group });
+            return Results.Created($"jobs/{Uri.EscapeDataString(key.Group)}/{Uri.EscapeDataString(key.Name)}", new { key.Name, key.Group });
         });
 
         api.MapPut("/jobs/{group}/{name}", async (string group, string name, UpdateJobRequest request, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
             var scheduler = await Scheduler(http);
-            var key = new JobKey(name, group);
+            var key = JobKeyFrom(group, name);
             var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
             if (problem != null)
                 return problem;
@@ -494,7 +507,7 @@ internal static class DashboardApi
 
             // Validate everything before mutating anything
             var info = catalog.Describe(existing.JobType);
-            var secretKeys = SecretKeys(info);
+            var secretKeys = SecretKeys(existing.JobType);
             var setValues = request.Data?.Where(kv => kv.Value != null).ToDictionary(kv => kv.Key, kv => kv.Value!);
             if (request.Data != null && ReservedKey(request.Data.Keys) is { } reserved)
                 return Invalid(reserved);
@@ -568,9 +581,9 @@ internal static class DashboardApi
         api.MapPost("/jobs/{group}/{name}/retries/{trigger}/cancel-retry", CancelRetry);
 
         api.MapPost("/groups/{group}/pause", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, group, (s, m) => s.PauseJobs(m, ct), resume: false, ct));
+            OnJobs(http, index, o.Value, FromRoute(group), (s, m) => s.PauseJobs(m, ct), resume: false, ct));
         api.MapPost("/groups/{group}/resume", (string group, HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
-            OnJobs(http, index, o.Value, group, (s, m) => s.ResumeJobs(m, ct), resume: true, ct));
+            OnJobs(http, index, o.Value, FromRoute(group), (s, m) => s.ResumeJobs(m, ct), resume: true, ct));
         api.MapPost("/scheduler/pause", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
             OnJobs(http, index, o.Value, null, (s, _) => s.PauseAll(ct), resume: false, ct));
         api.MapPost("/scheduler/resume", (HttpContext http, JobIndexReader index, IOptions<CronlightOptions> o, CancellationToken ct) =>
@@ -663,7 +676,7 @@ internal static class DashboardApi
         IOptions<CronlightOptions> options)
     {
         var scheduler = await Scheduler(http);
-        var key = new JobKey(name, group);
+        var key = JobKeyFrom(group, name);
         var (_, problem) = await GetManageableJob(scheduler, key, options.Value);
         if (problem != null)
             return problem;
@@ -687,7 +700,7 @@ internal static class DashboardApi
         JobTypeCatalog catalog, IOptions<CronlightOptions> options)
     {
         var scheduler = await Scheduler(http);
-        var key = new JobKey(name, group);
+        var key = JobKeyFrom(group, name);
         var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
         if (problem != null)
             return problem;
@@ -712,7 +725,7 @@ internal static class DashboardApi
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
 
             var info = catalog.Describe(existing.JobType);
-            var secretKeys = SecretKeys(info);
+            var secretKeys = SecretKeys(existing.JobType);
             if (info != null && ValidateParameters(info, Merged(saved, overrides!)) is { } invalid)
                 return Invalid(invalid);
             if (CheckSecretReferences(http, overrides, secretKeys, options.Value) is { } unresolved)
@@ -740,7 +753,7 @@ internal static class DashboardApi
         RunningJobsReader reader, IOptions<CronlightOptions> options, CancellationToken ct)
     {
         var scheduler = await Scheduler(http, ct);
-        var key = new JobKey(name, group);
+        var key = JobKeyFrom(group, name);
         var (_, problem) = await GetManageableJob(scheduler, key, options.Value);
         if (problem != null)
             return problem;
@@ -794,7 +807,7 @@ internal static class DashboardApi
     private static async Task<IResult> OnJob(HttpContext http, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)
     {
         var scheduler = await Scheduler(http);
-        var key = new JobKey(name, group);
+        var key = JobKeyFrom(group, name);
         var (_, problem) = await GetManageableJob(scheduler, key, options);
         if (problem != null)
             return problem;
@@ -853,7 +866,7 @@ internal static class DashboardApi
         EditableKinds.FirstOrDefault(k => string.Equals(k, kind ?? "Cron", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The kinds of trigger an update replaces: those it names, else cron and the kinds it sends.</summary>
-    private static bool TryReplacedKinds(UpdateJobRequest request, out IReadOnlySet<string> kinds, out string? error)
+    private static bool TryReplacedKinds(UpdateJobRequest request, out IReadOnlySet<string> kinds, [NotNullWhen(false)] out string? error)
     {
         error = null;
         var sent = request.Triggers!.Select(t => EditableKind(t.Kind)).OfType<string>().ToHashSet();
@@ -1004,7 +1017,7 @@ internal static class DashboardApi
     /// triggers never take one of their names.
     /// </param>
     private static bool TryBuildTriggers(JobKey key, List<TriggerRequest> requests, IReadOnlyCollection<ITrigger> existing,
-        out List<ITrigger> triggers, out string? error)
+        out List<ITrigger> triggers, [NotNullWhen(false)] out string? error)
     {
         triggers = new();
         error = null;
@@ -1021,6 +1034,11 @@ internal static class DashboardApi
             {
                 do name = $"{key.Name}-trigger-{next++}";
                 while (!taken.Add(name));
+            }
+            if (HasControlCharacters(name))
+            {
+                error = "Trigger names cannot contain control characters, such as line breaks or tabs";
+                return false;
             }
             if (triggers.Any(t => t.Key.Name == name))
             {
@@ -1159,7 +1177,7 @@ internal static class DashboardApi
         if (detail == null)
             return null;
         var info = catalog.Describe(detail.JobType);
-        var secretKeys = SecretKeys(info);
+        var secretKeys = SecretKeys(detail.JobType);
 
         var data = detail.JobDataMap.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(
             kv => kv.Key,
@@ -1227,6 +1245,38 @@ internal static class DashboardApi
         trigger.Key.Group == SchedulerConstants.DefaultGroup && trigger.Key.Name.StartsWith("MT_", StringComparison.Ordinal)
         && long.TryParse(trigger.Key.Name.AsSpan(3), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _);
 
+    /// <summary>
+    /// A job's group or name as the route gives it. ASP.NET Core decodes a request's path but leaves %2F as it is, so a
+    /// slash in a group or name, which the dashboard escapes, arrives as %2F.
+    /// </summary>
+    internal static string FromRoute(string value) => value.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase);
+
+    private static JobKey JobKeyFrom(string group, string name) => new(FromRoute(name), FromRoute(group));
+
+    /// <summary>
+    /// Names are written into the audit log and other logs as they are, so a line break in one could forge a log line.
+    /// </summary>
+    private static bool HasControlCharacters(string? name) => name != null && name.Any(char.IsControl);
+
+    // Names already warned about, so each is logged once per process
+    private static readonly ConcurrentDictionary<string, bool> SettingsWarned = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Settings for a name no scheduler is served by protect nothing, which is easily missed with a typo. Checked when
+    /// the dashboard asks for its scheduler, by which time schedulers added after startup are there too.
+    /// </summary>
+    private static void WarnAboutSettingsForNoScheduler(CronlightOptions options, IReadOnlyList<IScheduler> served, ILoggerFactory loggers)
+    {
+        foreach (var name in options.Schedulers.Keys)
+        {
+            if (served.Any(s => string.Equals(s.SchedulerName, name, StringComparison.OrdinalIgnoreCase)) || !SettingsWarned.TryAdd(name, true))
+                continue;
+            loggers.CreateLogger("Cronlight").LogWarning(
+                "Cronlight has settings for scheduler '{Scheduler}' (o.Schedulers), but no scheduler by that name is served here, so its " +
+                "policies and job types apply to nothing. Served: {Served}", name, string.Join(", ", served.Select(s => s.SchedulerName)));
+        }
+    }
+
     private static async Task<bool> CanManage(HttpContext http, CronlightOptions options, string schedulerName)
     {
         if (options.ReadOnly)
@@ -1269,8 +1319,13 @@ internal static class DashboardApi
     private static JobDataMap ToJobDataMap(Dictionary<string, string> data) =>
         new((IDictionary<string, object>)data.ToDictionary(kv => kv.Key, kv => (object)kv.Value));
 
-    internal static HashSet<string> SecretKeys(JobTypeInfo? info) =>
-        info?.Parameters.Where(p => p.Type == nameof(JobParameterType.Secret)).Select(p => p.Key).ToHashSet() ?? new HashSet<string>();
+    /// <summary>
+    /// The keys a job type declares secret with [JobParameter], read from the type itself so they are masked whether or
+    /// not the type is one the dashboard offers.
+    /// </summary>
+    internal static HashSet<string> SecretKeys(Type? jobType) =>
+        jobType?.GetCustomAttributes<JobParameterAttribute>().Where(p => p.Type == JobParameterType.Secret).Select(p => p.Key).ToHashSet()
+        ?? new HashSet<string>();
 
     /// <summary>Job data that differs between two maps, by "data.&lt;key&gt;", for the audit log. Sensitive values are masked.</summary>
     private static Dictionary<string, CronlightAuditChange> DataChanges(

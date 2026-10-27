@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Quartz;
 using Quartz.Impl;
@@ -228,6 +230,45 @@ public class SchedulerTests
         {
             await extra.Shutdown();
         }
+    }
+
+    [Fact]
+    public async Task A_schedulers_settings_apply_whatever_the_case_of_its_name()
+    {
+        var name = UniqueName("Reports");
+        await using var host = await TestHost.Start(configure: o =>
+        {
+            o.ViewPolicy = "Viewers";
+            // Configuration keys ignore case, so "Cronlight:Schedulers:reports-…" is easily written for "Reports-…"
+            o.Schedulers[name.ToLowerInvariant()].ViewPolicy = "Admins";
+        });
+        var extra = await AddScheduler(host, name: name);
+        try
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, (await host.Client("viewer").GetAsync($"api/jobs/search?scheduler={name}")).StatusCode);
+            Assert.DoesNotContain(name, await Schedulers(host.Client("viewer")));
+            Assert.Equal(HttpStatusCode.OK, (await host.Client("admin").GetAsync($"api/jobs/search?scheduler={name}")).StatusCode);
+        }
+        finally
+        {
+            await extra.Shutdown();
+        }
+    }
+
+    [Fact]
+    public async Task Settings_for_a_scheduler_that_is_not_served_are_warned_about_once()
+    {
+        var logs = new AuditTests.CapturingLoggerProvider();
+        var missing = UniqueName("Billing");
+        await using var host = await TestHost.Start(
+            configure: o => o.Schedulers[missing].ViewPolicy = "Admins",
+            services: s => s.Replace(ServiceDescriptor.Singleton<ILoggerFactory>(LoggerFactory.Create(b => b.AddProvider(logs)))));
+
+        await host.Client().GetAsync("api/scheduler");
+        await host.Client().GetAsync("api/scheduler");
+
+        var warning = Assert.Single(logs.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains(missing));
+        Assert.Contains("no scheduler by that name is served", warning.Message);
     }
 
     /// <summary>The host's own settings under another scheduler name, as another scheduler on the same database would have them.</summary>

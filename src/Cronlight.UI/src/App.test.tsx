@@ -82,15 +82,15 @@ describe('App', () => {
     localStorage.removeItem('cronlight-layout')
   })
 
-  it('uses the full width and compact rows when asked, and remembers it in this browser', async () => {
+  it('uses the full width unless narrowed, and compact rows when asked, and remembers both in this browser', async () => {
     const { unmount } = renderApp()
     await screen.findByRole('tabpanel')
     const page = () => screen.getByRole('tablist').closest('div.mx-auto') as HTMLElement
-    expect(page()).toHaveClass('max-w-7xl')
+    expect(page()).toHaveClass('max-w-none')
 
     await userEvent.click(screen.getByRole('button', { name: 'Change layout' }))
     await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Full width' }))
-    expect(page()).toHaveClass('max-w-none')
+    expect(page()).toHaveClass('max-w-7xl')
     await userEvent.click(screen.getByRole('button', { name: 'Change layout' }))
     await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Compact rows' }))
     expect(page()).toHaveAttribute('data-density', 'compact')
@@ -98,7 +98,7 @@ describe('App', () => {
     unmount()
     renderApp()
     await screen.findByRole('tabpanel')
-    expect(page()).toHaveClass('max-w-none')
+    expect(page()).toHaveClass('max-w-7xl')
     expect(page()).toHaveAttribute('data-density', 'compact')
   })
 
@@ -108,7 +108,7 @@ describe('App', () => {
     await screen.findByRole('tabpanel')
 
     const page = screen.getByRole('tablist').closest('div.mx-auto') as HTMLElement
-    expect(page).toHaveClass('max-w-7xl')
+    expect(page).toHaveClass('max-w-none')
     expect(page).not.toHaveAttribute('data-density')
   })
 

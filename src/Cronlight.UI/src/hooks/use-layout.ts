@@ -2,19 +2,20 @@ import { useState } from 'react'
 
 /** How the dashboard is laid out in this browser */
 export interface Layout {
-  /** Use the whole window, rather than a column of at most 80rem */
+  /** Use the whole window, as by default, rather than a column of at most 80rem */
   fullWidth: boolean
   /** Tighter table rows, so more fit on screen */
   compact: boolean
 }
 
 const STORAGE_KEY = 'cronlight-layout'
-const standard: Layout = { fullWidth: false, compact: false }
+const standard: Layout = { fullWidth: true, compact: false }
 
 function stored(): Layout {
   try {
     const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as Partial<Layout> | null
-    return { fullWidth: value?.fullWidth === true, compact: value?.compact === true }
+    // Full width unless it was turned off here
+    return { fullWidth: value?.fullWidth !== false, compact: value?.compact === true }
   } catch {
     // Storage blocked, or a value from elsewhere: the standard layout
     return standard

@@ -76,8 +76,11 @@ public class CronlightOptions
         new() { "password", "secret", "token", "apikey", "connectionstring" };
 }
 
-/// <summary>Settings per scheduler, by scheduler name. Reading a name not yet listed adds it.</summary>
-public class CronlightSchedulerOptionsByName() : Dictionary<string, CronlightSchedulerOptions>(StringComparer.Ordinal)
+/// <summary>
+/// Settings per scheduler, by scheduler name, whatever its case: configuration keys ignore case, and a name that did not
+/// match would leave the scheduler open. Reading a name not yet listed adds it.
+/// </summary>
+public class CronlightSchedulerOptionsByName() : Dictionary<string, CronlightSchedulerOptions>(StringComparer.OrdinalIgnoreCase)
 {
     /// <summary>The scheduler's settings, added when first read, so they can be set without creating them first.</summary>
     public new CronlightSchedulerOptions this[string schedulerName]
