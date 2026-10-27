@@ -45,17 +45,19 @@ The details menu, when `clusterNodes` is not null:
   Running since. When it does not: one line, "Not started (manages only)".
 - **Nodes**: each node's instance name (shortened, full on hover), "checked in 3 sec. ago" from the server's count,
   a **this node** tag for this process, and **not responding** for a node past the alive rule. Quartz removes such
-  a row once another node recovers its jobs, so these are short-lived unless every node is down.
+  a row once another node recovers its jobs, so these are short-lived unless every node is down. With no node
+  checked in at all, the section says "None checked in".
 
 When `clusterNodes` is null, today's details.
 
 ## Health check
 
-`AddHealthChecks().AddCronlight(checkCluster: true)`: for a clustered scheduler whose nodes can be read, healthy
-while any node is alive ("is running on 2 nodes"), degraded when none is ("has no running nodes"). A scheduler that
-has shut down or whose job store cannot be read is unhealthy, as today. A scheduler that is not clustered, or whose
-nodes cannot be read, is checked per process as today. Without `checkCluster`, nothing changes: a worker whose own
-scheduler did not start stays degraded even while other nodes run.
+`AddHealthChecks().AddCronlight(checkCluster: true)`: for a clustered scheduler this process has not started and
+whose nodes can be read, healthy while any node is alive ("is running on 2 nodes"), degraded when none is ("has no
+running nodes"). A scheduler that has shut down or whose job store cannot be read is unhealthy, as today. A
+scheduler this process has started is still checked by its own state, so a worker whose scheduler is in standby is
+not hidden by the others and the option is safe on the nodes too (decided in review). A scheduler that is not
+clustered, or whose nodes cannot be read, is checked per process as today. Without `checkCluster`, nothing changes.
 
 ## Edge cases
 

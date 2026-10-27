@@ -47,6 +47,11 @@ headers and cross-site requests.
 - **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.
+- **A cluster by its nodes.** For a clustered scheduler on a database store, the header says how many nodes run it
+  (**Running · 2 nodes**, or **No nodes running**), read from `QRTZ_SCHEDULER_STATE` where each node checks in,
+  whether or not this process runs it. The scheduler details list the nodes, mark this one and those not
+  responding, and say "Not started (manages only)" for a dashboard that only manages schedulers other apps run.
+  Other schedulers show this process's state: Running, Standby or Stopped.
 - **Errors** are returned as ProblemDetails with a trace id, never stack traces.
 - **Security headers** are sent on every dashboard response: a Content-Security-Policy that allows only
   the dashboard's own files and API and no embedding in other sites (`frame-ancestors 'none'`, plus
