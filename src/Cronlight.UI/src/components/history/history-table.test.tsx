@@ -210,6 +210,110 @@ describe('HistoryTable', () => {
     expect(screen.queryByRole('button', { name: 'Load older runs' })).toBeNull()
   })
 
+  it('marks a run that started late, and one run with its own data, listing its values', async () => {
+    pages.all = {
+      records: [
+        execution(2, {
+          scheduledFireTimeUtc: '2030-01-01T00:00:00Z',
+          firedTimeUtc: '2030-01-01T00:00:30Z',
+        }),
+        execution(1, { jobName: 'other', data: { region: 'us', cursor: '5' } }),
+      ],
+      nextBefore: null,
+    }
+    render(<Harness initial={all} />)
+
+    expect(await screen.findByText(/started 30s late/)).toBeInTheDocument()
+    expect(screen.getByText('own data')).toHaveAttribute('title', 'region = us\ncursor = 5')
+  })
+
+  describe('run log', () => {
+    const log = (id: number, answer: (signal: AbortSignal) => Promise<unknown>) => {
+      const fallback = vi.mocked(api).getMockImplementation()!
+      vi.mocked(api).mockImplementation(async (path, options) =>
+        path === `history/${id}/log` ? answer(options!.signal!) : fallback(path, options)
+      )
+    }
+
+    it('shows what a run logged once its log is opened, and hides it again', async () => {
+      pages.all = { records: [execution(5, { hasLog: true }), execution(4)], nextBefore: null }
+      log(5, async () => [
+        {
+          timeUtc: '2030-01-01T00:00:01Z',
+          level: 'Information',
+          category: 'Acme',
+          message: 'Started',
+        },
+        {
+          timeUtc: '2030-01-01T00:00:02Z',
+          level: 'Warning',
+          category: 'Acme',
+          message: 'Slow API',
+        },
+        { timeUtc: '2030-01-01T00:00:03Z', level: 'Error', category: 'Acme', message: 'Gave up' },
+      ])
+      render(<Harness initial={all} onRetry={vi.fn(async () => true)} />)
+
+      // Only a run whose log was kept offers one
+      expect(await screen.findAllByRole('button', { name: 'log' })).toHaveLength(1)
+      await userEvent.click(screen.getByRole('button', { name: 'log' }))
+
+      const lines = within(await screen.findByRole('list', { name: 'Run log' })).getAllByRole(
+        'listitem'
+      )
+      expect(lines.map(line => line.textContent)).toEqual([
+        expect.stringMatching(/Info\s*Started$/),
+        expect.stringMatching(/Warning\s*Slow API$/),
+        expect.stringMatching(/Error\s*Gave up$/),
+      ])
+      expect(screen.getByRole('button', { name: 'hide log' })).toHaveAttribute(
+        'aria-expanded',
+        'true'
+      )
+
+      await userEvent.click(screen.getByRole('button', { name: 'hide log' }))
+      expect(screen.queryByRole('list', { name: 'Run log' })).toBeNull()
+    })
+
+    it('says while the log loads, and why it could not be loaded', async () => {
+      pages.all = { records: [execution(5, { hasLog: true })], nextBefore: null }
+      let fail!: (err: Error) => void
+      log(5, () => new Promise((_, reject) => (fail = reject)))
+      render(<Harness initial={all} />)
+
+      await userEvent.click(await screen.findByRole('button', { name: 'log' }))
+      expect(screen.getByText('Loading the log…')).toBeInTheDocument()
+      await act(async () => fail(new Error('The log of run 5 was removed')))
+
+      expect(screen.getByText('The log of run 5 was removed')).toBeInTheDocument()
+      expect(screen.queryByText('Loading the log…')).toBeNull()
+    })
+
+    it('stops loading a log closed before it arrives, and loads it again when reopened', async () => {
+      pages.all = { records: [execution(5, { hasLog: true })], nextBefore: null }
+      const signals: AbortSignal[] = []
+      log(5, signal => {
+        signals.push(signal)
+        if (signals.length > 1) return Promise.resolve([])
+        // As fetch does when its request is aborted
+        return new Promise((_, reject) =>
+          signal.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError'))
+          )
+        )
+      })
+      render(<Harness initial={all} />)
+
+      await userEvent.click(await screen.findByRole('button', { name: 'log' }))
+      await userEvent.click(screen.getByRole('button', { name: 'hide log' }))
+      expect(signals[0].aborted).toBe(true)
+
+      await userEvent.click(screen.getByRole('button', { name: 'log' }))
+      expect(await screen.findByRole('list', { name: 'Run log' })).toBeInTheDocument()
+      expect(signals).toHaveLength(2)
+    })
+  })
+
   it('shows a load error', async () => {
     vi.mocked(api).mockRejectedValue(new Error('History table is missing'))
     render(<Harness initial={all} />)
