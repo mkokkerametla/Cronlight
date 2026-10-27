@@ -259,7 +259,11 @@ public class ApiTests
         var scheduler = await host.Scheduler();
         var key = new JobKey("typed");
         await scheduler.AddJob(JobBuilder.Create<PlainJob>().WithIdentity(key).StoreDurably()
-            .SetJobData(new JobDataMap { ["count"] = 5, ["enabled"] = true, ["strict"] = false, ["label"] = "a", ["items"] = new List<string> { "x", "y" } })
+            .SetJobData(new JobDataMap
+            {
+                ["count"] = 5, ["enabled"] = true, ["strict"] = false, ["label"] = "a", ["items"] = new List<string> { "x", "y" },
+                ["tags"] = new List<string> { "eu" }
+            })
             .Build(), replace: false);
         var before = (await scheduler.GetJobDetail(key))!.JobDataMap;
 
@@ -268,6 +272,7 @@ public class ApiTests
             .EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString());
         shown["count"] = "6";
         shown["enabled"] = "sometimes"; // does not convert to bool, so it is kept as text
+        shown["tags"] = "eu, us"; // a list cannot be made from text, so it becomes text
         Assert.Equal(HttpStatusCode.NoContent, (await client.PutJson("api/jobs/DEFAULT/typed", new { data = shown })).StatusCode);
 
         var after = (await scheduler.GetJobDetail(key))!.JobDataMap;
@@ -279,6 +284,38 @@ public class ApiTests
         Assert.Equal(false, after["strict"]);
         Assert.Equal(before["items"].GetType(), after["items"].GetType());
         Assert.Equal("a", after["label"]);
+        Assert.Equal("eu, us", after["tags"]);
+    }
+
+    // The database stores' serializer keeps an enum as its number; Quartz's in-memory store keeps the value itself
+    [Fact]
+    public async Task Editing_keeps_an_enum_value_an_enum_where_the_store_keeps_it()
+    {
+        await using var host = await TestHost.Start(ramJobStore: true);
+        var scheduler = await host.Scheduler();
+        var key = new JobKey("weekly");
+        await scheduler.AddJob(JobBuilder.Create<PlainJob>().WithIdentity(key).StoreDurably()
+            .SetJobData(new JobDataMap { ["day"] = DayOfWeek.Monday }).Build(), replace: false);
+
+        Assert.Equal(HttpStatusCode.NoContent,
+            (await host.Client().PutJson("api/jobs/DEFAULT/weekly", new { data = new { day = "friday" } })).StatusCode);
+        Assert.Equal(DayOfWeek.Friday, (await scheduler.GetJobDetail(key))!.JobDataMap["day"]);
+        // Text that names no value of it is kept as text
+        Assert.Equal(HttpStatusCode.NoContent,
+            (await host.Client().PutJson("api/jobs/DEFAULT/weekly", new { data = new { day = "someday" } })).StatusCode);
+        Assert.Equal("someday", (await scheduler.GetJobDetail(key))!.JobDataMap["day"]);
+    }
+
+    [Fact]
+    public async Task Jobs_from_other_apps_cannot_be_run_with_different_data_even_when_managing_them_is_allowed()
+    {
+        await using var host = await TestHost.Start(configure: o => o.AllowManagingUnloadableJobs = true);
+        host.InsertForeignJob("other", "report");
+
+        var response = await host.Client().PostJson("api/jobs/other/report/trigger", new { data = new { month = "2026-09" } });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("cannot be run with different data", await response.Content.ReadAsStringAsync());
     }
 
     [Fact]

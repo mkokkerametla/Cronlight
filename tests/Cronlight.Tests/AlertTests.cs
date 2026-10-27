@@ -188,6 +188,26 @@ public class AlertTests
     }
 
     [Fact]
+    public async Task Alerts_are_emailed_signed_in_with_the_user_name_and_password_given()
+    {
+        await using var smtp = new FakeSmtpServer();
+        var sink = new RecordingAlertSink();
+        await using var host = await TestHost.Start(services: Alerts(sink, o =>
+        {
+            o.Email = Email(smtp.Port);
+            o.Email.UserName = "cronlight";
+            o.Email.Password = "app-password";
+        }));
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(FailingJob), "broken");
+        await Run(client, "broken");
+        await sink.WaitFor(1);
+
+        Assert.Equal(("cronlight", "app-password"), Assert.Single(smtp.SignIns));
+        Assert.Single(smtp.Messages);
+    }
+
+    [Fact]
     public async Task An_unreachable_mail_server_does_not_stop_other_alerts()
     {
         var sink = new RecordingAlertSink();
@@ -226,6 +246,27 @@ public class AlertTests
         await sink.WaitFor(1);
         // A 4xx is the webhook refusing the message, so it is not retried
         Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task A_webhook_that_is_briefly_unavailable_is_tried_again()
+    {
+        // Unreachable, then busy, then fine: two and four seconds apart
+        var handler = new RecordingHandler { Responses = [null, HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK] };
+        var sink = new RecordingAlertSink();
+        await using var host = await TestHost.Start(services: s =>
+        {
+            Alerts(sink, o => o.Webhooks.Add(new CronlightWebhook { Url = "https://hooks.example/json" }))(s);
+            s.AddHttpClient("Cronlight.Alerts").ConfigurePrimaryHttpMessageHandler(() => handler);
+        });
+        var client = host.Client();
+        await HistoryScenarios.Create(client, typeof(FailingJob), "broken");
+        await Run(client, "broken");
+
+        // Sinks are called once the webhook is done with
+        await sink.WaitFor(1);
+        Assert.Equal(3, handler.Requests.Count);
+        Assert.All(handler.Requests, r => Assert.Contains("\"jobName\":\"broken\"", r.Body));
     }
 
     [Fact]
@@ -333,12 +374,19 @@ public class AlertTests
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public HttpStatusCode Status { get; init; } = HttpStatusCode.OK;
+
+        /// <summary>The answer to each request in turn, null for a network error, then <see cref="Status"/>.</summary>
+        public HttpStatusCode?[] Responses { get; init; } = [];
+
         public ConcurrentQueue<(Uri Url, string Body)> Requests { get; } = new();
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Enqueue((request.RequestUri!, await request.Content!.ReadAsStringAsync(cancellationToken)));
-            return new HttpResponseMessage(Status);
+            var index = Requests.Count - 1;
+            if (index < Responses.Length && Responses[index] == null)
+                throw new HttpRequestException("No such host is known");
+            return new HttpResponseMessage(index < Responses.Length ? Responses[index]!.Value : Status);
         }
     }
 }

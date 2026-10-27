@@ -116,6 +116,81 @@ public class RetryTests
         await HistoryScenarios.Create(client, typeof(PlainJob), "b");
         var run = await client.PostJson("api/jobs/DEFAULT/b/trigger", new { data = new Dictionary<string, string> { ["Cronlight.Attempt"] = "5" } });
         Assert.Equal(HttpStatusCode.BadRequest, run.StatusCode);
+
+        // Nor can an edit set them
+        var edited = await client.PutJson("api/jobs/DEFAULT/b", new { data = new Dictionary<string, string> { ["Cronlight.Retry"] = "{}" } });
+        Assert.Equal(HttpStatusCode.BadRequest, edited.StatusCode);
+        Assert.Contains("reserved", await edited.Content.ReadAsStringAsync());
+        var editedRetry = await client.PutJson("api/jobs/DEFAULT/b", new { retry = new { maxRetries = 1, delaySeconds = 0 } });
+        Assert.Contains("retry delay", await editedRetry.Content.ReadAsStringAsync());
+        Assert.Null(Retry(await Job(client, "b")));
+    }
+
+    [Fact]
+    public async Task A_stored_retry_policy_that_cannot_be_read_is_ignored()
+    {
+        await using var host = await TestHost.Start(history: _ => { });
+        var client = host.Client();
+        // As a host might have left it, writing the reserved key itself
+        await (await host.Scheduler()).AddJob(JobBuilder.Create<FailingJob>().WithIdentity("garbled").StoreDurably()
+            .UsingJobData("Cronlight.Retry", "{ maxRetries: three").Build(), replace: false);
+
+        Assert.Null(Retry(await Job(client, "garbled")));
+        await client.PostAsync("api/jobs/DEFAULT/garbled/trigger", null);
+        Assert.Equal("Failed", Assert.Single(await Finished(client, "garbled", 1)).GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task A_job_paused_while_a_run_is_failing_keeps_its_retry_paused()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        var gate = Guid.NewGuid().ToString("N");
+        var created = await client.PostJson("api/jobs", new
+        {
+            type = typeof(GatedFailingJob).FullName,
+            name = "paused",
+            data = new { gate },
+            retry = new { maxRetries = 1, delaySeconds = 3600 },
+            triggers = new[] { new { kind = "Interval", intervalSeconds = 3600 } }
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.True(await BlockingJob.Gate(gate).Started.WaitAsync(TimeSpan.FromSeconds(15)));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("api/jobs/DEFAULT/paused/pause", null)).StatusCode);
+        BlockingJob.Gate(gate).Release.Release();
+
+        var retry = await WaitForRetry(client, "paused");
+        Assert.Equal("Paused", retry.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task The_retry_of_a_job_that_is_not_durable_cannot_be_cancelled_when_it_is_the_jobs_only_trigger()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        // Registered by the host: not durable, with one trigger, which has fired by the time the retry is scheduled
+        var job = JobBuilder.Create<FailingJob>().WithIdentity("fleeting")
+            .UsingJobData("Cronlight.Retry", """{"maxRetries":1,"delaySeconds":3600}""").Build();
+        await (await host.Scheduler()).ScheduleJob(job, TriggerBuilder.Create().ForJob(job).StartNow().Build());
+        var name = (await WaitForRetry(client, "fleeting")).GetProperty("name").GetString();
+
+        var response = await client.PostAsync($"api/jobs/DEFAULT/fleeting/retries/{name}/cancel-retry", null);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("cancelling it would delete the job", await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync($"api/jobs/DEFAULT/missing/retries/{name}/cancel-retry", null)).StatusCode);
+    }
+
+    private static async Task<JsonElement> WaitForRetry(HttpClient client, string name)
+    {
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(100))
+        {
+            var retry = (await Job(client, name)).GetProperty("triggers").EnumerateArray()
+                .FirstOrDefault(t => t.GetProperty("kind").GetString() == "Retry");
+            if (retry.ValueKind != JsonValueKind.Undefined)
+                return retry;
+            Assert.True(DateTime.UtcNow < deadline, $"No retry of {name} was scheduled");
+        }
     }
 
     [Fact]

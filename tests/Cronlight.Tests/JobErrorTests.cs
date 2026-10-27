@@ -1,6 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Quartz;
+using Quartz.Spi;
 
 namespace Cronlight.Tests;
 
@@ -120,6 +124,47 @@ public class JobErrorTests
         // Its trigger fires every second, but Quartz has stopped it: no further records
         await Task.Delay(TimeSpan.FromSeconds(2));
         Assert.Single(await HistoryScenarios.History(client, "?group=billing.eu&name=nightly.export"));
+    }
+
+    [Fact]
+    public async Task A_job_factory_that_creates_jobs_by_reflection_reports_what_the_constructor_threw()
+    {
+        await using var host = await TestHost.Start(history: _ => { },
+            services: s => s.AddQuartz(q => q.UseJobFactory<ReflectionJobFactory>()));
+        var client = host.Client();
+        await CreateBroken(host, "reflected");
+
+        var records = await HistoryScenarios.WaitForHistory(client, "?name=reflected",
+            r => r.Any(x => x.GetProperty("status").GetString() == "Failed"));
+        // Not reflection's "Exception has been thrown by the target of an invocation"
+        Assert.StartsWith("Not run: the job could not be created. InvalidOperationException: No IInvoiceGateway is registered",
+            records.Single().GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task A_job_left_out_of_alerts_raises_none_when_it_cannot_be_created()
+    {
+        var sink = new AlertTests.RecordingAlertSink();
+        await using var host = await TestHost.Start(history: _ => { },
+            services: AlertTests.Alerts(sink, o => o.Jobs = job => job.Name != "ignored"));
+        var client = host.Client();
+        await CreateBroken(host, "ignored");
+
+        // History is told at the same time as alerts
+        await HistoryScenarios.WaitForHistory(client, "?name=ignored", r => r.Any(x => x.GetProperty("status").GetString() == "Failed"));
+        await Task.Delay(500);
+        Assert.Empty(sink.Alerts);
+    }
+
+    /// <summary>Creates jobs as a host's own factory might, through reflection, which wraps what a constructor throws.</summary>
+    private sealed class ReflectionJobFactory(IServiceProvider services) : IJobFactory
+    {
+        public IJob NewJob(TriggerFiredBundle bundle, IScheduler scheduler) =>
+            (IJob)Activator.CreateInstance(bundle.JobDetail.JobType, services.GetRequiredService<IOptions<QuartzOptions>>())!;
+
+        public void ReturnJob(IJob job)
+        {
+        }
     }
 
     // A timeout or a disposed service looks like the app stopping, but is not

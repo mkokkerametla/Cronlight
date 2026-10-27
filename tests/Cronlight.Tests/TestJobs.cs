@@ -95,6 +95,18 @@ public class SecretEchoJob : IJob
     }
 }
 
+/// <summary>Waits for BlockingJob.Gate("gate") to be released, ignoring cancellation, then fails.</summary>
+public class GatedFailingJob : IJob
+{
+    public async Task Execute(IJobExecutionContext context)
+    {
+        var (started, release) = BlockingJob.Gate(context.MergedJobDataMap.GetString("gate")!);
+        started.Release();
+        await release.WaitAsync(TimeSpan.FromSeconds(30));
+        throw new InvalidOperationException("Failed after waiting");
+    }
+}
+
 /// <summary>Runs until cancelled. Signals BlockingJob.Gate("gate").Started once running.</summary>
 public class CancellableJob : IJob
 {
