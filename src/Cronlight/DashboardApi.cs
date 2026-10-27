@@ -258,8 +258,8 @@ internal static class DashboardApi
             });
         });
 
-        api.MapGet("/job-types", (JobTypeCatalog catalog) =>
-            Results.Ok(catalog.All.Where(t => !t.Hidden).OrderBy(t => t.DisplayName)));
+        api.MapGet("/job-types", async (HttpContext http, JobTypeCatalog catalog) =>
+            Results.Ok(catalog.For((await Scheduler(http)).SchedulerName).Where(t => !t.Hidden).OrderBy(t => t.DisplayName)));
 
         api.MapGet("/jobs", async (HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
         {
@@ -410,6 +410,9 @@ internal static class DashboardApi
                 return Results.BadRequest("A job name is required");
             if (!catalog.TryGet(typeName, out var type, out var info))
                 return Results.BadRequest($"Unknown job type '{typeName}'");
+            var scheduler = await Scheduler(http);
+            if (!catalog.Offers(scheduler.SchedulerName, typeName))
+                return Results.BadRequest($"Job type '{typeName}' is not offered for scheduler '{scheduler.SchedulerName}'");
 
             var data = request.Data ?? new();
             foreach (var p in info.Parameters.Where(p => p.DefaultValue != null && !data.ContainsKey(p.Key)))
@@ -429,7 +432,6 @@ internal static class DashboardApi
             if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
                 return Results.BadRequest(error);
 
-            var scheduler = await Scheduler(http);
             if (await scheduler.CheckExists(key))
                 return Results.Conflict($"Job {key} already exists");
             if (await FindTriggerConflict(scheduler, triggers, new HashSet<TriggerKey>()) is { } conflict)

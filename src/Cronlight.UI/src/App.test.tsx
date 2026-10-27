@@ -167,7 +167,10 @@ describe('App', () => {
     responses.scheduler = scheduler({ schedulers })
     // The server answers for the scheduler a request names, as the real one does with ?scheduler=
     const hostServer = vi.mocked(api).getMockImplementation()!
+    // Each scheduler offers its own job types, so they are asked for again
+    const jobTypesFor: (string | null)[] = []
     vi.mocked(api).mockImplementation(async (path, options) => {
+      if (path === 'job-types') jobTypesFor.push(currentScheduler())
       if (currentScheduler() !== 'Reports') return hostServer(path, options)
       if (path === 'scheduler') return scheduler({ schedulerName: 'Reports', schedulers })
       if (path.startsWith('jobs/search?')) return jobPage([job({ name: 'monthly' })], path)
@@ -188,6 +191,7 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('combobox', { name: 'Scheduler' }))
     await userEvent.click(screen.getByRole('option', { name: 'SampleHost' }))
     expect(currentScheduler()).toBeNull()
+    await waitFor(() => expect(jobTypesFor).toEqual([null, 'Reports', null]))
   })
 
   it('shows the scheduler, its counts and its jobs once loaded', async () => {
