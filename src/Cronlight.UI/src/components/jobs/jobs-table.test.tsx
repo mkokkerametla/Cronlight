@@ -290,7 +290,7 @@ describe('JobsTable', () => {
     renderTable({ canManage: false })
 
     await userEvent.click(screen.getByRole('button', { name: 'All jobs' }))
-    const items = (await screen.findAllByRole('menuitem')).map(item => item.textContent)
+    const items = (await screen.findAllByRole('menuitem')).map(item => item.textContent?.trim())
     expect(items).toEqual(['Export as YAML', 'Export as JSON'])
   })
 
