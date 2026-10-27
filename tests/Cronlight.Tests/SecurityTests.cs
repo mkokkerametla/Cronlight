@@ -194,6 +194,37 @@ public class SecurityTests
     }
 
     [Fact]
+    public async Task Responses_made_before_the_dashboard_is_reached_send_the_security_headers_too()
+    {
+        await using var host = await TestHost.Start("Production", o =>
+        {
+            o.ViewPolicy = "Viewers";
+            o.ManagePolicy = "Admins";
+        });
+        var admin = host.Client("admin");
+        using var malformed = new HttpRequestMessage(HttpMethod.Post, "api/jobs")
+        {
+            Content = new StringContent("{not json", System.Text.Encoding.UTF8, "application/json")
+        };
+
+        foreach (var (response, status) in new[]
+        {
+            // The authorization middleware's challenge and refusal, and a body that cannot be read
+            (await host.Client().GetAsync(""), HttpStatusCode.Unauthorized),
+            (await host.Client().GetAsync("api/jobs"), HttpStatusCode.Unauthorized),
+            (await host.Client("viewer").PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "x" }), HttpStatusCode.Forbidden),
+            (await admin.SendAsync(malformed), HttpStatusCode.BadRequest),
+        })
+        {
+            Assert.Equal(status, response.StatusCode);
+            Assert.Equal(CronlightOptions.DefaultContentSecurityPolicy, Header(response, "Content-Security-Policy"));
+            Assert.Equal("DENY", Header(response, "X-Frame-Options"));
+            Assert.Equal("nosniff", Header(response, "X-Content-Type-Options"));
+            Assert.Equal("no-referrer", Header(response, "Referrer-Policy"));
+        }
+    }
+
+    [Fact]
     public async Task A_changed_policy_is_sent_as_is_and_can_allow_embedding()
     {
         var policy = CronlightOptions.DefaultContentSecurityPolicy.Replace("frame-ancestors 'none'", "frame-ancestors https://portal.contoso.com");
