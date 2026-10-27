@@ -354,6 +354,9 @@ function JobDetails({
                     <FireTime iso={t.previousFireTimeUtc} empty="Never" />
                   </Field>
                   {t.timeZone && <Field label="Time zone">{t.timeZone}</Field>}
+                  {t.calendarName && (
+                    <Field label="Skips times excluded by">{t.calendarName}</Field>
+                  )}
                   {describeMisfire(t.misfireInstruction) && (
                     <Field label="If a fire time is missed">
                       <span title={t.misfireInstruction}>
