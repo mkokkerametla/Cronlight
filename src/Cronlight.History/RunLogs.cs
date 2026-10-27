@@ -69,31 +69,10 @@ internal sealed class RunLog(int maxEntries, int maxMessageLength, Func<string, 
     }
 }
 
-/// <summary>
-/// Masks a run's sensitive values wherever its job logged them, as the API masks them in job data. The merged data is
-/// used, since it holds the values the job reads, resolved secret references included.
-/// </summary>
-internal sealed class RunLogMasks(IServiceProvider services)
+/// <summary>Masks a run's sensitive values wherever its job logged them, as the API masks them in job data.</summary>
+internal sealed class RunLogMasks(IOptions<CronlightOptions> cronlight)
 {
-    // Registered by AddCronlight; without it, no job type says which values are secret
-    private readonly JobTypeCatalog? catalog = services.GetService<JobTypeCatalog>();
-    private readonly IOptions<CronlightOptions> cronlight = services.GetRequiredService<IOptions<CronlightOptions>>();
-
-    public Func<string, string> For(IJobExecutionContext context)
-    {
-        var secretKeys = DashboardApi.SecretKeys(catalog?.Describe(context.JobDetail.JobType));
-        var secrets = context.MergedJobDataMap
-            .Where(kv => DashboardApi.IsSensitive(kv.Key, secretKeys, cronlight.Value))
-            .Select(kv => kv.Value?.ToString())
-            // Very short values would mask unrelated text, and are no secret worth the name
-            .Where(v => v is { Length: >= 4 } && v != DashboardApi.Mask)
-            .Distinct()
-            .OrderByDescending(v => v!.Length)
-            .ToList();
-        return secrets.Count == 0
-            ? message => message
-            : message => secrets.Aggregate(message, (text, secret) => text.Replace(secret!, DashboardApi.Mask, StringComparison.Ordinal));
-    }
+    public Func<string, string> For(IJobExecutionContext context) => RunSecrets.Masker(context, cronlight.Value);
 }
 
 /// <summary>

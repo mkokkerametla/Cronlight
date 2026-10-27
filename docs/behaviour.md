@@ -4,7 +4,11 @@ How the dashboard and its API behave: secrets, editing, triggers, pausing, cance
 headers and cross-site requests.
 
 - **Secrets** are shown as `********`. Saving a masked value back keeps the stored value. To keep them
-  out of the database too, use [secret references](job-types.md#secret-references).
+  out of the database too, use [secret references](job-types.md#secret-references). A secret is a value whose key
+  the job type marks `[JobParameter(Type = Secret)]`, whether or not the dashboard offers that type, or whose key
+  matches `SensitiveKeyPatterns`. A run's secrets, resolved references included, are also masked in what it logs and
+  in why it failed, as History and alerts show it. Quartz itself logs the exception a job throws, at Error level in
+  the app's log, which Cronlight does not change: keep secrets out of exception messages, or filter that log.
 - **Editing job data** changes only what is edited. `PUT api/jobs/{group}/{name}` sets the data keys it sends and
   keeps the others: `{"data": {"region": "us"}}` changes one value, and a key sent as `null` is removed. Required
   parameters are checked on the data the job ends up with. The dashboard's edit form sends only the fields, values

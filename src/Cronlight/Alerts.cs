@@ -173,6 +173,7 @@ internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOpt
 {
     // Registered by AddCronlight; without it, nothing is retried
     private readonly RetryPlanner? retries = services.GetService<RetryPlanner>();
+    private readonly CronlightOptions cronlight = services.GetService<IOptions<CronlightOptions>>()?.Value ?? new CronlightOptions();
 
     // Schedulers whose runs spread over several nodes, so a streak is read from history
     private readonly ConcurrentDictionary<string, bool> clustered = new();
@@ -187,7 +188,7 @@ internal sealed class AlertListener(AlertQueue queue, IOptions<CronlightAlertOpt
         // Someone stopped it on purpose: neither a failure nor a recovery. A failure that will be retried is not
         // the outcome yet; the last attempt's is.
         if (status != JobExecutionStatus.Cancelled && !(retries != null && await retries.Retry(context, jobException, cancellationToken)))
-            Enqueue(context, status == JobExecutionStatus.Succeeded, RunOutcome.Error(context, jobException));
+            Enqueue(context, status == JobExecutionStatus.Succeeded, RunOutcome.Error(context, jobException, cronlight));
     }
 
     /// <summary>

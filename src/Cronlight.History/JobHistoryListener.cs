@@ -95,7 +95,6 @@ internal sealed class JobHistoryListener(
 {
     // Registered by AddCronlight; without it, nothing is retried and no job type says which values are secret
     private readonly RetryPlanner? retries = services.GetService<RetryPlanner>();
-    private readonly JobTypeCatalog? catalog = services.GetService<JobTypeCatalog>();
     private readonly IOptions<CronlightOptions> cronlight = services.GetRequiredService<IOptions<CronlightOptions>>();
 
     public string Name => "Cronlight.History";
@@ -117,7 +116,7 @@ internal sealed class JobHistoryListener(
         RefireCount = context.RefireCount - 1,
         FinishedTimeUtc = context.FireTimeUtc + context.JobRunTime,
         DurationMs = (long)context.JobRunTime.TotalMilliseconds,
-        Error = Truncate(RunOutcome.Error(context, context.Get(RunLogJob.RefireErrorKey) as JobExecutionException)
+        Error = Truncate(RunOutcome.Error(context, context.Get(RunLogJob.RefireErrorKey) as JobExecutionException, cronlight.Value)
             ?? "Failed and asked to run again at once"),
         Log = (context.Get(RunLog.ContextKey) as RunLog)?.Close()
     };
@@ -143,7 +142,7 @@ internal sealed class JobHistoryListener(
         {
             FinishedTimeUtc = context.FireTimeUtc + context.JobRunTime,
             DurationMs = (long)context.JobRunTime.TotalMilliseconds,
-            Error = RunOutcome.Error(context, jobException) is { } error ? Truncate(error) : null,
+            Error = RunOutcome.Error(context, jobException, cronlight.Value) is { } error ? Truncate(error) : null,
             Log = (context.Get(RunLog.ContextKey) as RunLog)?.Close()
         });
     }
@@ -173,7 +172,7 @@ internal sealed class JobHistoryListener(
         var data = context.Trigger.JobDataMap.Where(kv => !Retries.IsReserved(kv.Key)).ToList();
         if (data.Count == 0)
             return null;
-        var secretKeys = DashboardApi.SecretKeys(catalog?.Describe(context.JobDetail.JobType));
+        var secretKeys = DashboardApi.SecretKeys(context.JobDetail.JobType);
         return data.ToDictionary(kv => kv.Key, kv => DashboardApi.Display(kv.Key, kv.Value?.ToString(), secretKeys, cronlight.Value) ?? "");
     }
 

@@ -1,4 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Reflection;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -447,7 +449,7 @@ internal static class DashboardApi
                 return Invalid(invalid);
             if (request.Retry?.Problem() is { } badRetry)
                 return Invalid(badRetry);
-            var secretKeys = SecretKeys(info);
+            var secretKeys = SecretKeys(type);
             if (CheckSecretReferences(http, data, secretKeys, options.Value) is { } unresolved)
                 return Invalid(unresolved);
 
@@ -494,7 +496,7 @@ internal static class DashboardApi
 
             // Validate everything before mutating anything
             var info = catalog.Describe(existing.JobType);
-            var secretKeys = SecretKeys(info);
+            var secretKeys = SecretKeys(existing.JobType);
             var setValues = request.Data?.Where(kv => kv.Value != null).ToDictionary(kv => kv.Key, kv => kv.Value!);
             if (request.Data != null && ReservedKey(request.Data.Keys) is { } reserved)
                 return Invalid(reserved);
@@ -712,7 +714,7 @@ internal static class DashboardApi
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
 
             var info = catalog.Describe(existing.JobType);
-            var secretKeys = SecretKeys(info);
+            var secretKeys = SecretKeys(existing.JobType);
             if (info != null && ValidateParameters(info, Merged(saved, overrides!)) is { } invalid)
                 return Invalid(invalid);
             if (CheckSecretReferences(http, overrides, secretKeys, options.Value) is { } unresolved)
@@ -853,7 +855,7 @@ internal static class DashboardApi
         EditableKinds.FirstOrDefault(k => string.Equals(k, kind ?? "Cron", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The kinds of trigger an update replaces: those it names, else cron and the kinds it sends.</summary>
-    private static bool TryReplacedKinds(UpdateJobRequest request, out IReadOnlySet<string> kinds, out string? error)
+    private static bool TryReplacedKinds(UpdateJobRequest request, out IReadOnlySet<string> kinds, [NotNullWhen(false)] out string? error)
     {
         error = null;
         var sent = request.Triggers!.Select(t => EditableKind(t.Kind)).OfType<string>().ToHashSet();
@@ -1004,7 +1006,7 @@ internal static class DashboardApi
     /// triggers never take one of their names.
     /// </param>
     private static bool TryBuildTriggers(JobKey key, List<TriggerRequest> requests, IReadOnlyCollection<ITrigger> existing,
-        out List<ITrigger> triggers, out string? error)
+        out List<ITrigger> triggers, [NotNullWhen(false)] out string? error)
     {
         triggers = new();
         error = null;
@@ -1159,7 +1161,7 @@ internal static class DashboardApi
         if (detail == null)
             return null;
         var info = catalog.Describe(detail.JobType);
-        var secretKeys = SecretKeys(info);
+        var secretKeys = SecretKeys(detail.JobType);
 
         var data = detail.JobDataMap.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(
             kv => kv.Key,
@@ -1269,8 +1271,13 @@ internal static class DashboardApi
     private static JobDataMap ToJobDataMap(Dictionary<string, string> data) =>
         new((IDictionary<string, object>)data.ToDictionary(kv => kv.Key, kv => (object)kv.Value));
 
-    internal static HashSet<string> SecretKeys(JobTypeInfo? info) =>
-        info?.Parameters.Where(p => p.Type == nameof(JobParameterType.Secret)).Select(p => p.Key).ToHashSet() ?? new HashSet<string>();
+    /// <summary>
+    /// The keys a job type declares secret with [JobParameter], read from the type itself so they are masked whether or
+    /// not the type is one the dashboard offers.
+    /// </summary>
+    internal static HashSet<string> SecretKeys(Type? jobType) =>
+        jobType?.GetCustomAttributes<JobParameterAttribute>().Where(p => p.Type == JobParameterType.Secret).Select(p => p.Key).ToHashSet()
+        ?? new HashSet<string>();
 
     /// <summary>Job data that differs between two maps, by "data.&lt;key&gt;", for the audit log. Sensitive values are masked.</summary>
     private static Dictionary<string, CronlightAuditChange> DataChanges(

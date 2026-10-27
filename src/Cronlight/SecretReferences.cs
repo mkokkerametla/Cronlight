@@ -64,7 +64,6 @@ internal static class SecretReferences
 /// cannot be resolved vetoes the run, rather than running the job with the reference as its password.
 /// </summary>
 internal sealed class SecretReferenceListener(
-    JobTypeCatalog catalog,
     IConfiguration configuration,
     IOptions<CronlightOptions> options,
     ILogger<SecretReferenceListener> logger) : ITriggerListener
@@ -76,7 +75,7 @@ internal sealed class SecretReferenceListener(
         // An exception here would stop Quartz from completing the trigger, so every failure becomes a veto
         try
         {
-            var secretKeys = DashboardApi.SecretKeys(catalog.Describe(context.JobDetail.JobType));
+            var secretKeys = DashboardApi.SecretKeys(context.JobDetail.JobType);
             var data = context.MergedJobDataMap;
             foreach (var key in data.Keys.ToList())
             {
