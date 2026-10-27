@@ -4,7 +4,7 @@ import { ThemeProvider } from 'next-themes'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Header } from '@/components/header'
 import { scheduler } from '@/test/fixtures'
-import type { SchedulerInfo } from '@/types'
+import type { ClusterNode, SchedulerInfo } from '@/types'
 
 const renderHeader = (info: SchedulerInfo | null, onSchedulerChange?: (name: string) => void) =>
   render(
@@ -12,6 +12,16 @@ const renderHeader = (info: SchedulerInfo | null, onSchedulerChange?: (name: str
       <Header scheduler={info} onSchedulerChange={onSchedulerChange} />
     </ThemeProvider>
   )
+
+const node = (instanceId: string, overrides: Partial<ClusterNode> = {}): ClusterNode => ({
+  instanceId,
+  lastCheckinUtc: '2030-01-01T00:00:00Z',
+  checkinIntervalMs: 7500,
+  secondsSinceCheckin: 3,
+  alive: true,
+  thisNode: false,
+  ...overrides,
+})
 
 describe('Header', () => {
   afterEach(() => {
@@ -35,6 +45,20 @@ describe('Header', () => {
     expect(screen.getByRole('heading', { name: 'SampleHost' })).toBeInTheDocument()
     expect(screen.getByText(state)).toBeInTheDocument()
   })
+
+  it.each([
+    [[node('a'), node('b')], 'Running · 2 nodes'],
+    [[node('a'), node('b', { alive: false })], 'Running · 1 node'],
+    [[node('a', { alive: false })], 'No nodes running'],
+  ])(
+    'describes a cluster by its running nodes, whatever this process does: %#',
+    (clusterNodes, label) => {
+      renderHeader(scheduler({ jobStoreClustered: true, started: false, clusterNodes }))
+
+      expect(screen.getByText(label)).toBeInTheDocument()
+      expect(screen.queryByText('Stopped')).toBeNull()
+    }
+  )
 
   it('offers the other schedulers when the app serves more than one', async () => {
     const onSchedulerChange = vi.fn()

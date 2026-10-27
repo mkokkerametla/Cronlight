@@ -22,6 +22,28 @@ import type { Layout } from '@/hooks/use-layout'
 import { formatDateTime } from '@/lib/format'
 import type { SchedulerInfo } from '@/types'
 
+type Tone = 'running' | 'idle' | 'warning'
+
+const dot: Record<Tone, string> = {
+  running: 'bg-emerald-400',
+  idle: 'bg-muted-foreground',
+  warning: 'bg-amber-500',
+}
+
+/** A cluster by its nodes, which may all be other processes; otherwise this process, which is the scheduler */
+function schedulerState(scheduler: SchedulerInfo): { label: string; tone: Tone } {
+  if (scheduler.clusterNodes) {
+    const alive = scheduler.clusterNodes.filter(n => n.alive).length
+    return alive > 0
+      ? { label: `Running · ${alive} ${alive === 1 ? 'node' : 'nodes'}`, tone: 'running' }
+      : { label: 'No nodes running', tone: 'warning' }
+  }
+  if (!scheduler.started) return { label: 'Stopped', tone: 'idle' }
+  return scheduler.inStandbyMode
+    ? { label: 'Standby', tone: 'idle' }
+    : { label: 'Running', tone: 'running' }
+}
+
 export function Header({
   scheduler,
   onSchedulerChange,
@@ -35,13 +57,7 @@ export function Header({
   layout?: Layout
   onLayoutChange?: (change: Partial<Layout>) => void
 }) {
-  const state = !scheduler
-    ? null
-    : !scheduler.started
-      ? 'Stopped'
-      : scheduler.inStandbyMode
-        ? 'Standby'
-        : 'Running'
+  const state = scheduler && schedulerState(scheduler)
 
   return (
     <header className="flex flex-wrap items-center gap-3">
@@ -71,11 +87,9 @@ export function Header({
 
       <div className="ml-auto flex items-center gap-2">
         {state && (
-          <Badge variant={state === 'Running' ? 'default' : 'secondary'} className="gap-1.5">
-            <span
-              className={`size-1.5 rounded-full ${state === 'Running' ? 'bg-emerald-400' : 'bg-muted-foreground'}`}
-            />
-            {state}
+          <Badge variant={state.tone === 'running' ? 'default' : 'secondary'} className="gap-1.5">
+            <span className={`size-1.5 rounded-full ${dot[state.tone]}`} />
+            {state.label}
           </Badge>
         )}
         {scheduler && !scheduler.canManage && <Badge variant="outline">Read-only</Badge>}
