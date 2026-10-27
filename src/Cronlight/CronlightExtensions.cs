@@ -30,6 +30,7 @@ public static class CronlightExtensions
         services.AddSingleton<JobTypeCatalog>();
         services.TryAddSingleton<QuartzDataSource>();
         services.TryAddSingleton<RunningJobsReader>();
+        services.TryAddSingleton<ClusterNodesReader>();
         services.AddSingleton<JobIndexReader>();
         services.TryAddSingleton<SecretReferenceListener>();
         services.TryAddSingleton<RetryPlanner>();

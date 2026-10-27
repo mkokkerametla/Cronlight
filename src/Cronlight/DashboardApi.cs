@@ -221,7 +221,8 @@ internal static class DashboardApi
 
     public static void MapReadEndpoints(this RouteGroupBuilder api)
     {
-        api.MapGet("/scheduler", async (HttpContext http, CronlightSchedulers schedulers, IOptions<CronlightOptions> options) =>
+        api.MapGet("/scheduler", async (HttpContext http, CronlightSchedulers schedulers, IOptions<CronlightOptions> options,
+            ClusterNodesReader cluster, CancellationToken ct) =>
         {
             var scheduler = await Scheduler(http);
             var meta = await scheduler.GetMetaData();
@@ -242,6 +243,8 @@ internal static class DashboardApi
                 meta.ThreadPoolSize,
                 meta.NumberOfJobsExecuted,
                 meta.RunningSince,
+                // The cluster's nodes, for a dashboard whose own process may not run the scheduler at all
+                ClusterNodes = await cluster.Read(scheduler, ct),
                 // Lets the UI hide controls the user cannot use; the server still enforces it
                 CanManage = await CanManage(http, options.Value, scheduler.SchedulerName),
                 HistoryEnabled = http.RequestServices.GetService<IJobHistoryStore>() != null,
