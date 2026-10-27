@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using Quartz;
 using Quartz.Impl;
 using Quartz.Impl.Matchers;
+using QuartzSample.Jobs;
 
 namespace Cronlight.Tests;
 
@@ -158,8 +159,8 @@ public class SchedulerTests
             {
                 o.ViewPolicy = "Viewers";
                 o.ManagePolicy = "Viewers";
-                o.Schedulers[hidden] = new CronlightSchedulerAccess { ViewPolicy = "Admins" };
-                o.Schedulers[watched] = new CronlightSchedulerAccess { ManagePolicy = "Admins" };
+                o.Schedulers[hidden] = new CronlightSchedulerOptions { ViewPolicy = "Admins" };
+                o.Schedulers[watched] = new CronlightSchedulerOptions { ManagePolicy = "Admins" };
             },
             services: s => s.AddSingleton<ICronlightAuditSink>(audit));
         var extras = new[] { await AddScheduler(host, name: hidden), await AddScheduler(host, name: watched) };
@@ -189,6 +190,43 @@ public class SchedulerTests
         {
             foreach (var extra in extras)
                 await extra.Shutdown();
+        }
+    }
+
+    private static async Task<List<string>> JobTypes(HttpClient client, string? scheduler = null) =>
+        (await client.GetFromJsonAsync<JsonElement>(scheduler == null ? "api/job-types" : $"api/job-types?scheduler={scheduler}"))
+            .EnumerateArray().Select(t => t.GetProperty("typeName").GetString()!).ToList();
+
+    [Fact]
+    public async Task A_scheduler_given_its_own_job_assemblies_offers_only_their_job_types()
+    {
+        var partners = UniqueName("partners");
+        // The host's own scheduler offers the test assembly's job types (TestHost lists it in JobAssemblies)
+        await using var host = await TestHost.Start(configure: o => o.Schedulers[partners].JobAssemblies.Add(typeof(PartnerCallJob).Assembly));
+        var extra = await AddScheduler(host, name: partners);
+        try
+        {
+            var client = host.Client();
+            Assert.Equal([typeof(PartnerCallJob).FullName!], await JobTypes(client, partners));
+            var own = await JobTypes(client);
+            Assert.Contains(typeof(PlainJob).FullName!, own);
+            Assert.DoesNotContain(typeof(PartnerCallJob).FullName!, own);
+
+            var refused = await client.PostJson($"api/jobs?scheduler={partners}", new { type = typeof(PlainJob).FullName, name = "plain" });
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            Assert.Contains($"is not offered for scheduler '{partners}'", await refused.Content.ReadAsStringAsync());
+            Assert.Equal(HttpStatusCode.BadRequest,
+                (await client.PostJson("api/jobs", new { type = typeof(PartnerCallJob).FullName, name = "call" })).StatusCode);
+
+            Assert.Equal(HttpStatusCode.Created,
+                (await client.PostJson($"api/jobs?scheduler={partners}", new { type = typeof(PartnerCallJob).FullName, name = "call" })).StatusCode);
+            // Its form is described like any other job's
+            var job = await client.GetFromJsonAsync<JsonElement>($"api/jobs/DEFAULT/call?scheduler={partners}");
+            Assert.Equal("Partner call", job.GetProperty("displayName").GetString());
+        }
+        finally
+        {
+            await extra.Shutdown();
         }
     }
 
