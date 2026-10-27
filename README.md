@@ -32,14 +32,14 @@ second scheduler.
 | Quartz.NET | 3.13.1 or a later 3.x, set up with `AddQuartz()`; tested on 3.22.7. Quartz 4 is not supported yet |
 | Job store | Any. Execution history is kept in the Quartz database on SQL Server, PostgreSQL, MySQL or SQLite, and in memory otherwise |
 
-Cronlight is in beta: install it with `--prerelease` until 1.0, and expect options and endpoints to change between
-betas.
+Until 1.0, a minor version (0.2, 0.3) may change options and endpoints, and its release notes say how; a patch
+version (0.1.1) does not.
 
 ## Install
 
 ```bash
-dotnet add package Cronlight.Quartz.Dashboard --prerelease
-dotnet add package Cronlight.Quartz.Dashboard.History --prerelease   # optional: execution history
+dotnet add package Cronlight.Quartz.Dashboard
+dotnet add package Cronlight.Quartz.Dashboard.History   # optional: execution history
 ```
 
 The setup below also calls `AddQuartzHostedService()`, from `Quartz.Extensions.Hosting` (or `Quartz.AspNetCore`).
