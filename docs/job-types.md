@@ -52,3 +52,6 @@ Azure Key Vault through its configuration provider (a vault secret named `JobSec
   read it. The stored job keeps the reference. `context.JobDetail.JobDataMap` holds the reference too.
 - Every app that runs these jobs (each cluster node) needs `AddCronlight` with the same `SecretsSection`
   and the secrets in its configuration.
+- Every secret in the section is open to everyone who can manage jobs, in any scheduler: a manager of one
+  scheduler can reference a secret meant for another. Keep in the section only the secrets job authors may use,
+  and keep a scheduler's secrets in the app that runs it when its managers must not reach the others'.

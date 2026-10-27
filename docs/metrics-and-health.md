@@ -20,7 +20,8 @@ A job Quartz could not create counts as a failed run, with no duration, and is n
 
 Every instrument is tagged with `cronlight.scheduler`, `cronlight.job.group` and `cronlight.job.name`. Each
 node reports its own runs, so add them up across a cluster. A failure that will be retried counts as
-`retried`, as history shows it.
+`retried`, as history shows it. Each job is its own series, so a scheduler whose managers create many short-lived
+jobs grows the metrics backend's series with them; drop `cronlight.job.name` in your exporter's views if that matters.
 
 A health check reports each scheduler:
 

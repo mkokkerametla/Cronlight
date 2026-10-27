@@ -28,7 +28,8 @@ headers and cross-site requests.
   (`GET api/jobs/search?search=&type=&status=&page=&pageSize=`). For database stores it reads every job's
   type and trigger states in two queries, and loads full details only for the page shown (50 jobs), so
   thousands of jobs cost about as much as fifty. `GET api/jobs` still returns every job with full
-  details, for scripts and small schedulers.
+  details, for scripts and small schedulers: on a large one, each call loads every job, so scripts should page
+  through `api/jobs/search` instead.
 - **Polling** happens every 10 seconds (`RefreshSeconds`) only while the dashboard is visible: a tab in the background asks
   nothing, and refreshes as soon as it is shown again. The 24-hour failure count is refreshed once a minute.
 - **History holds still under the pointer.** While the pointer is over History, a refresh moves no row: it updates

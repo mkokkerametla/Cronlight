@@ -9,7 +9,7 @@ Building, running and testing Cronlight, its CI and how releases are published.
 | `src/Cronlight` | The library (net10.0). The built UI is embedded in the assembly |
 | `src/Cronlight.History` | Optional execution history: listener, database and in-memory stores, schema scripts |
 | `src/Cronlight.UI` | UI source: React, TypeScript, Vite, Tailwind and shadcn/ui. Built into `src/Cronlight/wwwroot` |
-| `samples/Cronlight.SampleHost` | Host app using SQLite, with an HTTP job, demo endpoints and demo `X-Demo-Role` header auth |
+| `samples/Cronlight.SampleHost` | Host app using SQLite, with an HTTP job, demo endpoints and demo `X-Demo-Role` header auth, which lets anyone claim any role: not for copying |
 | `tests/Cronlight.Tests` | Integration tests (TestServer; SQLite, PostgreSQL, SQL Server, MySQL) |
 | `tests/Cronlight.SampleHost.Tests` | Tests for the sample's own code, such as the HTTP job's network rules |
 | `tests/Cronlight.E2E` | End-to-end tests: Playwright drives the sample host in Chromium |

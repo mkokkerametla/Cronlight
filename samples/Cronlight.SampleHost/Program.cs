@@ -41,7 +41,8 @@ builder.Services.AddHttpJob(o =>
     builder.Configuration.GetSection("HttpJob").Bind(o);
 });
 
-// Demo auth: the "X-Demo-Role" header becomes a role claim. Real hosts use their own scheme.
+// Demo auth: the "X-Demo-Role" header becomes a role claim, so anyone can claim any role. Do not copy it: real hosts
+// use their own scheme (cookies, OpenID Connect, Windows authentication).
 builder.Services.AddAuthentication("Demo").AddScheme<AuthenticationSchemeOptions, DemoAuthHandler>("Demo", null);
 builder.Services.AddAuthorization(o =>
 {
