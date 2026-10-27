@@ -160,8 +160,7 @@ public class RetryTests
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsync("api/jobs/DEFAULT/paused/pause", null)).StatusCode);
         BlockingJob.Gate(gate).Release.Release();
 
-        var retry = await WaitForRetry(client, "paused");
-        Assert.Equal("Paused", retry.GetProperty("state").GetString());
+        await WaitForRetry(client, "paused", state: "Paused");
     }
 
     [Fact]
@@ -181,15 +180,18 @@ public class RetryTests
         Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync($"api/jobs/DEFAULT/missing/retries/{name}/cancel-retry", null)).StatusCode);
     }
 
-    private static async Task<JsonElement> WaitForRetry(HttpClient client, string name)
+    /// <param name="state">The state to wait for: a retry of a paused job is scheduled, then paused.</param>
+    private static async Task<JsonElement> WaitForRetry(HttpClient client, string name, string? state = null)
     {
         for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(100))
         {
             var retry = (await Job(client, name)).GetProperty("triggers").EnumerateArray()
                 .FirstOrDefault(t => t.GetProperty("kind").GetString() == "Retry");
-            if (retry.ValueKind != JsonValueKind.Undefined)
+            if (retry.ValueKind != JsonValueKind.Undefined && (state == null || retry.GetProperty("state").GetString() == state))
                 return retry;
-            Assert.True(DateTime.UtcNow < deadline, $"No retry of {name} was scheduled");
+            Assert.True(DateTime.UtcNow < deadline,
+                retry.ValueKind == JsonValueKind.Undefined ? $"No retry of {name} was scheduled"
+                    : $"The retry of {name} stayed {retry.GetProperty("state").GetString()}, not {state}");
         }
     }
 
