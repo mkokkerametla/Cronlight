@@ -1,5 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Cronlight.Tests;
 
@@ -75,5 +77,52 @@ public class ClusterTests
 
         Assert.Equal(JsonValueKind.Null, (await ClusterNodes(sqlite)).ValueKind);
         Assert.Equal(JsonValueKind.Null, (await ClusterNodes(memory)).ValueKind);
+    }
+
+    private static async Task<HealthReportEntry> Health(TestHost host) =>
+        (await host.Services.GetRequiredService<HealthCheckService>().CheckHealthAsync()).Entries["cronlight"];
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Checking_the_cluster_a_host_that_never_starts_the_scheduler_is_healthy_while_a_node_runs_it(string name)
+    {
+        await using var host = await TestHost.Start(database: DatabaseTests.Require(name), clustered: true, startScheduler: false,
+            services: s => s.AddHealthChecks().AddCronlight(checkCluster: true));
+        try
+        {
+            await Node(host, "worker-a", TimeSpan.FromSeconds(2));
+            var running = await Health(host);
+            Assert.Equal(HealthStatus.Healthy, running.Status);
+            Assert.Equal("is running on 1 node", running.Data[host.SchedulerName]);
+
+            await ForgetNodes(host);
+            await Node(host, "worker-a", TimeSpan.FromMinutes(5));
+            var down = await Health(host);
+            Assert.Equal(HealthStatus.Degraded, down.Status);
+            Assert.Equal($"{host.SchedulerName} has no running nodes", down.Description);
+        }
+        finally
+        {
+            await ForgetNodes(host);
+        }
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task Without_checking_the_cluster_a_scheduler_this_host_never_started_is_degraded(string name)
+    {
+        await using var host = await TestHost.Start(database: DatabaseTests.Require(name), clustered: true, startScheduler: false,
+            services: s => s.AddHealthChecks().AddCronlight());
+        try
+        {
+            await Node(host, "worker-a", TimeSpan.FromSeconds(2));
+            var entry = await Health(host);
+            Assert.Equal(HealthStatus.Degraded, entry.Status);
+            Assert.Equal($"{host.SchedulerName} has not started", entry.Description);
+        }
+        finally
+        {
+            await ForgetNodes(host);
+        }
     }
 }
