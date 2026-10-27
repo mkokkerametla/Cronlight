@@ -129,6 +129,21 @@ public class ClusterTests
 
     [SkippableTheory]
     [MemberData(nameof(Databases))]
+    public async Task Checking_the_cluster_a_host_that_started_the_scheduler_is_judged_by_its_own_state(string name)
+    {
+        // No rows inserted: this host's node checks in itself, and would recover rows of stale nodes
+        await using var host = await TestHost.Start(database: DatabaseTests.Require(name), clustered: true,
+            services: s => s.AddHealthChecks().AddCronlight(checkCluster: true));
+        await (await host.Scheduler()).Standby();
+
+        var entry = await Health(host);
+
+        Assert.Equal(HealthStatus.Degraded, entry.Status);
+        Assert.Equal($"{host.SchedulerName} is in standby", entry.Description);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
     public async Task Without_checking_the_cluster_a_scheduler_this_host_never_started_is_degraded(string name)
     {
         await using var host = await TestHost.Start(database: DatabaseTests.Require(name), clustered: true, startScheduler: false,

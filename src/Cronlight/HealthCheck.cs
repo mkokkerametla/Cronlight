@@ -15,9 +15,11 @@ public static class CronlightHealthCheckExtensions
     /// </summary>
     /// <param name="timeout">How long reading a job store may take before it counts as failed; 10 seconds by default.</param>
     /// <param name="checkCluster">
-    /// For a clustered scheduler on a database store, check the cluster's nodes instead of this process: healthy while
-    /// any node is alive, degraded when none is. For a host that manages schedulers other processes run and never
-    /// starts them. Leave it off on the nodes themselves, so one whose scheduler did not start is not hidden by the others.
+    /// For a clustered scheduler this process has not started, check the cluster's nodes instead: healthy while any
+    /// node is alive, degraded when none is. For a host that manages schedulers other processes run and never starts
+    /// them. It applies to a clustered scheduler whose connection Cronlight has: the host's own, or one added with its
+    /// properties through UseCronlight; others are checked per process as before. A host that has started the scheduler
+    /// is still checked by its own state.
     /// </param>
     public static IHealthChecksBuilder AddCronlight(this IHealthChecksBuilder builder, string name = "cronlight",
         HealthStatus? failureStatus = null, IEnumerable<string>? tags = null, TimeSpan? timeout = null, bool checkCluster = false)
@@ -86,7 +88,8 @@ internal sealed class SchedulerHealthCheck(CronlightSchedulers schedulers, Clust
         {
             return ($"cannot read its job store ({ex.Message})", false);
         }
-        if (cluster != null && await cluster.Read(scheduler, cancellationToken) is { } nodes)
+        // A process that runs the scheduler is judged by its own state, so a node that failed to start is not hidden
+        if (cluster != null && !scheduler.IsStarted && await cluster.Read(scheduler, cancellationToken) is { } nodes)
         {
             var alive = nodes.Count(n => n.Alive);
             return alive > 0 ? ($"is running on {alive} {(alive == 1 ? "node" : "nodes")}", true) : ("has no running nodes", null);
