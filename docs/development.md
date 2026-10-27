@@ -145,7 +145,7 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
 4. Pack both packages as `0.1.0-ci.<run>` and verify them with `build/verify-packages.sh` (net10.0 assembly,
    UI embedded, README, license, symbols, matching dependency versions).
    `build/smoke-test.sh` then installs them into a new .NET 10 web app on Quartz 3.13.1, runs it and checks
-   the dashboard, API and history respond.
+   the dashboard, API, OpenAPI document and history respond.
 5. Upload the packages and test results as workflow artifacts.
 6. End-to-end tests (a separate job): Playwright runs `tests/Cronlight.E2E` against the sample host and
    uploads its report when a test fails.

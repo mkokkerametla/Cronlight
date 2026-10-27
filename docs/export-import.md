@@ -61,7 +61,8 @@ jobs:
     repeatCount: 5            # left out, it repeats forever
 ```
 
-The trigger fields are those of the API's triggers: `kind`, `cronExpression`, `timeZone`, `startAtUtc`,
+The file's full shape is `JobFile` in the [API's OpenAPI document](configuration.md#the-apis-description). The
+trigger fields are those of the API's triggers: `kind`, `cronExpression`, `timeZone`, `startAtUtc`,
 `intervalSeconds`, `repeatCount` and `skipMissed`. A property Cronlight does not know is refused, so a misspelt one
 does not go unnoticed.
 

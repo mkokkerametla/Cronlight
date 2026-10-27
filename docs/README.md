@@ -7,7 +7,7 @@ They are also on the [website](https://cronlight.pages.dev/docs/), next to a [li
 
 | Page | |
 |---|---|
-| [Setup and options](configuration.md) | Adding Cronlight to an app, and every option it takes |
+| [Setup and options](configuration.md) | Adding Cronlight to an app, every option it takes, and the API's OpenAPI description |
 | [Job types and secrets](job-types.md) | Forms for your job types, masked secrets, and secret references kept out of the database |
 | [Retries and re-running](retries.md) | Retrying failed runs automatically, and running a job again by hand |
 | [Execution history](history.md) | The optional package: every run, what it logged, misfires, late starts and runs that never finished |

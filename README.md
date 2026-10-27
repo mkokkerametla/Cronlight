@@ -26,7 +26,8 @@ second scheduler.
 - **Alerts:** Slack, Teams, webhook or email when a job fails, recovers or is stopped by Quartz.
 - **Export and import:** jobs as JSON or YAML files, to move them between environments or keep them in source
   control; an import says what it will change before changing anything.
-- **Operations:** an audit log of every change, OpenTelemetry metrics and a health check.
+- **Operations:** an audit log of every change, OpenTelemetry metrics, a health check, and an OpenAPI description of
+  the API.
 - **Several schedulers** in one app, each with its own permissions.
 
 ## Requirements
