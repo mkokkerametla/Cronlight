@@ -40,6 +40,7 @@ export const scheduler = (overrides: Partial<SchedulerInfo> = {}): SchedulerInfo
   threadPoolSize: 10,
   numberOfJobsExecuted: 0,
   runningSince: null,
+  clusterNodes: null,
   canManage: true,
   historyEnabled: true,
   secretReferences: false,

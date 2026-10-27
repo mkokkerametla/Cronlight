@@ -47,6 +47,15 @@ headers and cross-site requests.
 - **Jobs from other apps** sharing the scheduler (types not loadable here) are listed but read-only.
 - **Running jobs** are read from `QRTZ_FIRED_TRIGGERS` for ADO stores, so every cluster node is visible.
   For the in-memory store, or a custom connection provider, only this node is shown.
+- **A cluster by its nodes.** For a clustered scheduler on a database store whose connection Cronlight has (the
+  host's own scheduler, or one added with `UseCronlight(services, properties)`), the header says how many nodes run
+  it (**Running · 2 nodes**, or **No nodes running**), read from `QRTZ_SCHEDULER_STATE` where each node checks in,
+  whether or not this process runs it. "Running" means checking in: Quartz keeps a node in standby checking in, so
+  another node's standby cannot be seen from the table; this one's can, and it is not counted while in standby. The
+  scheduler details list the nodes, mark this one and those not responding (with how long ago they last checked
+  in), and say "Not started (manages only)" for a dashboard that only manages schedulers other apps run. Other
+  schedulers (including one added with `UseCronlight(services)`, without its properties) show this process's state:
+  Running, Standby or Stopped.
 - **Errors** are returned as ProblemDetails with a trace id, never stack traces.
 - **Security headers** are sent on every dashboard response: a Content-Security-Policy that allows only
   the dashboard's own files and API and no embedding in other sites (`frame-ancestors 'none'`, plus

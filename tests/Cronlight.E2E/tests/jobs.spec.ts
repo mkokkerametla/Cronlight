@@ -93,6 +93,22 @@ test('pauses, resumes and deletes a job', async ({ page, request }) => {
   await expect(row).toHaveCount(0)
 })
 
+test("undoes a pause from the toast while the job's panel is open, which stays open", async ({ page, request }) => {
+  const name = uniqueName('undo')
+  await createJob(request, { type: jobTypes.plain, name, triggers: [{ cronExpression: '0 0 6 * * ?' }] })
+  await openDashboard(page)
+  await jobRow(page, name).click()
+  const details = page.getByRole('dialog', { name })
+
+  await details.getByRole('button', { name: 'Pause' }).click()
+  await expect(details.getByRole('button', { name: 'Resume' })).toBeVisible()
+  await page.getByRole('button', { name: 'Undo' }).click()
+
+  await expect(details.getByRole('button', { name: 'Pause' })).toBeVisible()
+  const job = await (await request.get(`api/jobs/DEFAULT/${name}`)).json()
+  expect(job.triggers[0].state).toBe('Normal')
+})
+
 test('an HTTP job created from the form calls the API and succeeds', async ({ page, baseURL }) => {
   const name = uniqueName('http-ok')
   await openDashboard(page)

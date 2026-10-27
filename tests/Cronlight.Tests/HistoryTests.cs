@@ -993,7 +993,7 @@ public class DatabaseTests
 {
     public static TheoryData<string> Databases => new() { "PostgreSQL", "SQL Server", "MySQL" };
 
-    private static TestDatabase Require(string name)
+    internal static TestDatabase Require(string name)
     {
         var database = TestDatabase.FromEnvironment(name);
         // CI sets this so a missing connection string fails loudly instead of skipping the database

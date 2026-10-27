@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Quartz;
 
@@ -8,21 +9,37 @@ public static class CronlightHealthCheckExtensions
 {
     /// <summary>
     /// Checks every scheduler Cronlight serves: unhealthy (or <paramref name="failureStatus"/>) when one has shut down
-    /// or its job store cannot be read, degraded while one has not started or is in standby.
+    /// or its job store cannot be read, degraded while one has not started or is in standby (with
+    /// <paramref name="checkCluster"/>, while a clustered one has no running nodes).
     /// <c>builder.Services.AddHealthChecks().AddCronlight();</c> then <c>app.MapHealthChecks("/healthz");</c>
     /// </summary>
     /// <param name="timeout">How long reading a job store may take before it counts as failed; 10 seconds by default.</param>
+    /// <param name="checkCluster">
+    /// Checks a clustered scheduler this process has not started by the cluster's nodes instead: healthy while any
+    /// node is alive, degraded when none is. For a host that manages schedulers other processes run and never starts
+    /// them. It applies to a clustered scheduler whose connection Cronlight has: the host's own, or one added with
+    /// its properties through UseCronlight. A scheduler this process has started is checked by its own state, so a
+    /// node in standby is still reported. But on a node whose scheduler has not started yet (during the hosted
+    /// service's start delay, or in an app that never calls Start), the other nodes decide, so prefer leaving it
+    /// off on worker nodes.
+    /// </param>
     public static IHealthChecksBuilder AddCronlight(this IHealthChecksBuilder builder, string name = "cronlight",
-        HealthStatus? failureStatus = null, IEnumerable<string>? tags = null, TimeSpan? timeout = null)
+        HealthStatus? failureStatus = null, IEnumerable<string>? tags = null, TimeSpan? timeout = null, bool checkCluster = false)
     {
         builder.Services.AddCronlightSchedulers();
+        if (checkCluster)
+        {
+            builder.Services.TryAddSingleton<QuartzDataSource>();
+            builder.Services.TryAddSingleton<ClusterNodesReader>();
+        }
         return builder.Add(new HealthCheckRegistration(name,
-            services => new SchedulerHealthCheck(services.GetRequiredService<CronlightSchedulers>()),
+            services => new SchedulerHealthCheck(services.GetRequiredService<CronlightSchedulers>(),
+                checkCluster ? services.GetRequiredService<ClusterNodesReader>() : null),
             failureStatus, tags, timeout ?? TimeSpan.FromSeconds(10)));
     }
 }
 
-internal sealed class SchedulerHealthCheck(CronlightSchedulers schedulers) : IHealthCheck
+internal sealed class SchedulerHealthCheck(CronlightSchedulers schedulers, ClusterNodesReader? cluster) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
@@ -60,7 +77,7 @@ internal sealed class SchedulerHealthCheck(CronlightSchedulers schedulers) : IHe
     }
 
     /// <summary>What the scheduler is doing, and whether that is healthy: null for degraded.</summary>
-    private static async Task<(string State, bool? Healthy)> State(IScheduler scheduler, CancellationToken cancellationToken)
+    private async Task<(string State, bool? Healthy)> State(IScheduler scheduler, CancellationToken cancellationToken)
     {
         if (scheduler.IsShutdown)
             return ("has shut down", false);
@@ -72,6 +89,13 @@ internal sealed class SchedulerHealthCheck(CronlightSchedulers schedulers) : IHe
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return ($"cannot read its job store ({ex.Message})", false);
+        }
+        // A process that started the scheduler is judged by its own state, so a node in standby is still reported
+        // rather than hidden by the others
+        if (cluster != null && !scheduler.IsStarted && await cluster.Read(scheduler, cancellationToken) is { } nodes)
+        {
+            var alive = nodes.Count(n => n.Alive);
+            return alive > 0 ? ($"is running on {alive} {(alive == 1 ? "node" : "nodes")}", true) : ("has no running nodes", null);
         }
         return !scheduler.IsStarted ? ("has not started", null)
             : scheduler.InStandbyMode ? ("is in standby", null)
