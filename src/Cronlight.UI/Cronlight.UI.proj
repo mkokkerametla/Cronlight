@@ -12,8 +12,17 @@
     <UiSource Include="src\**\*;public\**\*;index.html;package.json;package-lock.json;vite.config.ts;tsconfig*.json;components.json" />
   </ItemGroup>
 
-  <Target Name="Build" Inputs="@(UiSource)" Outputs="$(UiOutDir)index.html">
-    <Exec Command="npm ci --no-audit --no-fund" Condition="!Exists('node_modules')" />
+  <!--
+    Reinstalls when node_modules is missing or older than the package files, as after a pull that
+    changed dependencies. npm writes node_modules/.package-lock.json on every install; it is touched
+    so it is never older than package-lock.json, which npm may write after it.
+  -->
+  <Target Name="NpmInstall" Inputs="package.json;package-lock.json" Outputs="node_modules\.package-lock.json">
+    <Exec Command="npm ci --no-audit --no-fund" />
+    <Touch Files="node_modules\.package-lock.json" />
+  </Target>
+
+  <Target Name="Build" DependsOnTargets="NpmInstall" Inputs="@(UiSource)" Outputs="$(UiOutDir)index.html">
     <Exec Command="npm run build" />
   </Target>
 </Project>
