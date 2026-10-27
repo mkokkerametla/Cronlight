@@ -192,17 +192,76 @@ public class SchedulerTests
         }
     }
 
-    [Fact]
-    public async Task An_added_scheduler_with_a_database_store_is_read_from_its_tables_when_given_its_properties()
+    /// <summary>The host's own settings under another scheduler name, as another scheduler on the same database would have them.</summary>
+    private static NameValueCollection DatabaseProperties(TestHost host, string name)
     {
-        await using var host = await TestHost.Start();
-        // The host's own settings, as another scheduler on the same database would have them
         var properties = new NameValueCollection();
         foreach (var (key, value) in host.Services.GetRequiredService<IOptions<QuartzOptions>>().Value)
             if (!key.Contains("jobFactory", StringComparison.Ordinal))
                 properties[key] = value;
-        var name = UniqueName("stored");
         properties["quartz.scheduler.instanceName"] = name;
+        return properties;
+    }
+
+    // Each is a database the dashboard cannot open or read itself, so it goes through Quartz, as for an in-memory store
+    [Theory]
+    [InlineData("quartz.jobStore.tablePrefix", "QRTZ_;")]
+    [InlineData("quartz.jobStore.tablePrefix", "MISSING_")]
+    [InlineData("quartz.dataSource.{0}.connectionString", null)]
+    [InlineData("quartz.dataSource.{0}.provider", "NoSuchProvider")]
+    public async Task An_added_scheduler_whose_tables_cannot_be_read_directly_is_read_through_Quartz(string setting, string? value)
+    {
+        await using var host = await TestHost.Start();
+        var name = UniqueName("described");
+        var properties = DatabaseProperties(host, name);
+        var scheduler = await new StdSchedulerFactory(properties).GetScheduler();
+        // Only what the dashboard is told is wrong: the scheduler itself runs on the right settings
+        var described = new NameValueCollection(properties);
+        described[string.Format(setting, properties["quartz.jobStore.dataSource"])] = value;
+        await scheduler.UseCronlight(host.Services, described);
+        await scheduler.Start();
+        try
+        {
+            var client = host.Client();
+            var query = $"?scheduler={name}";
+            Assert.Equal(HttpStatusCode.Created,
+                (await client.PostJson($"api/jobs{query}", new { type = typeof(PlainJob).FullName, name = "described-job" })).StatusCode);
+            // Another app's job in the same scheduler, whose type Quartz cannot load here
+            await host.Database.Execute(
+                $"INSERT INTO QRTZ_JOB_DETAILS VALUES ('{name}', 'report', 'other', NULL, 'OtherApp.Jobs.ReportJob, OtherApp', 1, 0, 0, 0, NULL)");
+
+            var page = await client.GetFromJsonAsync<JsonElement>($"api/jobs/search{query}");
+            Assert.Equal(["described-job", "report"], page.GetProperty("jobs").EnumerateArray().Select(j => j.GetProperty("name").GetString()).Order());
+            Assert.Equal(1, page.GetProperty("counts").GetProperty("unloadable").GetInt32());
+            Assert.Equal("local", (await client.GetFromJsonAsync<JsonElement>($"api/running{query}")).GetProperty("source").GetString());
+        }
+        finally
+        {
+            await scheduler.Shutdown();
+        }
+    }
+
+    [Fact]
+    public async Task Adding_the_hosts_own_scheduler_again_changes_nothing()
+    {
+        await using var host = await TestHost.Start(history: _ => { });
+        await (await host.Scheduler()).UseCronlight(host.Services);
+        var client = host.Client();
+
+        Assert.Equal([host.SchedulerName], await Schedulers(client));
+        // Its listeners are attached once, so each run is recorded once
+        await HistoryScenarios.Create(client, typeof(PlainJob), "once");
+        await client.PostAsync("api/jobs/DEFAULT/once/trigger", null);
+        var records = await HistoryScenarios.WaitForHistory(client, "?name=once", r => r[0].GetProperty("status").GetString() == "Succeeded");
+        Assert.Single(records);
+    }
+
+    [Fact]
+    public async Task An_added_scheduler_with_a_database_store_is_read_from_its_tables_when_given_its_properties()
+    {
+        await using var host = await TestHost.Start();
+        var name = UniqueName("stored");
+        var properties = DatabaseProperties(host, name);
         var scheduler = await new StdSchedulerFactory(properties).GetScheduler();
         await scheduler.UseCronlight(host.Services, properties);
         await scheduler.Start();

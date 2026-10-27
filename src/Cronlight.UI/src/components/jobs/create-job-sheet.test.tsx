@@ -138,6 +138,45 @@ describe('CreateJobSheet', () => {
     expect(form.getByLabelText(/Wait before retrying/)).toBeDisabled()
   })
 
+  it('creates the job in the group, with the description and the retries given', async () => {
+    const onCreate = vi.fn(async () => true)
+    render(<Harness onCreate={onCreate} />)
+    const form = within(sheet())
+
+    await userEvent.type(form.getByLabelText('Name'), 'invoices')
+    await userEvent.type(form.getByLabelText('Group'), ' billing ')
+    await userEvent.type(form.getByLabelText('Description'), ' Emails open invoices ')
+    await userEvent.type(form.getByLabelText(/customerId/), '42')
+    await userEvent.clear(form.getByLabelText('Retries'))
+    await userEvent.type(form.getByLabelText('Retries'), '2')
+    await userEvent.clear(form.getByLabelText(/Wait before retrying/))
+    await userEvent.type(form.getByLabelText(/Wait before retrying/), '90')
+    await userEvent.click(form.getByRole('checkbox', { name: /Double the wait/ }))
+    await userEvent.type(
+      form.getByLabelText('Only retry these exceptions'),
+      'TimeoutException, HttpRequestException'
+    )
+    expect(
+      form.getByText(
+        /Up to 2 retries, 1m 30s apart, only on TimeoutException, HttpRequestException/
+      )
+    ).toBeInTheDocument()
+    await userEvent.click(form.getByRole('button', { name: 'Create job' }))
+
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        group: 'billing',
+        description: 'Emails open invoices',
+        retry: {
+          maxRetries: 2,
+          delaySeconds: 90,
+          exponential: false,
+          retryOn: ['TimeoutException', 'HttpRequestException'],
+        },
+      })
+    )
+  })
+
   it('swaps the parameters when another job type is chosen', async () => {
     const onCreate = vi.fn(async () => true)
     render(<Harness onCreate={onCreate} />)

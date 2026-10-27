@@ -1,17 +1,44 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { TriggersEditor } from '@/components/jobs/triggers-editor'
-import { emptyTrigger, type TriggerDraft } from '@/lib/job-form'
+import { formatDateTime } from '@/lib/format'
+import { draftsToRequest, emptyTrigger, type TriggerDraft } from '@/lib/job-form'
 
 // The cron preview asks the server; answer every expression as valid
 vi.mock('@/api', () => ({ api: vi.fn() }))
 
-function Editor({ initial }: { initial: TriggerDraft[] }) {
+/** Renders the editor with real state and shows the triggers the form would send, as the job forms do. */
+function Editor({
+  initial,
+  onInvalidChange,
+}: {
+  initial: TriggerDraft[]
+  onInvalidChange?: (invalid: boolean) => void
+}) {
   const [triggers, setTriggers] = useState(initial)
-  return <TriggersEditor triggers={triggers} onChange={setTriggers} />
+  return (
+    <>
+      <TriggersEditor
+        triggers={triggers}
+        onChange={setTriggers}
+        onInvalidChange={onInvalidChange}
+      />
+      <output data-testid="request">{JSON.stringify(draftsToRequest(triggers))}</output>
+    </>
+  )
+}
+const sent = () => JSON.parse(screen.getByTestId('request').textContent!) as unknown[]
+
+// A datetime-local input takes a whole value; typed character by character it is not a time until the end
+const setTime = (label: string, value: string) =>
+  fireEvent.change(screen.getByLabelText(label), { target: { value } })
+
+async function chooseKind(label: string) {
+  await userEvent.click(screen.getByRole('combobox', { name: 'Trigger kind' }))
+  await userEvent.click(screen.getByRole('option', { name: label }))
 }
 
 const syntaxLinks = () => screen.queryAllByRole('link', { name: /Quartz cron syntax/ })
@@ -114,5 +141,114 @@ describe('TriggersEditor', () => {
     await userEvent.clear(screen.getByLabelText('Number of runs'))
     await userEvent.type(screen.getByLabelText('Number of runs'), '3')
     expect(screen.getByText(/Every 5m, starting now, 3 runs in all/)).toBeInTheDocument()
+  })
+
+  it('sends the name, time zone and skip choice of a cron trigger', async () => {
+    render(<Editor initial={[emptyTrigger()]} />)
+
+    await userEvent.type(screen.getByLabelText('Cron expression'), '0 0 9 * * ?')
+    await userEvent.type(screen.getByLabelText('Time zone'), 'Europe/Paris')
+    await userEvent.type(screen.getByLabelText('Trigger name'), 'mornings')
+    await userEvent.click(screen.getByRole('checkbox', { name: /Skip missed runs/ }))
+
+    expect(sent()).toEqual([
+      {
+        name: 'mornings',
+        skipMissed: true,
+        cronExpression: '0 0 9 * * ?',
+        timeZone: 'Europe/Paris',
+      },
+    ])
+  })
+
+  it('asks when a one-time trigger runs, then says when, in local time', async () => {
+    render(<Editor initial={[emptyTrigger()]} />)
+
+    await chooseKind('One time')
+    expect(screen.queryByLabelText('Cron expression')).toBeNull()
+    expect(screen.getByText('Choose when it runs.')).toBeInTheDocument()
+    expect(screen.getByText(/it then never runs/)).toBeInTheDocument()
+    // Not sent until it says when
+    expect(sent()).toEqual([])
+
+    setTime('Run at', '2030-01-01T09:00')
+
+    const at = new Date('2030-01-01T09:00').toISOString()
+    expect(screen.getByText(`Runs once, ${formatDateTime(at)}`)).toBeInTheDocument()
+    expect(sent()).toEqual([{ name: null, kind: 'Once', startAtUtc: at }])
+  })
+
+  it('builds an interval trigger from how often, its unit, its first run and how many runs', async () => {
+    render(<Editor initial={[emptyTrigger()]} />)
+
+    await chooseKind('Interval')
+    expect(screen.getByText('Enter how often it runs.')).toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText('Interval'), '2')
+    await userEvent.click(screen.getByRole('combobox', { name: 'Interval unit' }))
+    await userEvent.click(screen.getByRole('option', { name: 'hours' }))
+    expect(screen.getByText('Every 2h, starting now, forever')).toBeInTheDocument()
+
+    setTime('First run', '2030-01-01T09:00')
+    await userEvent.type(screen.getByLabelText('Number of runs'), '4')
+
+    const at = new Date('2030-01-01T09:00').toISOString()
+    expect(
+      screen.getByText(`Every 2h, starting ${formatDateTime(at)}, 4 runs in all`)
+    ).toBeInTheDocument()
+    expect(sent()).toEqual([
+      { name: null, kind: 'Interval', intervalSeconds: 7200, startAtUtc: at, repeatCount: 3 },
+    ])
+  })
+
+  it('treats a cron expression the server could not check as invalid, saying why', async () => {
+    vi.mocked(api).mockRejectedValue(new Error('Service Unavailable'))
+    const onInvalidChange = vi.fn()
+    render(<Editor initial={[emptyTrigger()]} onInvalidChange={onInvalidChange} />)
+
+    await userEvent.type(screen.getByLabelText('Cron expression'), '0 0 9 * * ?')
+
+    expect(
+      await screen.findByText('Service Unavailable', {}, { timeout: 3000 })
+    ).toBeInTheDocument()
+    await waitFor(() => expect(onInvalidChange).toHaveBeenLastCalledWith(true))
+  })
+
+  it('no longer holds the form back once an invalid cron row becomes another kind', async () => {
+    vi.mocked(api).mockImplementation(async path => ({
+      isValid: false,
+      expression: new URLSearchParams((path as string).split('?')[1]).get('expression'),
+      description: null,
+      nextFireTimes: [],
+      errorMessage: 'Unexpected end of expression.',
+    }))
+    const onInvalidChange = vi.fn()
+    render(<Editor initial={[emptyTrigger()]} onInvalidChange={onInvalidChange} />)
+    await userEvent.type(screen.getByLabelText('Cron expression'), '0/30 * * * *')
+    await waitFor(() => expect(onInvalidChange).toHaveBeenLastCalledWith(true), { timeout: 3000 })
+
+    await chooseKind('One time')
+
+    expect(onInvalidChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it('lists every next fire time the server previews, and names a schedule it cannot describe', async () => {
+    vi.mocked(api).mockImplementation(async path => ({
+      isValid: true,
+      expression: new URLSearchParams((path as string).split('?')[1]).get('expression'),
+      description: null,
+      nextFireTimes: ['2030-01-01T09:00:00Z', '2030-01-02T09:00:00Z'],
+      errorMessage: null,
+    }))
+    render(<Editor initial={[emptyTrigger()]} />)
+
+    // The server finds it valid, but the library that puts schedules in words cannot read it
+    await userEvent.type(screen.getByLabelText('Cron expression'), '0 0 9 L-3W * ?')
+
+    expect(
+      await screen.findByText('Valid cron expression', {}, { timeout: 3000 })
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Next \(your local time\)/)).toHaveTextContent(
+      `Next (your local time): ${formatDateTime('2030-01-01T09:00:00Z')} · ${formatDateTime('2030-01-02T09:00:00Z')}`
+    )
   })
 })

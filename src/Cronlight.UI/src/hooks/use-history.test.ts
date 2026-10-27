@@ -151,6 +151,72 @@ describe('useHistory', () => {
     expect(ids(result.current.records)).toEqual([5, 4, 3, 2])
   })
 
+  it('asks for older runs once while they load, however often "load more" is pressed', async () => {
+    const nextPage = deferred<HistoryPage>()
+    mockApi.mockImplementation(path =>
+      (path as string).includes('before=') ? nextPage.promise : Promise.resolve(page([5, 4], 4))
+    )
+    const { result } = renderHook(() => useHistory(all))
+    await waitFor(() => expect(result.current.hasMore).toBe(true))
+
+    let loading!: Promise<void>
+    act(() => {
+      loading = result.current.loadMore()
+      void result.current.loadMore()
+    })
+    await act(async () => {
+      nextPage.resolve(page([3, 2]))
+      await loading
+    })
+
+    expect(mockApi).toHaveBeenCalledTimes(2)
+    expect(ids(result.current.records)).toEqual([5, 4, 3, 2])
+  })
+
+  it('reports older runs that fail to load, keeping the runs shown', async () => {
+    mockApi.mockImplementation(path =>
+      (path as string).includes('before=')
+        ? Promise.reject(new Error('history unavailable'))
+        : Promise.resolve(page([5, 4], 4))
+    )
+    const { result } = renderHook(() => useHistory(all))
+    await waitFor(() => expect(result.current.hasMore).toBe(true))
+
+    await act(() => result.current.loadMore())
+
+    expect(result.current.error).toBe('history unavailable')
+    expect(ids(result.current.records)).toEqual([5, 4])
+    expect(result.current.hasMore).toBe(true)
+  })
+
+  it('drops older runs that arrive after another filter was chosen', async () => {
+    const olderAll = deferred<HistoryPage>()
+    mockApi.mockImplementation(path => {
+      if ((path as string).includes('status=Failed'))
+        return Promise.resolve(page([9], null, 'Failed'))
+      return (path as string).includes('before=')
+        ? olderAll.promise
+        : Promise.resolve(page([5, 4], 4))
+    })
+    const { result, rerender } = renderHook(({ filter }) => useHistory(filter), {
+      initialProps: { filter: all },
+    })
+    await waitFor(() => expect(result.current.hasMore).toBe(true))
+
+    let loading!: Promise<void>
+    act(() => {
+      loading = result.current.loadMore()
+    })
+    rerender({ filter: { status: 'Failed', job: null } })
+    await waitFor(() => expect(ids(result.current.records)).toEqual([9]))
+    await act(async () => {
+      olderAll.resolve(page([3, 2]))
+      await loading
+    })
+
+    expect(ids(result.current.records)).toEqual([9])
+  })
+
   describe('held', () => {
     const first: HistoryPage = {
       records: [execution(2, { status: 'Running' }), execution(1)],
@@ -268,6 +334,22 @@ describe('useHistory', () => {
       act(() => result.current.holdNewRuns(false))
 
       expect(ids(result.current.records)).toEqual([4, 3, 2, 1])
+      expect(result.current.hasMore).toBe(false)
+    })
+
+    it('drops the runs "load more" added when the runs kept aside are all there are', async () => {
+      // Under the Running filter: 2 finishes and leaves, and the first page now holds every running run
+      const { result } = await holdThenPoll(
+        page([3, 2], 2, 'Running'),
+        page([4, 3], null, 'Running')
+      )
+      mockApi.mockResolvedValue(page([1], null, 'Running'))
+
+      await act(() => result.current.loadMore())
+      expect(ids(result.current.records)).toEqual([3, 2, 1])
+      act(() => result.current.holdNewRuns(false))
+
+      expect(ids(result.current.records)).toEqual([4, 3])
       expect(result.current.hasMore).toBe(false)
     })
 

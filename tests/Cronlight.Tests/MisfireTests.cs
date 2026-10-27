@@ -20,18 +20,23 @@ public class MisfireTests
     /// The trigger fired once before, as one that was waiting while the scheduler was down. Since Quartz 3.17, a
     /// repeating trigger that has never fired starts now when it is scheduled with a start in the past.
     /// </remarks>
-    private static async Task<DateTimeOffset> ScheduleOverdue(IScheduler scheduler, string name, Action<SimpleScheduleBuilder> misfire)
+    private static Task<DateTimeOffset> ScheduleOverdue(IScheduler scheduler, string name, Action<SimpleScheduleBuilder> misfire) =>
+        ScheduleOverdue(scheduler, name, misfire, late: TimeSpan.FromMinutes(25), interval: TimeSpan.FromMinutes(10));
+
+    /// <summary>As above, with a trigger that repeats every <paramref name="interval"/> and was due <paramref name="late"/> ago.</summary>
+    private static async Task<DateTimeOffset> ScheduleOverdue(IScheduler scheduler, string name, Action<SimpleScheduleBuilder> misfire,
+        TimeSpan late, TimeSpan interval)
     {
-        var start = DateTimeOffset.UtcNow.AddMinutes(-25);
+        var start = DateTimeOffset.UtcNow - late;
         var job = JobBuilder.Create<PlainJob>().WithIdentity(name).StoreDurably().Build();
         var trigger = (IOperableTrigger)TriggerBuilder.Create().ForJob(job).WithIdentity(name).StartAt(start)
             .WithSimpleSchedule(s =>
             {
-                s.WithIntervalInMinutes(10).RepeatForever();
+                s.WithInterval(interval).RepeatForever();
                 misfire(s);
             })
             .Build();
-        trigger.SetPreviousFireTimeUtc(start.AddMinutes(-10));
+        trigger.SetPreviousFireTimeUtc(start - interval);
         await scheduler.ScheduleJob(job, [trigger], replace: false);
         return start;
     }
@@ -73,6 +78,59 @@ public class MisfireTests
         // Filtered by outcome, as the dashboard's history filter does
         Assert.All(await HistoryScenarios.History(client, "?status=Misfired"), r => Assert.Equal("Misfired", Status(r)));
         Assert.DoesNotContain(await HistoryScenarios.History(client, "?name=skipped"), r => Status(r) != "Misfired");
+    }
+
+    [Fact]
+    public async Task A_misfire_says_how_late_it_is_in_the_largest_units_that_fit()
+    {
+        await using var host = await TestHost.Start(history: _ => { }, ramJobStore: true, misfireThreshold: Threshold);
+        var scheduler = await host.Scheduler();
+        // Each misses one fire time: its next is an interval later, still to come
+        await ScheduleOverdue(scheduler, "days", s => s.WithMisfireHandlingInstructionNextWithRemainingCount(),
+            late: new TimeSpan(1, 2, 0, 0), interval: TimeSpan.FromDays(7));
+        // Half a minute to spare, so the minutes do not tick over before Quartz notices
+        await ScheduleOverdue(scheduler, "hours", s => s.WithMisfireHandlingInstructionNextWithRemainingCount(),
+            late: new TimeSpan(3, 5, 30), interval: TimeSpan.FromDays(1));
+        await ScheduleOverdue(scheduler, "seconds", s => s.WithMisfireHandlingInstructionNextWithRemainingCount(),
+            late: TimeSpan.FromSeconds(20), interval: TimeSpan.FromHours(1));
+        var client = host.Client();
+
+        async Task<string> Error(string name) => Assert.Single(await WaitForMisfire(client, name)).GetProperty("error").GetString()!;
+        Assert.StartsWith("Missed its fire time by 1d 2h; ", await Error("days"));
+        Assert.StartsWith("Missed its fire time by 3h 5m; ", await Error("hours"));
+        Assert.Matches(@"^Missed its fire time by \d+s; ", await Error("seconds"));
+    }
+
+    [Fact]
+    public async Task Each_misfire_instruction_is_named_as_the_trigger_builders_spell_it()
+    {
+        await using var host = await TestHost.Start();
+        var scheduler = await host.Scheduler();
+        var job = JobBuilder.Create<PlainJob>().WithIdentity("instructions").StoreDurably().Build();
+        var start = DateTimeOffset.UtcNow.AddDays(1);
+        TriggerBuilder Trigger(string name) => TriggerBuilder.Create().ForJob(job).WithIdentity(name).StartAt(start);
+        await scheduler.ScheduleJob(job,
+        [
+            Trigger("fire-now").WithSimpleSchedule(s => s.WithMisfireHandlingInstructionFireNow()).Build(),
+            Trigger("now-remaining").WithSimpleSchedule(s => s.WithIntervalInHours(1).RepeatForever()
+                .WithMisfireHandlingInstructionNowWithRemainingCount()).Build(),
+            Trigger("next-existing").WithSimpleSchedule(s => s.WithIntervalInHours(1).WithRepeatCount(5)
+                .WithMisfireHandlingInstructionNextWithExistingCount()).Build(),
+            Trigger("once-now").WithCronSchedule("0 0 3 * * ?", c => c.WithMisfireHandlingInstructionFireAndProceed()).Build(),
+            Trigger("ignore").WithCronSchedule("0 0 4 * * ?", c => c.WithMisfireHandlingInstructionIgnoreMisfires()).Build(),
+            // Calendar interval triggers share the cron trigger's instructions
+            Trigger("calendar").WithCalendarIntervalSchedule(c => c.WithIntervalInDays(1).WithMisfireHandlingInstructionDoNothing()).Build(),
+        ], replace: false);
+
+        var triggers = (await host.Client().GetFromJsonAsync<JsonElement>("api/jobs/DEFAULT/instructions")).GetProperty("triggers")
+            .EnumerateArray().ToDictionary(t => t.GetProperty("name").GetString()!,
+                t => (t.GetProperty("misfireInstruction").GetString(), t.GetProperty("skipsMissed").GetBoolean()));
+        Assert.Equal(("FireNow", false), triggers["fire-now"]);
+        Assert.Equal(("RescheduleNowWithRemainingRepeatCount", false), triggers["now-remaining"]);
+        Assert.Equal(("RescheduleNextWithExistingCount", true), triggers["next-existing"]);
+        Assert.Equal(("FireOnceNow", false), triggers["once-now"]);
+        Assert.Equal(("IgnoreMisfirePolicy", false), triggers["ignore"]);
+        Assert.Equal("DoNothing", triggers["calendar"].Item1);
     }
 
     [Fact]

@@ -199,6 +199,32 @@ describe('JobSheet', () => {
     expect(sheet().getByRole('button', { name: /Run with different data/ })).toBeInTheDocument()
   })
 
+  it('returns to the details when a run with different data is cancelled, running nothing', async () => {
+    const { actions } = renderSheet(job({ data: { region: 'eu' } }))
+
+    await userEvent.click(sheet().getByRole('button', { name: /Run with different data/ }))
+    await userEvent.type(sheet().getByLabelText('Value for region'), '-west')
+    await userEvent.click(sheet().getByRole('button', { name: 'Cancel' }))
+
+    expect(actions.runWithData).not.toHaveBeenCalled()
+    expect(sheet().getByText('eu')).toBeInTheDocument()
+    expect(sheet().getByRole('button', { name: /Run with different data/ })).toBeInTheDocument()
+  })
+
+  it('keeps the data entered when the run could not be started', async () => {
+    const { actions } = renderSheet(job({ data: { region: 'eu' } }))
+    vi.mocked(actions.runWithData).mockResolvedValue(false)
+
+    await userEvent.click(sheet().getByRole('button', { name: /Run with different data/ }))
+    await userEvent.clear(sheet().getByLabelText('Value for region'))
+    await userEvent.type(sheet().getByLabelText('Value for region'), 'us')
+    await userEvent.click(sheet().getByRole('button', { name: /Run now/ }))
+
+    expect(actions.runWithData).toHaveBeenCalledOnce()
+    expect(sheet().getByLabelText('Value for region')).toHaveValue('us')
+    expect(sheet().getByRole('button', { name: /Run now/ })).toBeEnabled()
+  })
+
   it('runs with what was changed in the form, not values the job saved meanwhile', async () => {
     const { actions, poll } = renderSheet(job({ data: { cursor: '400', region: 'eu' } }))
     await userEvent.click(sheet().getByRole('button', { name: /Run with different data/ }))
@@ -319,6 +345,24 @@ describe('JobSheet', () => {
     expect(next).toEqual(['Paused', 'Due now'])
   })
 
+  it('shows when a trigger last fired, and one that will not fire again as Complete', () => {
+    renderSheet(
+      job({
+        triggers: [
+          trigger({
+            state: 'Complete',
+            nextFireTimeUtc: null,
+            previousFireTimeUtc: new Date(Date.now() - 5 * 60_000).toISOString(),
+          }),
+        ],
+      })
+    )
+
+    expect(sheet().getByText('Complete')).toBeInTheDocument()
+    expect(sheet().getByText('Previous fire').nextSibling).toHaveTextContent('5 min. ago')
+    expect(sheet().getByText('Next fire').nextSibling).toHaveTextContent('Not scheduled')
+  })
+
   it("describes a cron trigger's schedule in words", () => {
     renderSheet(job({ triggers: [trigger({ cronExpression: '0 0 9 ? * MON-FRI' })] }))
     expect(sheet().getByText('At 09:00, Monday through Friday')).toBeInTheDocument()
@@ -376,6 +420,18 @@ describe('JobSheet', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 
+  it('stays open when the job could not be deleted', async () => {
+    const { actions, onClose } = renderSheet(job())
+    vi.mocked(actions.remove).mockResolvedValue(false)
+
+    await userEvent.click(sheet().getByRole('button', { name: /Delete/ }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete job' }))
+
+    expect(actions.remove).toHaveBeenCalledOnce()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'nightly' })).toBeInTheDocument()
+  })
+
   it('leaves edit mode when closed, so the next job opens on its details', async () => {
     const { onClose } = renderSheet(job())
     await userEvent.click(sheet().getByRole('button', { name: /Edit/ }))
@@ -408,6 +464,40 @@ describe('JobSheet', () => {
 
     await userEvent.click(sheet().getByRole('button', { name: /All runs/ }))
     expect(onViewHistory).toHaveBeenCalledWith('billing', 'nightly')
+  })
+
+  it('marks misfires, retry attempts and late starts among the recent runs', async () => {
+    const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
+    history = {
+      records: [
+        execution(3, {
+          status: 'Misfired',
+          scheduledFireTimeUtc: minutesAgo(10),
+          firedTimeUtc: minutesAgo(0),
+          error: 'Missed its fire time; Quartz skips it',
+        }),
+        execution(2, { status: 'Failed', attempt: 2 }),
+        execution(1, { scheduledFireTimeUtc: minutesAgo(31), firedTimeUtc: minutesAgo(30) }),
+      ],
+      nextBefore: null,
+    }
+    renderSheet(job(), { historyEnabled: true })
+
+    expect(await sheet().findByText('missed 10 min. ago')).toBeInTheDocument()
+    // What Quartz did about a misfire is not a failure
+    expect(sheet().getByText('Missed its fire time; Quartz skips it')).not.toHaveClass(
+      'text-destructive'
+    )
+    expect(sheet().getByText('attempt 2')).toBeInTheDocument()
+    expect(sheet().getByText('started 1m late')).toBeInTheDocument()
+  })
+
+  it('says why the recent runs could not be loaded', async () => {
+    vi.mocked(api).mockRejectedValue(new Error('History table is missing'))
+    renderSheet(job(), { historyEnabled: true })
+
+    expect(await sheet().findByText('History table is missing')).toBeInTheDocument()
+    expect(sheet().queryByText('Loading…')).toBeNull()
   })
 
   it('says when a job has not run yet', async () => {

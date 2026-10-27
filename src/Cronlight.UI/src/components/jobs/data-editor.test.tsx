@@ -92,6 +92,25 @@ describe('DataEditor', () => {
     expect(sent()).toEqual({ format: 'json' })
   })
 
+  it('offers true or false for a Bool parameter, and takes several lines for a Text one', async () => {
+    render(
+      <Editor
+        initial={[
+          { key: 'dryRun', value: '', param: param('dryRun', { type: 'Bool' }) },
+          { key: 'notes', value: '', param: param('notes', { type: 'Text' }) },
+        ]}
+      />
+    )
+
+    expect(screen.getByRole('combobox')).toHaveTextContent('Not set')
+    await userEvent.click(screen.getByRole('combobox'))
+    expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(['true', 'false'])
+    await userEvent.click(screen.getByRole('option', { name: 'false' }))
+    await userEvent.type(screen.getByLabelText('notes'), 'first{Enter}second')
+
+    expect(sent()).toEqual({ dryRun: 'false', notes: 'first\nsecond' })
+  })
+
   it('adds, edits and removes free-form entries', async () => {
     render(<Editor initial={[]} />)
 

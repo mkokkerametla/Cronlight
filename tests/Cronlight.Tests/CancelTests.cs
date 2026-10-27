@@ -42,6 +42,32 @@ public class CancelTests
     }
 
     [Fact]
+    public async Task Cancelling_a_run_again_before_it_stops_says_it_was_already_asked()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        // It does not check its cancellation token, so it keeps running until released
+        var gate = BlockingJob.Gate(host.SchedulerName);
+        await HistoryScenarios.Create(client, typeof(BlockingJob), "stubborn", new { gate = host.SchedulerName });
+        await client.PostAsync("api/jobs/DEFAULT/stubborn/trigger", null);
+        try
+        {
+            Assert.True(await gate.Started.WaitAsync(TimeSpan.FromSeconds(15)));
+            var fireInstanceId = (await client.GetFromJsonAsync<JsonElement>("api/running")).GetProperty("jobs")[0]
+                .GetProperty("fireInstanceId").GetString();
+
+            Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsync($"api/jobs/DEFAULT/stubborn/runs/{fireInstanceId}/cancel", null)).StatusCode);
+            var again = await client.PostAsync($"api/jobs/DEFAULT/stubborn/runs/{fireInstanceId}/cancel", null);
+            Assert.Equal(HttpStatusCode.Accepted, again.StatusCode);
+            Assert.Contains("Cancellation was already requested.", await again.Content.ReadAsStringAsync());
+        }
+        finally
+        {
+            gate.Release.Release();
+        }
+    }
+
+    [Fact]
     public async Task Cancelling_a_run_that_is_not_running_is_refused()
     {
         await using var host = await TestHost.Start();

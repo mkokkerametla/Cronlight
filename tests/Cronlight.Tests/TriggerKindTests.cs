@@ -101,6 +101,24 @@ public class TriggerKindTests
     }
 
     [Fact]
+    public async Task A_trigger_can_change_kind_and_keep_its_name()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        await client.PostJson("api/jobs", new { type = Plain, name = "switch", triggers = new[] { new { name = "main", cronExpression = "0 0 6 * * ?" } } });
+
+        var response = await client.PutJson("api/jobs/DEFAULT/switch", new
+        {
+            triggers = new[] { new { name = "main", kind = "Interval", intervalSeconds = 3600L } },
+            triggerKinds = new[] { "Cron", "Once", "Interval" }
+        });
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var main = Assert.Single(await Triggers(client, "switch")).Value;
+        Assert.Equal(("Interval", 3600L), (main.GetProperty("kind").GetString(), main.GetProperty("intervalSeconds").GetInt64()));
+    }
+
+    [Fact]
     public async Task Editing_replaces_one_time_and_interval_triggers_but_keeps_waiting_retries()
     {
         await using var host = await TestHost.Start();

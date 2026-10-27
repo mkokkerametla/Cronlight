@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { Stats } from '@/components/stats'
@@ -64,5 +64,20 @@ describe('Stats', () => {
 
     expect(screen.getAllByRole('button')).toHaveLength(4)
     expect(screen.queryByText('Failed (24h)')).toBeNull()
+  })
+
+  it('shows failed runs, paused and unloadable jobs in colour only when there are some', () => {
+    const count = (label: string) => card(label).querySelector('.tabular-nums')
+    renderStats({ failed: 4, paused: 3, unloadable: 1 })
+    expect(count('Failed')).toHaveClass('text-destructive')
+    expect(count('Paused')).toHaveClass('text-amber-600')
+    expect(count('Unloadable')).toHaveClass('text-destructive')
+    cleanup()
+
+    renderStats({ failed: 0, paused: 0, unloadable: 0 })
+
+    expect(count('Failed')).not.toHaveClass('text-destructive')
+    expect(count('Paused')).not.toHaveClass('text-amber-600')
+    expect(count('Unloadable')).not.toHaveClass('text-destructive')
   })
 })
