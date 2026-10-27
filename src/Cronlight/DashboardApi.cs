@@ -43,6 +43,9 @@ public record TriggerDto(
     string? CalendarName = null
 );
 
+/// <summary>A trigger's next fire times, from its next one on, skipping the times its calendar excludes.</summary>
+public record TriggerFireTimesDto(string Group, string Name, IReadOnlyList<DateTimeOffset> FireTimesUtc);
+
 public record JobDto(
     string Name,
     string Group,
@@ -131,6 +134,9 @@ public record CronPreviewDto(bool IsValid, string Expression, string? Descriptio
 internal static class DashboardApi
 {
     public const string Mask = "********";
+
+    /// <summary>How many fire times api/jobs/{group}/{name}/fire-times lists for each trigger.</summary>
+    private const int UpcomingFireTimes = 5;
 
     /// <summary>
     /// Header the dashboard sends with every request. Requests that change jobs must carry it: another
@@ -317,6 +323,23 @@ internal static class DashboardApi
             return await LoadJob(scheduler, key, catalog, options.Value) is { } job
                 ? Results.Ok(job)
                 : Results.NotFound();
+        });
+
+        api.MapGet("/jobs/{group}/{name}/fire-times", async (string group, string name, HttpContext http) =>
+        {
+            var scheduler = await Scheduler(http);
+            var key = new JobKey(name, group);
+            if (!await scheduler.CheckExists(key))
+                return Results.NotFound();
+            var result = new List<TriggerFireTimesDto>();
+            foreach (var trigger in await scheduler.GetTriggersOfJob(key))
+            {
+                // Skipping the times the trigger's calendar excludes, as Quartz will
+                var calendar = trigger.CalendarName == null ? null : await scheduler.GetCalendar(trigger.CalendarName);
+                result.Add(new TriggerFireTimesDto(trigger.Key.Group, trigger.Key.Name,
+                    TriggerUtils.ComputeFireTimes((IOperableTrigger)trigger, calendar, UpcomingFireTimes)));
+            }
+            return Results.Ok(result);
         });
 
         api.MapGet("/running", async (HttpContext http, RunningJobsReader reader, CancellationToken ct) =>

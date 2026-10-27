@@ -40,6 +40,9 @@ headers and cross-site requests.
   marked, and Esc closes a panel. Keys typed into a field are text, not shortcuts.
 - **Schedules in words.** Cron schedules read as text ("At 09:00, Monday through Friday") in the job list, the job
   panel and the editor's preview. Quartz numbers the days of the week from Sunday as 1.
+- **Next fire times.** **Next 5** on a cron or interval trigger's card in the job panel lists when it fires next, as
+  Quartz works it out, skipping the times its calendar excludes (`GET api/jobs/{group}/{name}/fire-times`). It is
+  asked for only when opened, so the job list costs no more.
 - **Undo** follows pausing or resuming a job, in the toast that confirms it. A job Quartz stopped (in Error) has no
   undo for Resume, since pausing it would not stop it again.
 - **Layout:** the Layout menu in the header uses the window's full width and makes table rows compact. Both are

@@ -5,11 +5,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { JobSheet } from '@/components/jobs/job-sheet'
 import type { DashboardActions } from '@/hooks/use-dashboard'
+import { formatDateTime } from '@/lib/format'
 import { execution, job, trigger } from '@/test/fixtures'
 import type { HistoryPage, Job } from '@/types'
 
-// Recent runs and the cron preview ask the server
-vi.mock('@/api', () => ({ api: vi.fn() }))
+// Recent runs, the cron preview and the next fire times ask the server
+vi.mock('@/api', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/api')>()),
+  api: vi.fn(),
+}))
 
 let history: HistoryPage
 
@@ -70,6 +74,70 @@ describe('JobSheet', () => {
             errorMessage: null,
           }
     )
+  })
+
+  it('lists the next five fire times of a schedule once asked, and hides them again', async () => {
+    const times = [1, 2, 3, 4, 5].map(day => `2030-01-0${day}T09:00:00Z`)
+    vi.mocked(api).mockImplementation(async path =>
+      path === 'jobs/DEFAULT/nightly/fire-times'
+        ? [
+            { group: 'DEFAULT', name: 'weekdays', fireTimesUtc: times },
+            { group: 'DEFAULT', name: 'launch', fireTimesUtc: ['2031-01-01T00:00:00Z'] },
+          ]
+        : history
+    )
+    renderSheet(
+      job({
+        triggers: [
+          trigger({ name: 'weekdays', nextFireTimeUtc: times[0] }),
+          // One run only, or not firing now: nothing more to list
+          trigger({ name: 'launch', kind: 'Once', cronExpression: null, timeZone: null }),
+          trigger({ name: 'held', state: 'Paused' }),
+          trigger({ name: 'done', state: 'Complete', nextFireTimeUtc: null }),
+        ],
+      })
+    )
+
+    const toggle = sheet().getByRole('button', { name: 'Next 5' })
+    expect(sheet().getAllByRole('button', { name: 'Next 5' })).toHaveLength(1)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(toggle)
+
+    const list = await sheet().findByRole('list', { name: 'Next 5 fire times of weekdays' })
+    const items = within(list).getAllByRole('listitem')
+    expect(items).toHaveLength(5)
+    times.forEach((time, i) => expect(items[i]).toHaveTextContent(formatDateTime(time)))
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+    await userEvent.click(toggle)
+    expect(sheet().queryByRole('list', { name: /fire times/ })).toBeNull()
+  })
+
+  it('says when a schedule has no fire times left by the time they are listed', async () => {
+    vi.mocked(api).mockImplementation(async path =>
+      path === 'jobs/DEFAULT/nightly/fire-times'
+        ? [{ group: 'DEFAULT', name: 't1', fireTimesUtc: [] }]
+        : history
+    )
+    renderSheet(job())
+
+    await userEvent.click(sheet().getByRole('button', { name: 'Next 5' }))
+
+    expect(await sheet().findByText('It does not fire again')).toBeInTheDocument()
+  })
+
+  it('says why the next fire times could not be listed', async () => {
+    vi.mocked(api).mockImplementation(async path => {
+      if (path === 'jobs/DEFAULT/nightly/fire-times') throw new Error('500 Internal Server Error')
+      return history
+    })
+    renderSheet(job())
+
+    await userEvent.click(sheet().getByRole('button', { name: 'Next 5' }))
+
+    expect(
+      await sheet().findByText('Could not list the fire times: 500 Internal Server Error')
+    ).toBeInTheDocument()
   })
 
   it('shows the job, its triggers and its data', () => {

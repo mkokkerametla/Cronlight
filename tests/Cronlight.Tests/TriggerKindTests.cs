@@ -183,6 +183,39 @@ public class TriggerKindTests
     }
 
     [Fact]
+    public async Task A_jobs_next_fire_times_are_listed_for_each_trigger_skipping_what_its_calendar_excludes()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        var scheduler = await host.Scheduler();
+        var now = DateTimeOffset.UtcNow;
+        var first = new DateTimeOffset(now.Date.AddHours(9), TimeSpan.Zero);
+        if (first <= now)
+            first = first.AddDays(1);
+        var holiday = first.AddDays(2);
+        var calendar = new HolidayCalendar { TimeZone = TimeZoneInfo.Utc };
+        calendar.AddExcludedDate(holiday.UtcDateTime);
+        await scheduler.AddCalendar("holidays", calendar, replace: false, updateTriggers: false);
+        var start = now.AddHours(1);
+        await client.PostJson("api/jobs", new
+        {
+            type = Plain, name = "daily",
+            triggers = new object[] { new { name = "hourly", kind = "Interval", intervalSeconds = 3600L, startAtUtc = start } }
+        });
+        await scheduler.ScheduleJob(TriggerBuilder.Create().WithIdentity("mornings", "DEFAULT").ForJob("daily", "DEFAULT")
+            .WithCronSchedule("0 0 9 * * ?", c => c.InTimeZone(TimeZoneInfo.Utc)).ModifiedByCalendar("holidays").Build());
+
+        var triggers = (await client.GetFromJsonAsync<JsonElement>("api/jobs/DEFAULT/daily/fire-times")).EnumerateArray()
+            .ToDictionary(t => t.GetProperty("name").GetString()!,
+                t => t.GetProperty("fireTimesUtc").EnumerateArray().Select(f => f.GetDateTimeOffset()).ToList());
+
+        Assert.Equal([first, first.AddDays(1), first.AddDays(3), first.AddDays(4), first.AddDays(5)], triggers["mornings"]);
+        Assert.Equal(Enumerable.Range(0, 5).Select(i => start.AddHours(i)), triggers["hourly"],
+            (a, b) => Math.Abs((a - b).TotalMilliseconds) < 1);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/jobs/DEFAULT/missing/fire-times")).StatusCode);
+    }
+
+    [Fact]
     public async Task Editing_replaces_one_time_and_interval_triggers_but_keeps_waiting_retries()
     {
         await using var host = await TestHost.Start();

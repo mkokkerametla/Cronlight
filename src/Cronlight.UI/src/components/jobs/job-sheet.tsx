@@ -1,5 +1,7 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
+  ChevronDown,
+  ChevronRight,
   History,
   ListRestart,
   Lock,
@@ -10,6 +12,7 @@ import {
   PlayCircle,
   Trash2,
 } from 'lucide-react'
+import { api, jobPath } from '@/api'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -72,7 +75,7 @@ import {
   startedLate,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { Job, JobType, Trigger, UpdateJobRequest } from '@/types'
+import type { Job, JobType, Trigger, TriggerFireTimes, UpdateJobRequest } from '@/types'
 
 interface Props {
   job: Job | null
@@ -365,6 +368,10 @@ function JobDetails({
                     </Field>
                   )}
                 </dl>
+                {(t.kind === 'Cron' || t.kind === 'Interval') &&
+                  t.nextFireTimeUtc &&
+                  t.state !== 'Paused' &&
+                  t.state !== 'Error' && <UpcomingFireTimes job={job} trigger={t} />}
               </div>
             ))}
           </div>
@@ -625,6 +632,65 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
     <div className="min-w-0 space-y-0.5">
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="truncate">{children}</dd>
+    </div>
+  )
+}
+
+/** A schedule's next fire times, asked for when opened: the server skips the times its calendar excludes */
+function UpcomingFireTimes({ job, trigger }: { job: Job; trigger: Trigger }) {
+  const [open, setOpen] = useState(false)
+  const [times, setTimes] = useState<string[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  // An answer for an earlier opening is dropped
+  const request = useRef(0)
+
+  const toggle = () => {
+    const id = ++request.current
+    setOpen(!open)
+    if (open) return
+    setTimes(null)
+    setError(null)
+    api<TriggerFireTimes[]>(`${jobPath(job)}/fire-times`)
+      .then(all => {
+        if (id !== request.current) return
+        const own = all.find(t => t.group === trigger.group && t.name === trigger.name)
+        setTimes(own?.fireTimesUtc ?? [])
+      })
+      .catch((err: Error) => {
+        if (id === request.current) setError(err.message)
+      })
+  }
+
+  return (
+    <div className="text-xs">
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
+        className="h-auto p-0 text-xs"
+        aria-expanded={open}
+        onClick={toggle}
+      >
+        {open ? <ChevronDown /> : <ChevronRight />}
+        Next 5
+      </Button>
+      {open &&
+        (error ? (
+          <p className="text-destructive">Could not list the fire times: {error}</p>
+        ) : !times ? (
+          <p className="text-muted-foreground">Loading…</p>
+        ) : times.length === 0 ? (
+          <p className="text-muted-foreground">It does not fire again</p>
+        ) : (
+          <ol aria-label={`Next 5 fire times of ${trigger.name}`} className="mt-1 space-y-0.5">
+            {times.map(time => (
+              <li key={time} className="flex justify-between gap-4 tabular-nums">
+                <span>{formatDateTime(time)}</span>
+                <span className="text-muted-foreground">{formatRelative(time)}</span>
+              </li>
+            ))}
+          </ol>
+        ))}
     </div>
   )
 }

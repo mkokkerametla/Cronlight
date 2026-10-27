@@ -31,6 +31,13 @@ export interface Trigger {
   calendarName?: string | null
 }
 
+/** A trigger's next fire times, from api/jobs/{group}/{name}/fire-times */
+export interface TriggerFireTimes {
+  group: string
+  name: string
+  fireTimesUtc: string[]
+}
+
 /** How often, and how long apart, a failed run is retried */
 export interface JobRetryPolicy {
   /** Retries after the first attempt; 0 means none */
