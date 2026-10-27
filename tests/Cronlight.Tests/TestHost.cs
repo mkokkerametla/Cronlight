@@ -181,11 +181,17 @@ public sealed class TestHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // Nothing else shuts down a scheduler the host never started, and Quartz keeps it in a process-wide registry
-        if (!startedScheduler)
-            await (await Scheduler()).Shutdown();
-        await Within(app.StopAsync(), $"Test host {SchedulerName} did not stop");
-        await Within(app.DisposeAsync().AsTask(), $"Test host {SchedulerName} was not disposed");
+        try
+        {
+            // Nothing else shuts down a scheduler the host never started, and Quartz keeps it in a process-wide registry
+            if (!startedScheduler)
+                await Within((await Scheduler()).Shutdown(), $"Test host {SchedulerName}'s scheduler did not shut down");
+        }
+        finally
+        {
+            await Within(app.StopAsync(), $"Test host {SchedulerName} did not stop");
+            await Within(app.DisposeAsync().AsTask(), $"Test host {SchedulerName} was not disposed");
+        }
     }
 }
 
