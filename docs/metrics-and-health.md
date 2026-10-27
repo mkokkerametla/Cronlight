@@ -38,5 +38,7 @@ started"). `AddCronlight(checkCluster: true)` checks such a scheduler by its clu
 any node is alive ("is running on 2 nodes"), degraded when none is ("has no running nodes"). A node counts as alive
 by Quartz's own rule: it checked in within its check-in interval plus the cluster's check-in misfire threshold. This
 applies to a clustered scheduler this process has not started, whose connection Cronlight has (the host's own, or
-one added with its properties through `UseCronlight`); a scheduler this process runs is still checked by its own
-state, so the option is safe on the nodes too.
+one added with its properties through `UseCronlight`). A scheduler this process has started is still checked by
+its own state, so a node in standby is still reported. But on a node whose scheduler has not started yet (during
+the hosted service's start delay, or in an app that never calls `Start`), the other nodes decide, so prefer leaving
+the option off on worker nodes.

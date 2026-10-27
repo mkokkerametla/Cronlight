@@ -56,15 +56,19 @@ When `clusterNodes` is null, today's details.
 whose nodes can be read, healthy while any node is alive ("is running on 2 nodes"), degraded when none is ("has no
 running nodes"). A scheduler that has shut down or whose job store cannot be read is unhealthy, as today. A
 scheduler this process has started is still checked by its own state, so a worker whose scheduler is in standby is
-not hidden by the others and the option is safe on the nodes too (decided in review). A scheduler that is not
-clustered, or whose nodes cannot be read, is checked per process as today. Without `checkCluster`, nothing changes.
+still reported, not hidden by the others (decided in review). But on a node whose scheduler has not started yet
+(during the hosted service's start delay, or in an app that never calls `Start`), the other nodes decide, so worker
+nodes are better off without the option. A scheduler that is not clustered, or whose nodes cannot be read, is
+checked per process as today. Without `checkCluster`, nothing changes.
 
 ## Edge cases
 
 - Clocks: alive and "seconds since check-in" use the server's clock, as Quartz uses each node's, never the browser's.
 - Every node crashed: their rows stay until a node recovers them, so they show as not responding and the badge says
   No nodes running, which is so.
-- This process is a node in standby: the badge describes the cluster; its State row says Standby.
+- This process is a node in standby: Quartz keeps it checking in, so the badge does not count it as running (the
+  only node in standby reads No nodes running); its State row says Standby. Another node's standby cannot be seen
+  from the table, so the badge counts it.
 - Several schedulers: each has its own nodes, by `SCHED_NAME`.
 
 ## Testing

@@ -23,8 +23,8 @@ history and failure streaks, and audit events and alerts name the scheduler.
 - Cronlight reads the database tables of the `AddQuartz` scheduler directly. For another scheduler with a
   database store, pass the properties it was built from, `await reports.UseCronlight(app.Services, properties)`,
   and its tables are read the same way. Without them it is read through Quartz's API: its job list loads
-  each job, which suits hundreds of jobs rather than thousands, and its Running tab shows this node's runs
-  only.
+  each job, which suits hundreds of jobs rather than thousands, its Running tab shows this node's runs
+  only, and its header shows this process's state rather than the cluster's nodes.
 - History of every scheduler goes into the one history table (`SCHED_NAME` tells them apart), and
   `Retention` applies to each.
 - **Permissions per scheduler** come on top of `ViewPolicy` and `ManagePolicy`:
