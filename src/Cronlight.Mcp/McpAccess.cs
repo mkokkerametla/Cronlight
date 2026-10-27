@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol;
@@ -15,6 +16,14 @@ internal sealed class McpAccess(IHttpContextAccessor accessor, CronlightSchedule
     IWebHostEnvironment environment)
 {
     public CronlightOptions Options => options.Value;
+
+    /// <summary>Execution history, which the tools about past runs need.</summary>
+    public IJobHistoryStore History => Http.RequestServices.GetService<IJobHistoryStore>()
+        ?? throw new McpException("Execution history is not enabled in this app, so there are no recorded runs.");
+
+    /// <summary>The scheduler tools use when none is named: the app's own, whether or not the user may see it.</summary>
+    public async Task<string> DefaultName(CancellationToken cancellationToken) =>
+        (await schedulers.Default(cancellationToken)).SchedulerName;
 
     public HttpContext Http => accessor.HttpContext
         ?? throw new McpException("Cronlight's tools answer requests over HTTP only, where they know who is asking.");

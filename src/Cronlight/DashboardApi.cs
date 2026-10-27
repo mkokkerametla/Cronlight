@@ -346,8 +346,7 @@ internal static class DashboardApi
                     jobs.Add(job);
             }
 
-            var counts = new JobCountsDto(all.Count, all.Count(j => j.Status == "Active"), all.Count(j => j.Status == "Paused"),
-                all.Count(j => j.Status == "Unloadable"), all.Count(j => j.Status == "Error"));
+            var counts = JobCounts(all);
             var types = all.Select(j => j.TypeLabel).Distinct().Order().ToList();
             return Results.Ok(new JobPageDto(jobs, matching.Count, current, size, counts, types));
         })
@@ -544,8 +543,9 @@ internal static class DashboardApi
     /// Checks a new job, and returns what creating it changes, or the problem to answer with. Changes nothing itself, so
     /// an import can check every job before creating any.
     /// </summary>
+    /// <param name="paused">Create the job paused: no trigger fires before it is paused (see <see cref="HeldBack"/>).</param>
     internal static async Task<(JobChange? Change, IResult? Problem)> PlanCreate(IScheduler scheduler, CreateJobRequest request,
-        HttpContext http, JobTypeCatalog catalog, CronlightOptions options)
+        HttpContext http, JobTypeCatalog catalog, CronlightOptions options, bool paused = false)
     {
         var typeName = string.IsNullOrWhiteSpace(request.Type) ? request.JobType : request.Type;
         if (string.IsNullOrWhiteSpace(typeName))
@@ -576,6 +576,8 @@ internal static class DashboardApi
         var key = new JobKey(request.Name, string.IsNullOrWhiteSpace(request.Group) ? "DEFAULT" : request.Group);
         if (!TryBuildTriggers(key, request.Triggers ?? [], [], out var triggers, out var error))
             return (null, Invalid(error));
+        if (paused)
+            triggers = triggers.Select(t => HeldBack(t, DateTimeOffset.UtcNow + PausedCreateMargin)).ToList();
 
         if (await scheduler.CheckExists(key))
             return (null, Refused($"Job {key} already exists"));
@@ -598,7 +600,30 @@ internal static class DashboardApi
         AddChange(changes, "retry", null, DescribeRetry(Retries.For(job)));
 
         // One call stores the job and its triggers together, so a failure leaves nothing behind
-        return (new JobChange(key, changes, triggers.Select(t => t.Key).ToList(), s => s.ScheduleJob(job, triggers, replace: false)), null);
+        return (new JobChange(key, changes, triggers.Select(t => t.Key).ToList(), async s =>
+        {
+            await s.ScheduleJob(job, triggers, replace: false);
+            if (paused)
+                await s.PauseJob(key);
+        }), null);
+    }
+
+    /// <summary>How long a job created paused is kept from firing, to pause it in: Quartz stores triggers running.</summary>
+    private static readonly TimeSpan PausedCreateMargin = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The trigger, starting no sooner than <paramref name="notBefore"/>: an interval trigger by whole intervals, so it keeps
+    /// its rhythm, and others at that time. One that would not fire before then is returned as it is.
+    /// </summary>
+    private static ITrigger HeldBack(ITrigger trigger, DateTimeOffset notBefore)
+    {
+        var first = TriggerUtils.ComputeFireTimes((IOperableTrigger)trigger, null, 1);
+        if (first.Count == 0 || first[0] >= notBefore)
+            return trigger;
+        var start = trigger is ISimpleTrigger { RepeatCount: not 0 } every
+            ? every.StartTimeUtc + every.RepeatInterval * Math.Ceiling((notBefore - every.StartTimeUtc) / every.RepeatInterval)
+            : notBefore;
+        return trigger.GetTriggerBuilder().StartAt(start).Build();
     }
 
     /// <summary>Checks a change to a job, and returns what it changes, or the problem to answer with. Changes nothing itself.</summary>
@@ -673,6 +698,11 @@ internal static class DashboardApi
                 await ReplaceTriggers(s, key, requested, kinds);
         }), null);
     }
+
+    /// <summary>Every job counted by status, for the dashboard's stat cards.</summary>
+    internal static JobCountsDto JobCounts(IReadOnlyCollection<JobIndexEntry> all) =>
+        new(all.Count, all.Count(j => j.Status == "Active"), all.Count(j => j.Status == "Paused"),
+            all.Count(j => j.Status == "Unloadable"), all.Count(j => j.Status == "Error"));
 
     /// <summary>The scheduler as api/scheduler describes it, with what this user may do in it.</summary>
     internal static async Task<SchedulerDto> DescribeScheduler(HttpContext http, IScheduler scheduler, CronlightOptions options,
@@ -1513,8 +1543,13 @@ internal static class DashboardApi
             ? $"'{key}' is reserved: job data keys starting with '{Retries.ReservedPrefix}' are Cronlight's own"
             : null;
 
+    /// <summary>
+    /// The triggers in words, in order of their names: the same triggers in another order read the same, and two triggers
+    /// that swap schedules do not.
+    /// </summary>
     private static string? DescribeTriggers(IEnumerable<ITrigger> triggers, IReadOnlySet<string>? kinds = null) =>
-        string.Join("; ", triggers.Where(t => (kinds ?? EditableKinds).Contains(Kind(t))).Select(DescribeTrigger)) is { Length: > 0 } text
+        string.Join("; ", triggers.Where(t => (kinds ?? EditableKinds).Contains(Kind(t))).OrderBy(t => t.Key.Name, StringComparer.Ordinal)
+            .Select(DescribeTrigger)) is { Length: > 0 } text
             ? text
             : null;
 

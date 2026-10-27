@@ -19,11 +19,15 @@ internal static class CronlightOpenApi
 
     private sealed class Registered;
 
+    // Set on the request for api/openapi.json, which the document is only built in full for
+    private static readonly object ServingKey = new();
+
     public static IServiceCollection AddCronlightOpenApi(this IServiceCollection services)
     {
         if (services.Any(d => d.ServiceType == typeof(Registered)))
             return services;
         services.AddSingleton<Registered>();
+        services.AddHttpContextAccessor();
         services.AddOpenApi(DocumentName, o =>
         {
             o.ShouldInclude = description => description.GroupName == DocumentName;
@@ -31,12 +35,28 @@ internal static class CronlightOpenApi
             o.CreateSchemaReferenceId = type => OpenApiOptions.CreateDefaultSchemaReferenceId(type) is { Length: > 3 } id && id.EndsWith("Dto", StringComparison.Ordinal)
                 ? id[..^3]
                 : OpenApiOptions.CreateDefaultSchemaReferenceId(type);
-            o.AddDocumentTransformer((document, _, _) =>
+            o.AddDocumentTransformer((document, context, _) =>
             {
+                // A host that maps Microsoft.AspNetCore.OpenApi's documents (MapOpenApi) would otherwise serve this one too,
+                // at /openapi/cronlight.json, without the dashboard's ViewPolicy
+                if (context.ApplicationServices.GetService<IHttpContextAccessor>()?.HttpContext?.Items.ContainsKey(ServingKey) != true)
+                {
+                    document.Paths.Clear();
+                    document.Components = null;
+                    document.Tags = null;
+                    document.Info = new OpenApiInfo
+                    {
+                        Title = "Cronlight",
+                        Version = CronlightVersion.Text,
+                        Description = "Cronlight's API is described at the dashboard's api/openapi.json, to those who may see the dashboard.",
+                    };
+                    return Task.CompletedTask;
+                }
+
                 document.Info = new OpenApiInfo
                 {
                     Title = "Cronlight",
-                    Version = Version,
+                    Version = CronlightVersion.Text,
                     Description =
                         "The API of the Cronlight dashboard for Quartz.NET. Requests are authorized as the dashboard is, by the host's " +
                         "ViewPolicy and ManagePolicy. Requests that change jobs must send an X-Cronlight-Request header (any value), " +
@@ -76,13 +96,17 @@ internal static class CronlightOpenApi
         api.WithGroupName(DocumentName);
         api.MapGet("/openapi.json", async (HttpContext http, CancellationToken ct) =>
         {
+            http.Items[ServingKey] = true;
             var document = await http.RequestServices.GetRequiredKeyedService<IOpenApiDocumentProvider>(DocumentName).GetOpenApiDocumentAsync(ct);
             return Results.Text(await document.SerializeAsJsonAsync(OpenApiSpecVersion.OpenApi3_1, ct), "application/json; charset=utf-8");
         }).ExcludeFromDescription();
     }
+}
 
-    /// <summary>The package's version, without the commit it was built from.</summary>
-    private static string Version =>
-        typeof(CronlightOpenApi).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
+/// <summary>Cronlight's version, without the commit it was built from, as its packages are versioned.</summary>
+internal static class CronlightVersion
+{
+    public static string Text { get; } =
+        typeof(CronlightVersion).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
         ?? "0.0.0";
 }

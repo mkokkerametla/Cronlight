@@ -74,7 +74,9 @@ as written, as the export does. A job data value of `~` (or `null`) is the same 
 ## What importing does
 
 - A job the scheduler does not have is **created**, as `POST api/jobs` would create it: its type must be one New job
-  offers, and its data must satisfy the type's parameters. Created paused when the file says `paused: true`.
+  offers, and its data must satisfy the type's parameters. Created paused when the file says `paused: true`. A trigger of such a job that would fire within 30 seconds
+  starts 30 seconds later (an interval trigger by whole intervals, keeping its rhythm), so that it cannot run before
+  the job is paused.
 - A job it has is **updated to match the file**: its description, retry policy, job data and cron, one-time and
   interval triggers become the file's. Data keys the file does not have are removed, and triggers it does not list
   are unscheduled. Waiting retries, pending manual runs and triggers of other kinds are kept, as editing a job keeps

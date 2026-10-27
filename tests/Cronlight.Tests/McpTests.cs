@@ -234,6 +234,26 @@ public class McpTests
     }
 
     [Fact]
+    public async Task Upcoming_runs_leave_out_fire_times_already_past()
+    {
+        // Not started, so a trigger whose fire time has passed stays as if it had misfired
+        await using var host = await TestHost.Start(history: _ => { }, startScheduler: false,
+            services: s => s.AddCronlightMcp(), map: app => app.MapCronlightMcp("/cronlight/mcp"));
+        await HistoryScenarios.Create(host.Client(), typeof(PlainJob), "overdue");
+        var scheduler = await host.Scheduler();
+        await scheduler.ScheduleJob(TriggerBuilder.Create().WithIdentity("every-ten-minutes").ForJob("overdue")
+            .StartAt(DateTimeOffset.UtcNow.AddHours(-1)).WithCronSchedule("0 0/10 * * * ?").Build());
+        Assert.True((await scheduler.GetTrigger(new TriggerKey("every-ten-minutes")))!.GetNextFireTimeUtc() < DateTimeOffset.UtcNow);
+        await using var client = await Connect(host);
+
+        var runs = (await Call(client, "upcoming_runs", new() { ["hours"] = 1 })).GetProperty("runs").EnumerateArray()
+            .Select(r => r.GetProperty("fireTimeUtc").GetDateTimeOffset()).ToList();
+
+        Assert.NotEmpty(runs);
+        Assert.All(runs, t => Assert.True(t >= DateTimeOffset.UtcNow.AddSeconds(-5), $"{t:u} is past"));
+    }
+
+    [Fact]
     public async Task Actions_need_the_manage_permission_and_are_audited_as_coming_from_mcp()
     {
         var sink = new AuditTests.RecordingSink();

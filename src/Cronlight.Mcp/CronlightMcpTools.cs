@@ -9,7 +9,8 @@ using Quartz.Spi;
 namespace Cronlight.Mcp;
 
 /// <summary>A scheduler the user may see.</summary>
-/// <param name="IsDefault">The app's own scheduler, which tools use when no scheduler is named.</param>
+/// <param name="IsDefault">The app's own scheduler, which tools use when no scheduler is named. A user who may not see it
+/// names a scheduler in every call.</param>
 /// <param name="CanManage">Whether the user may change its jobs.</param>
 internal record SchedulerSummary(string Name, bool IsDefault, bool CanManage);
 
@@ -68,18 +69,16 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
     private const int MaxLogCharacters = 50_000;
     private const int MaxErrorCharacters = 2_000;
 
-    private IJobHistoryStore History => services.GetService<IJobHistoryStore>()
-        ?? throw new McpException("Execution history is not enabled in this app, so there are no recorded runs.");
-
     [McpServerTool(Name = "list_schedulers", Title = "List schedulers", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("The schedulers this app serves that you may see, and whether you may change their jobs. Other tools use the " +
                  "default one unless given a scheduler name.")]
     public async Task<IReadOnlyList<SchedulerSummary>> ListSchedulers(CancellationToken cancellationToken)
     {
         var visible = await access.Visible(cancellationToken);
+        var defaultName = await access.DefaultName(cancellationToken);
         var result = new List<SchedulerSummary>();
-        for (var i = 0; i < visible.Count; i++)
-            result.Add(new SchedulerSummary(visible[i].SchedulerName, i == 0, await access.CanManage(visible[i])));
+        foreach (var s in visible)
+            result.Add(new SchedulerSummary(s.SchedulerName, s.SchedulerName == defaultName, await access.CanManage(s)));
         return result;
     }
 
@@ -119,7 +118,9 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
                 continue;
             var calendar = trigger.CalendarName == null ? null : await s.GetCalendar(trigger.CalendarName, cancellationToken);
             // At most a page's worth from each trigger: one firing every second would otherwise fill the week
-            foreach (var time in TriggerUtils.ComputeFireTimes((IOperableTrigger)trigger, calendar, size + 1).Where(t => t < window.ToUtc))
+            // From its next fire time, which is past for a trigger that misfired or waits behind a run: those are not coming up
+            foreach (var time in TriggerUtils.ComputeFireTimes((IOperableTrigger)trigger, calendar, size + 1)
+                         .Where(t => t >= window.FromUtc && t < window.ToUtc))
                 runs.Add(new UpcomingRun(time, job.Group, job.Name, trigger.Key.Name, DashboardApi.Kind(trigger)));
         }
         var sorted = runs.OrderBy(r => r.FireTimeUtc).ThenBy(r => r.JobGroup).ThenBy(r => r.JobName).ToList();
@@ -158,7 +159,7 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
                 jobs.Add(new JobSummary(job.Group, job.Name, job.DisplayName ?? job.JobType ?? entry.TypeLabel, entry.Status,
                     job.Description, job.Triggers.Select(Summarize).ToList()));
         }
-        return new JobList(matching.Count, current, pages, Counts(all), jobs);
+        return new JobList(matching.Count, current, pages, DashboardApi.JobCounts(all), jobs);
     }
 
     [McpServerTool(Name = "get_job", Title = "Get a job", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
@@ -200,12 +201,12 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
         var size = Math.Clamp(limit, 1, 100);
         if (sinceHours == null && fromUtc == null && toUtc == null)
         {
-            var page = await History.Query(s.SchedulerName,
+            var page = await access.History.Query(s.SchedulerName,
                 new JobHistoryQuery { JobGroup = group, JobName = name, Status = statusFilter, BeforeId = before, Limit = size }, cancellationToken);
             return new RunList(page.Select(Summarize).ToList(), page.Count == size ? page[^1].Id : null, null);
         }
         var window = TimeWindow.Resolve(sinceHours, fromUtc, toUtc);
-        var (records, more) = await HistoryScan.Read(History, s.SchedulerName, window, group, name, statusFilter, cancellationToken, size, before);
+        var (records, more) = await HistoryScan.Read(access.History, s.SchedulerName, window, group, name, statusFilter, cancellationToken, size, before);
         return new RunList(records.Select(Summarize).ToList(), more ? records[^1].Id : null, window);
     }
 
@@ -218,7 +219,7 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
         CancellationToken cancellationToken = default)
     {
         var s = await access.View(scheduler, cancellationToken);
-        var log = await History.GetLog(s.SchedulerName, runId, cancellationToken)
+        var log = await access.History.GetLog(s.SchedulerName, runId, cancellationToken)
             ?? throw new McpException($"Run {runId} has no log: it logged nothing, its log was not kept, or there is no such run.");
         var kept = new List<JobRunLogEntry>();
         var characters = 0;
@@ -251,7 +252,7 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
         var s = await access.View(scheduler, cancellationToken);
         var since = DateTimeOffset.UtcNow.AddHours(-Math.Clamp(hours, 1, 24 * 90));
         var store = services.GetService<IJobHistoryStore>();
-        return new StatusSummary(since, Counts(await index.Read(s, cancellationToken)), (await running.Read(s, cancellationToken)).Jobs.Count,
+        return new StatusSummary(since, DashboardApi.JobCounts(await index.Read(s, cancellationToken)), (await running.Read(s, cancellationToken)).Jobs.Count,
             store != null, store == null ? null : await store.Summarize(s.SchedulerName, since, cancellationToken));
     }
 
@@ -268,7 +269,7 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
     {
         var s = await access.View(scheduler, cancellationToken);
         var window = TimeWindow.Resolve(hours, fromUtc, toUtc);
-        var (failures, truncated) = await HistoryScan.Read(History, s.SchedulerName, window, null, null, JobExecutionStatus.Failed,
+        var (failures, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window, null, null, JobExecutionStatus.Failed,
             cancellationToken);
 
         var jobs = failures
@@ -291,10 +292,6 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
         [Description("The time zone it is read in, e.g. Europe/London; UTC when left out.")] string? timeZone = null,
         [Description("How many fire times to list, at most 10.")] int count = 5) =>
         DashboardApi.PreviewCron(expression, timeZone, Math.Clamp(count, 1, 10));
-
-    private static JobCountsDto Counts(IReadOnlyList<JobIndexEntry> all) =>
-        new(all.Count, all.Count(j => j.Status == "Active"), all.Count(j => j.Status == "Paused"),
-            all.Count(j => j.Status == "Unloadable"), all.Count(j => j.Status == "Error"));
 
     private static TriggerSummary Summarize(TriggerDto t) => new(t.Name, t.Kind, t.Kind switch
     {

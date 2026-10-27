@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
@@ -18,7 +17,7 @@ internal record ActionResult(string JobGroup, string JobName, string Message);
 /// is audited as the API's action is, with Via set to mcp. None deletes or edits a job.
 /// </summary>
 [McpServerToolType]
-internal sealed class CronlightMcpActions(McpAccess access, JobTypeCatalog catalog, IServiceProvider services, ILoggerFactory loggers)
+internal sealed class CronlightMcpActions(McpAccess access, JobTypeCatalog catalog, ILoggerFactory loggers)
 {
     private const string Via = "mcp";
     private readonly ILogger audit = loggers.CreateLogger(Audit.LoggerCategory);
@@ -78,9 +77,7 @@ internal sealed class CronlightMcpActions(McpAccess access, JobTypeCatalog catal
         CancellationToken cancellationToken = default)
     {
         var s = await access.View(scheduler, cancellationToken);
-        var store = services.GetService<IJobHistoryStore>()
-            ?? throw new McpException("Execution history is not enabled in this app, so there are no recorded runs.");
-        var run = (await store.Query(s.SchedulerName, new JobHistoryQuery { BeforeId = runId + 1, Limit = 1 }, cancellationToken))
+        var run = (await access.History.Query(s.SchedulerName, new JobHistoryQuery { BeforeId = runId + 1, Limit = 1 }, cancellationToken))
             .FirstOrDefault(r => r.Id == runId)
             ?? throw new McpException($"There is no run {runId}.");
         if (run.Status is not (JobExecutionStatus.Failed or JobExecutionStatus.Vetoed or JobExecutionStatus.Cancelled))

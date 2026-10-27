@@ -40,7 +40,9 @@ it into a client generator, Postman or a Swagger UI the host serves. It is for t
 
 It is a document of its own, named `cronlight`, and the API's endpoints are in that document group. So the host's own
 OpenAPI documents leave them out: `AddOpenApi()`'s, and Swashbuckle's with its default rules, take endpoints with no
-group or their own. A host that wants them in its own document can include the `cronlight` group there.
+group or their own. A host that wants them in its own document can include the `cronlight` group there. A host that
+serves Microsoft.AspNetCore.OpenApi's documents by name (`MapOpenApi()`) gets an empty `cronlight` document at
+`/openapi/cronlight.json`: the full one is only served at `api/openapi.json`, behind the dashboard's `ViewPolicy`.
 
 ## Options
 

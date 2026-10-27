@@ -34,8 +34,9 @@ internal record TimeWindow(DateTimeOffset FromUtc, DateTimeOffset ToUtc)
 }
 
 /// <summary>
-/// Reads the runs history recorded in a window. The history store lists runs newest first, so this pages back from the
-/// newest until the window's start, and stops at a cap: past it, results are marked truncated rather than slow.
+/// Reads the runs history recorded in a window, newest first, asking the store for that window only, and stops at a cap:
+/// past it, results are marked truncated rather than slow. Records are checked against the window here too, for a store
+/// that does not filter by time.
 /// </summary>
 internal static class HistoryScan
 {
@@ -52,9 +53,11 @@ internal static class HistoryScan
         var read = 0;
         while (true)
         {
-            var page = await store.Query(scheduler,
-                new JobHistoryQuery { JobGroup = group, JobName = name, Status = status, BeforeId = before, Limit = PageSize },
-                cancellationToken);
+            var page = await store.Query(scheduler, new JobHistoryQuery
+            {
+                JobGroup = group, JobName = name, Status = status, BeforeId = before, Limit = PageSize,
+                FiredFromUtc = window.FromUtc, FiredBeforeUtc = window.ToUtc,
+            }, cancellationToken);
             read += page.Count;
             foreach (var record in page.Where(r => window.Contains(r.FiredTimeUtc)))
             {

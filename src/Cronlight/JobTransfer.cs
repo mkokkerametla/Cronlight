@@ -158,7 +158,7 @@ internal static class JobTransfer
 
         var scheduler = await DashboardApi.Scheduler(http);
         var results = new List<ImportedJobDto>();
-        var planned = new List<(JobChange Change, bool Create, bool Pause)>();
+        var planned = new List<(JobChange Change, bool Create)>();
         var seen = new HashSet<JobKey>();
         var triggerOwners = new Dictionary<TriggerKey, JobKey>();
         foreach (var entry in file.Jobs)
@@ -202,7 +202,7 @@ internal static class JobTransfer
             var unchanged = !create && change.Changes.Count == 0 && await SameTriggers(scheduler, key, change.Triggers);
             results.Add(new ImportedJobDto(group, name, create ? "create" : unchanged ? "unchanged" : "update", null, change.Changes));
             if (!unchanged)
-                planned.Add((change, create, create && entry.Paused == true));
+                planned.Add((change, create));
         }
 
         var failed = results.Where(r => r.Action == "error").ToList();
@@ -221,11 +221,9 @@ internal static class JobTransfer
         // Filled in as each job is carried out, so if the scheduler fails partway the audit event lists what was done
         var audited = new Dictionary<string, CronlightAuditChange>();
         Audit.RecordChanges(http, audited);
-        foreach (var (change, create, pause) in planned)
+        foreach (var (change, create) in planned)
         {
             await change.Apply(scheduler);
-            if (pause)
-                await scheduler.PauseJob(change.Key);
             audited[change.Key.ToString()] = new(null, create ? "created" : "updated");
             foreach (var (field, value) in change.Changes)
                 audited[$"{change.Key}: {field}"] = value;
@@ -244,7 +242,8 @@ internal static class JobTransfer
                 return (null, true, $"'{masked}' was exported masked ({DashboardApi.Mask}): set its value, or a secret reference, " +
                                     "for the job to be created");
             var (created, refused) = await DashboardApi.PlanCreate(scheduler,
-                new CreateJobRequest(entry.Type, key.Name, key.Group, entry.Description, data, triggers, entry.Retry), http, catalog, options);
+                new CreateJobRequest(entry.Type, key.Name, key.Group, entry.Description, data, triggers, entry.Retry), http, catalog, options,
+                paused: entry.Paused == true);
             return (created, true, Message(refused));
         }
 
@@ -372,7 +371,7 @@ internal static class JobTransfer
             var what = ex.Message.Contains("could not be mapped", StringComparison.Ordinal) ? "has a property Cronlight does not know"
                 : ex.Message.Contains("could not be converted", StringComparison.Ordinal) ? "has a value of the wrong kind"
                 : yaml ? "is not a jobs file"
-                : $"is not valid JSON (line {ex.LineNumber + 1})";
+                : $"is not valid JSON{(ex.LineNumber is { } line ? $" (line {line + 1})" : "")}";
             return (null, $"The file {what}{at}");
         }
         catch (YamlException ex)

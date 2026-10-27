@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.AspNetCore.Routing;
@@ -68,6 +69,24 @@ public class OpenApiTests
         var document = await host.Services.GetRequiredKeyedService<IOpenApiDocumentProvider>("v1").GetOpenApiDocumentAsync();
 
         Assert.DoesNotContain(document.Paths?.Keys.ToList() ?? [], path => path.StartsWith("/cronlight"));
+    }
+
+    [Fact]
+    public async Task The_hosts_own_OpenAPI_route_does_not_serve_the_dashboards_description()
+    {
+        await using var host = await TestHost.Start("Production", o => o.ViewPolicy = "Viewers",
+            services: s => s.AddOpenApi(), map: app => app.MapOpenApi());
+        var anonymous = host.Client();
+
+        var response = await anonymous.GetAsync("/openapi/cronlight.json");
+        var document = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Empty(document.TryGetProperty("paths", out var paths) ? paths.EnumerateObject() : default(JsonElement.ObjectEnumerator));
+        Assert.False(document.TryGetProperty("components", out var components) && components.TryGetProperty("schemas", out _));
+        // The dashboard's own copy is still served in full, to viewers
+        var full = await host.Client("viewer").GetFromJsonAsync<JsonElement>("api/openapi.json");
+        Assert.True(full.GetProperty("paths").EnumerateObject().Sum(path => path.Value.EnumerateObject().Count()) >= 25);
     }
 
     [Fact]

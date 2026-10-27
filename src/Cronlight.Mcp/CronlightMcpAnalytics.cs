@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Text.RegularExpressions;
-using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
@@ -48,13 +47,10 @@ internal record ErrorPatterns(TimeWindow Window, bool Truncated, int Errors, IRe
 /// what they say. They read the window's runs from history, up to 20,000, and say when there were more.
 /// </summary>
 [McpServerToolType]
-internal sealed partial class CronlightMcpAnalytics(McpAccess access, IServiceProvider services)
+internal sealed partial class CronlightMcpAnalytics(McpAccess access)
 {
     private static readonly TimeSpan LateStart = TimeSpan.FromSeconds(5);
     private static readonly string[] Sorts = ["failures", "runs", "successRate", "p95Duration", "slowdown"];
-
-    private IJobHistoryStore History => services.GetService<IJobHistoryStore>()
-        ?? throw new McpException("Execution history is not enabled in this app, so there are no recorded runs.");
 
     [McpServerTool(Name = "run_statistics", Title = "Run statistics", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Per-job statistics over a window: runs by outcome, success rate, average, median, P95 and longest duration, " +
@@ -80,8 +76,8 @@ internal sealed partial class CronlightMcpAnalytics(McpAccess access, IServicePr
             throw new McpException("Sorting by slowdown compares with the window before: set compare to true.");
 
         var window = TimeWindow.Resolve(hours, fromUtc, toUtc);
-        var (records, truncated) = await HistoryScan.Read(History, s.SchedulerName, window, group, name, null, cancellationToken);
-        var previous = compare ? await HistoryScan.Read(History, s.SchedulerName, window.Previous, group, name, null, cancellationToken) : default;
+        var (records, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window, group, name, null, cancellationToken);
+        var previous = compare ? await HistoryScan.Read(access.History, s.SchedulerName, window.Previous, group, name, null, cancellationToken) : default;
         var before = compare ? previous.Records.GroupBy(r => (r.JobGroup, r.JobName)).ToDictionary(g => g.Key, g => Stats(g.ToList())) : null;
 
         var jobs = records.GroupBy(r => (r.JobGroup, r.JobName))
@@ -124,7 +120,7 @@ internal sealed partial class CronlightMcpAnalytics(McpAccess access, IServicePr
         var window = TimeWindow.Resolve(hours, fromUtc, toUtc);
         if (window.Length / size > 24 * 31)
             throw new McpException("That is more than 744 buckets: use day buckets, or a shorter window.");
-        var (records, truncated) = await HistoryScan.Read(History, s.SchedulerName, window, group, name, null, cancellationToken);
+        var (records, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window, group, name, null, cancellationToken);
 
         DateTimeOffset Start(DateTimeOffset time) => new(time.UtcTicks - time.UtcTicks % size.Ticks, TimeSpan.Zero);
         var counted = records.GroupBy(r => Start(r.FiredTimeUtc)).ToDictionary(g => g.Key, g => g.ToList());
@@ -155,7 +151,7 @@ internal sealed partial class CronlightMcpAnalytics(McpAccess access, IServicePr
     {
         var s = await access.View(scheduler, cancellationToken);
         var window = TimeWindow.Resolve(hours, fromUtc, toUtc);
-        var (records, truncated) = await HistoryScan.Read(History, s.SchedulerName, window, group, null, null, cancellationToken);
+        var (records, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window, group, null, null, cancellationToken);
         var errors = records
             .Where(r => r.Error != null && r.Status is JobExecutionStatus.Failed or JobExecutionStatus.Retried or JobExecutionStatus.Vetoed)
             .ToList();

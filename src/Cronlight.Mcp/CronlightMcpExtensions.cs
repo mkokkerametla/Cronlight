@@ -1,4 +1,3 @@
-using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -39,7 +38,7 @@ public static class CronlightMcpExtensions
         var server = services
             .AddMcpServer(o =>
             {
-                o.ServerInfo ??= new Implementation { Name = "cronlight", Title = "Cronlight", Version = Version };
+                o.ServerInfo ??= new Implementation { Name = "cronlight", Title = "Cronlight", Version = CronlightVersion.Text };
                 o.ServerInstructions ??= Instructions;
             })
             // Each request stands alone, so a dashboard on several nodes behind a load balancer needs no sticky sessions
@@ -92,8 +91,4 @@ public static class CronlightMcpExtensions
         "durations and trends come from status_summary, failure_summary, run_statistics, run_timeline and error_patterns, which " +
         "count on the server: prefer them to counting runs from query_runs yourself, state the window each answer covers, and " +
         "say when a result was truncated.";
-
-    private static string Version =>
-        typeof(CronlightMcpExtensions).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
-        ?? "0.0.0";
 }

@@ -184,6 +184,67 @@ public class JobTransferTests
     }
 
     [Fact]
+    public async Task Triggers_that_swap_schedules_are_a_change_and_the_order_they_are_listed_in_is_not()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        // Stored b first, then a: listed in the file by name
+        Assert.Equal(HttpStatusCode.Created, (await client.PostJson("api/jobs", new
+        {
+            type = Plain, name = "pair",
+            triggers = new[] { new { name = "b", cronExpression = "0 0 2 * * ?" }, new { name = "a", cronExpression = "0 0 1 * * ?" } }
+        })).StatusCode);
+        string File(string a, string b) => $"""
+            version: 1
+            jobs:
+            - name: pair
+              type: {Plain}
+              triggers:
+              - name: a
+                cronExpression: {a}
+              - name: b
+                cronExpression: {b}
+            """;
+
+        Assert.Equal("unchanged", Actions(await Imported(client, File("0 0 1 * * ?", "0 0 2 * * ?")))["DEFAULT.pair"]);
+        var swapped = await Imported(client, File("0 0 2 * * ?", "0 0 1 * * ?"));
+        Assert.Equal("update", Actions(swapped)["DEFAULT.pair"]);
+        var triggers = swapped.GetProperty("jobs")[0].GetProperty("changes").GetProperty("triggers");
+        Assert.Equal("0 0 1 * * ? (UTC); 0 0 2 * * ? (UTC)", triggers.GetProperty("before").GetString());
+        Assert.Equal("0 0 2 * * ? (UTC); 0 0 1 * * ? (UTC)", triggers.GetProperty("after").GetString());
+        var stored = await (await host.Scheduler()).GetTrigger(new TriggerKey("a", "DEFAULT"));
+        Assert.Equal("0 0 2 * * ?", ((ICronTrigger)stored!).CronExpressionString);
+    }
+
+    [Fact]
+    public async Task A_job_imported_paused_never_runs_before_it_is_paused()
+    {
+        await using var host = await TestHost.Start(history: _ => { });
+        var client = host.Client();
+        // Due at once: an interval trigger with no start starts now
+        var file = $"""
+            version: 1
+            jobs:
+            - name: held
+              type: {Plain}
+              paused: true
+              triggers:
+              - name: every-second
+                kind: Interval
+                intervalSeconds: 1
+            """;
+
+        await Imported(client, file);
+
+        var scheduler = await host.Scheduler();
+        var trigger = (ISimpleTrigger)(await scheduler.GetTrigger(new TriggerKey("every-second", "DEFAULT")))!;
+        Assert.Equal(TriggerState.Paused, await scheduler.GetTriggerState(trigger.Key));
+        Assert.True(trigger.StartTimeUtc > DateTimeOffset.UtcNow.AddSeconds(20));
+        await Task.Delay(1500);
+        Assert.Empty(await HistoryScenarios.History(client, "?name=held"));
+    }
+
+    [Fact]
     public async Task A_file_with_a_mistake_changes_nothing_and_says_what_is_wrong_with_each_job()
     {
         await using var host = await TestHost.Start();
