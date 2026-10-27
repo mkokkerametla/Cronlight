@@ -26,7 +26,7 @@ Building, running and testing Cronlight, its CI and how releases are published.
 Requires the .NET 10 SDK (see `global.json`) and Node.js 20+.
 
 ```bash
-dotnet build              # also runs `npm ci` / `npm run build` for the UI when its sources changed
+dotnet build              # also runs `npm ci` when the UI's package files changed, and `npm run build` when its sources changed
 dotnet test
 
 # Run the sample: http://localhost:5099/ops/jobs/
