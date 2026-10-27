@@ -15,7 +15,10 @@ public class InvoiceJob : IJob { ... }
 Parameter types are `String`, `Int`, `Bool`, `Url`, `Text` (multi-line) and `Secret` (masked).
 `Choices = new[] { "csv", "json" }` turns a parameter into a dropdown and the API rejects other values.
 
-Only types discovered in your app can be created; the API never instantiates a type by an arbitrary name.
+Only types discovered in your app can be created; the API never instantiates a type by an arbitrary name. Discovery
+finds public, non-abstract `IJob` classes, so a job type you keep `internal` is never offered.
+`[CronlightJob(..., Hidden = true)]` leaves a type out of New job and the API refuses to create it, while its
+existing jobs still show and can be edited.
 
 In the API a job carries its type as `jobType`, the attribute's name as `displayName` and its description as
 `typeDescription` (`description` is the job's own). Creating a job takes the type as `type` or `jobType`;

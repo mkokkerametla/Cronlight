@@ -254,14 +254,19 @@ public class SecurityTests
             ? string.Join(",", values)
             : null;
 
-    [Fact]
-    public async Task Only_discovered_job_types_can_be_created()
+    [Theory]
+    [InlineData("System.Diagnostics.Process")]
+    // Not public, or hidden from New job: neither is offered, so neither can be created by name either
+    [InlineData("Cronlight.Tests.InternalJob")]
+    [InlineData("Cronlight.Tests.HiddenJob")]
+    public async Task Only_job_types_the_dashboard_offers_can_be_created(string type)
     {
         await using var host = await TestHost.Start();
 
-        var response = await host.Client().PostJson("api/jobs", new { type = "System.Diagnostics.Process", name = "x" });
+        var response = await host.Client().PostJson("api/jobs", new { type, name = "x" });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Null(await (await host.Scheduler()).GetJobDetail(new Quartz.JobKey("x")));
     }
 
     [Fact]

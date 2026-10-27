@@ -23,6 +23,17 @@ public class JobTypeCatalogTests
     }
 
     [Fact]
+    public void Leaves_out_job_types_that_are_not_public()
+    {
+        var names = Scanning().All.Select(t => t.TypeName).ToList();
+
+        Assert.DoesNotContain(typeof(InternalJob).FullName, names);
+        // Cronlight's own wrapper for run logs
+        Assert.DoesNotContain("Cronlight.History.RunLogJob", names);
+        Assert.Contains(typeof(PlainJob).FullName, names);
+    }
+
+    [Fact]
     public void Leaves_out_framework_and_Quartz_assemblies()
     {
         var catalog = Scanning();
