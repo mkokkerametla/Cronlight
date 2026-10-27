@@ -217,6 +217,12 @@ describe('trigger drafts', () => {
       }),
     ])
     expect(every).toMatchObject({ every: '2', unit: 'hours', runs: '5' })
+
+    // Not a whole number of minutes: in seconds
+    const [odd] = draftsFromTriggers([
+      trigger({ kind: 'Interval', cronExpression: null, intervalSeconds: 90 }),
+    ])
+    expect(odd).toMatchObject({ every: '90', unit: 'seconds', runs: '' })
   })
 
   it('sends back the stored start time while it is unchanged, so the trigger is left alone', () => {

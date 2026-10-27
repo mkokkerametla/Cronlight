@@ -102,6 +102,16 @@ describe('App', () => {
     expect(page()).toHaveAttribute('data-density', 'compact')
   })
 
+  it('uses the standard layout when the one remembered cannot be read', async () => {
+    localStorage.setItem('cronlight-layout', '{not json')
+    renderApp()
+    await screen.findByRole('tabpanel')
+
+    const page = screen.getByRole('tablist').closest('div.mx-auto') as HTMLElement
+    expect(page).toHaveClass('max-w-7xl')
+    expect(page).not.toHaveAttribute('data-density')
+  })
+
   it('opens the view a link names: tab, filter and job', async () => {
     window.history.replaceState(null, '', '/?tab=history&outcome=Failed')
     const { unmount } = renderApp()
@@ -220,6 +230,12 @@ describe('App', () => {
     expect(requested('jobs/search?').at(-1)).toContain('status=Paused')
     // The cards count every job, not just the filtered page
     expect(card('Total jobs')).toHaveTextContent('2')
+
+    // Total jobs lists them all again
+    await userEvent.click(card('Total jobs'))
+    expect(await screen.findByText('invoices', { selector: 'div' })).toBeInTheDocument()
+    expect(requested('jobs/search?').at(-1)).not.toContain('status=')
+    expect(card('Total jobs')).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('opens a job from history even when it is not on the current page', async () => {
@@ -309,10 +325,31 @@ describe('App', () => {
 
     expect(await screen.findByText('Could not reach the scheduler')).toBeInTheDocument()
     expect(screen.getByText('Failed to fetch')).toBeInTheDocument()
+    // Already the host's own: there is no other to fall back to
+    expect(screen.queryByRole('button', { name: 'Show the main scheduler' })).toBeNull()
 
     responses.scheduler = scheduler()
     await userEvent.click(screen.getByRole('button', { name: /Try again/ }))
 
+    expect(await screen.findByRole('heading', { name: 'SampleHost' })).toBeInTheDocument()
+    expect(screen.queryByText('Could not reach the scheduler')).toBeNull()
+  })
+
+  it('offers the main scheduler when the one a link names cannot be reached', async () => {
+    const hostServer = vi.mocked(api).getMockImplementation()!
+    vi.mocked(api).mockImplementation(async (path, options) => {
+      if (currentScheduler() === 'Retired' && path === 'scheduler')
+        throw new Error('No scheduler named Retired')
+      return hostServer(path, options)
+    })
+    selectScheduler('Retired')
+    renderApp()
+
+    expect(await screen.findByText('No scheduler named Retired')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Show the main scheduler' }))
+
+    expect(currentScheduler()).toBeNull()
+    expect(window.location.search).not.toContain('scheduler=')
     expect(await screen.findByRole('heading', { name: 'SampleHost' })).toBeInTheDocument()
     expect(screen.queryByText('Could not reach the scheduler')).toBeNull()
   })

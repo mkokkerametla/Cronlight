@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   describeMisfire,
   describeRetry,
+  everySeconds,
+  formatDateTime,
   startedLate,
   formatSeconds,
   formatDuration,
@@ -182,6 +184,31 @@ describe('schedules in words', () => {
       scheduleSummary(job({ triggers: [trigger({ kind: 'Retry', cronExpression: null })] }))
     ).toBeNull()
   })
+
+  it('describes an interval trigger by how often, from when, and how many runs', () => {
+    const start = '2030-01-01T06:00:00Z'
+    const every = (overrides: Parameters<typeof trigger>[0]) =>
+      scheduleSummary(
+        job({
+          triggers: [
+            trigger({ kind: 'Interval', cronExpression: null, startTimeUtc: start, ...overrides }),
+          ],
+        })
+      )
+
+    expect(every({ intervalSeconds: 300, repeatCount: 9 })).toBe(
+      `Every 5m from ${formatDateTime(start)}, 10 runs in all`
+    )
+    expect(every({ intervalSeconds: 5400, repeatCount: null })).toBe(
+      `Every 1h 30m from ${formatDateTime(start)}`
+    )
+    expect(every({ intervalSeconds: null })).toBeNull()
+  })
+
+  it('says how often a view refreshes', () => {
+    expect(everySeconds(1)).toBe('every second')
+    expect(everySeconds(10)).toBe('every 10 seconds')
+  })
 })
 
 describe('misfires and late starts', () => {
@@ -189,6 +216,11 @@ describe('misfires and late starts', () => {
     expect(describeMisfire('SmartPolicy')).toBe('Runs once as soon as it can')
     expect(describeMisfire('DoNothing')).toBe('Skipped; waits for the next fire time')
     expect(describeMisfire('IgnoreMisfirePolicy')).toBe('Runs every missed fire time')
+    expect(describeMisfire('RescheduleNowWithExistingRepeatCount')).toBe(
+      'Runs as soon as it can, and later fire times move with it'
+    )
+    // One added in a later Quartz is shown by its name
+    expect(describeMisfire('SomeNewInstruction')).toBe('SomeNewInstruction')
     expect(describeMisfire(undefined)).toBeNull()
   })
 
