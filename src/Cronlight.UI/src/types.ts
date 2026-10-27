@@ -77,6 +77,18 @@ export interface JobType {
   retry: JobRetryPolicy | null
 }
 
+/** A node of a clustered scheduler, as it last checked in */
+export interface ClusterNode {
+  instanceId: string
+  lastCheckinUtc: string
+  checkinIntervalMs: number
+  /** By the server's clock */
+  secondsSinceCheckin: number
+  alive: boolean
+  /** This process's scheduler instance */
+  thisNode: boolean
+}
+
 export interface SchedulerInfo {
   schedulerName: string
   schedulerInstanceId: string
@@ -89,6 +101,8 @@ export interface SchedulerInfo {
   threadPoolSize: number
   numberOfJobsExecuted: number
   runningSince: string | null
+  /** A clustered scheduler's nodes; null when it is not clustered or they cannot be read */
+  clusterNodes: ClusterNode[] | null
   canManage: boolean
   historyEnabled: boolean
   secretReferences: boolean

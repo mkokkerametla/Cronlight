@@ -27,14 +27,16 @@ public sealed class TestHost : IAsyncDisposable
     private static readonly TimeSpan StartStopLimit = TimeSpan.FromSeconds(30);
 
     private readonly WebApplication app;
+    private readonly bool startedScheduler;
 
     public string SchedulerName { get; }
     public TestDatabase Database { get; }
     public IServiceProvider Services => app.Services;
 
-    private TestHost(WebApplication app, string schedulerName, TestDatabase database)
+    private TestHost(WebApplication app, string schedulerName, TestDatabase database, bool startedScheduler)
     {
         this.app = app;
+        this.startedScheduler = startedScheduler;
         SchedulerName = schedulerName;
         Database = database;
     }
@@ -49,7 +51,9 @@ public sealed class TestHost : IAsyncDisposable
         bool ramJobStore = false,
         Dictionary<string, string?>? settings = null,
         bool clustered = false,
-        TimeSpan? misfireThreshold = null)
+        TimeSpan? misfireThreshold = null,
+        bool startScheduler = true,
+        TimeSpan? clusterCheckinMisfireThreshold = null)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
         var schedulerName = $"test-{id}";
@@ -80,10 +84,15 @@ public sealed class TestHost : IAsyncDisposable
                 database.UseFor(store, $"ds-{id}");
                 store.UseNewtonsoftJsonSerializer();
                 if (clustered)
-                    store.UseClustering();
+                    store.UseClustering(c =>
+                    {
+                        if (clusterCheckinMisfireThreshold is { } threshold)
+                            c.CheckinMisfireThreshold = threshold;
+                    });
             });
         });
-        builder.Services.AddQuartzHostedService();
+        if (startScheduler)
+            builder.Services.AddQuartzHostedService();
         // Hosted services that honour the stop token give up after this, well within StartStopLimit
         builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(10));
         services?.Invoke(builder.Services);
@@ -111,8 +120,9 @@ public sealed class TestHost : IAsyncDisposable
             app.UseAuthorization();
             app.MapCronlight("/cronlight");
             await Within(app.StartAsync(), $"Test host {schedulerName} did not start");
-            await WaitForScheduler(app, schedulerName);
-            return new TestHost(app, schedulerName, database);
+            if (startScheduler)
+                await WaitForScheduler(app, schedulerName);
+            return new TestHost(app, schedulerName, database, startScheduler);
         }
         catch
         {
@@ -176,8 +186,17 @@ public sealed class TestHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await Within(app.StopAsync(), $"Test host {SchedulerName} did not stop");
-        await Within(app.DisposeAsync().AsTask(), $"Test host {SchedulerName} was not disposed");
+        try
+        {
+            // Nothing else shuts down a scheduler the host never started, and Quartz keeps it in a process-wide registry
+            if (!startedScheduler)
+                await Within((await Scheduler()).Shutdown(), $"Test host {SchedulerName}'s scheduler did not shut down");
+        }
+        finally
+        {
+            await Within(app.StopAsync(), $"Test host {SchedulerName} did not stop");
+            await Within(app.DisposeAsync().AsTask(), $"Test host {SchedulerName} was not disposed");
+        }
     }
 }
 

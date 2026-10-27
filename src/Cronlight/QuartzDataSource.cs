@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using System.Data.Common;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -44,6 +45,15 @@ internal sealed partial class QuartzDataSource
 
     /// <summary>Quartz's table prefix, e.g. QRTZ_. Validated so it can be concatenated into SQL.</summary>
     public string TablePrefix => settings("quartz.jobStore.tablePrefix") ?? "QRTZ_";
+
+    /// <summary>
+    /// How long past its check-in interval a cluster node may go before Quartz treats it as failed. Quartz reads the
+    /// setting as whole milliseconds, as UseClustering writes it.
+    /// </summary>
+    public TimeSpan ClusterCheckinMisfireThreshold =>
+        long.TryParse(settings("quartz.jobStore.clusterCheckinMisfireThreshold"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms)
+            ? TimeSpan.FromMilliseconds(ms)
+            : TimeSpan.FromMilliseconds(7500);
 
     /// <summary>Quartz provider name such as SqlServer, Npgsql, MySql or SQLite-Microsoft.</summary>
     public string? ProviderName => DataSourceSetting("provider");
