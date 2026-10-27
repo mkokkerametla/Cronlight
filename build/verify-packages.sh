@@ -34,6 +34,7 @@ check_package() {
 
 check_package Cronlight.Quartz.Dashboard
 check_package Cronlight.Quartz.Dashboard.History
+check_package Cronlight.Quartz.Dashboard.Mcp
 
 # The dashboard UI must be embedded in the core assembly for every target framework
 core="$dir/Cronlight.Quartz.Dashboard.$version.nupkg"
@@ -49,12 +50,14 @@ if [[ -f "$core" ]]; then
 fi
 
 # The history package must depend on the exact same core version
-history="$dir/Cronlight.Quartz.Dashboard.History.$version.nupkg"
-if [[ -f "$history" ]]; then
-  unzip -p "$history" Cronlight.Quartz.Dashboard.History.nuspec \
-    | grep -c "id=\"Cronlight.Quartz.Dashboard\" version=\"$version\"" >/dev/null \
-    || fail "Cronlight.Quartz.Dashboard.History does not depend on Cronlight.Quartz.Dashboard $version"
-fi
+for id in Cronlight.Quartz.Dashboard.History Cronlight.Quartz.Dashboard.Mcp; do
+  package="$dir/$id.$version.nupkg"
+  if [[ -f "$package" ]]; then
+    unzip -p "$package" "$id.nuspec" \
+      | grep -c "id=\"Cronlight.Quartz.Dashboard\" version=\"$version\"" >/dev/null \
+      || fail "$id does not depend on Cronlight.Quartz.Dashboard $version"
+  fi
+done
 
 if (( failures > 0 )); then
   echo "$failures package check(s) failed"

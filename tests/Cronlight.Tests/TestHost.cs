@@ -53,7 +53,8 @@ public sealed class TestHost : IAsyncDisposable
         bool clustered = false,
         TimeSpan? misfireThreshold = null,
         bool startScheduler = true,
-        TimeSpan? clusterCheckinMisfireThreshold = null)
+        TimeSpan? clusterCheckinMisfireThreshold = null,
+        Action<WebApplication>? map = null)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
         var schedulerName = $"test-{id}";
@@ -119,6 +120,7 @@ public sealed class TestHost : IAsyncDisposable
             app.UseAuthentication();
             app.UseAuthorization();
             app.MapCronlight("/cronlight");
+            map?.Invoke(app);
             await Within(app.StartAsync(), $"Test host {schedulerName} did not start");
             if (startScheduler)
                 await WaitForScheduler(app, schedulerName);

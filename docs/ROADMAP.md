@@ -61,6 +61,9 @@ These are listed so the roadmap below is read against them:
   checked first with a dry run. See [Exporting and importing jobs](export-import.md).
 - An OpenAPI 3.1 description of the API at `api/openapi.json`, a document of its own that the host's documents leave
   out. See [Setup and options](configuration.md#the-apis-description).
+- An MCP server for AI assistants, in its own package (`Cronlight.Quartz.Dashboard.Mcp`): read-only tools for jobs,
+  runs, logs and failure and status summaries, and opt-in pause, resume, run and run again, on the dashboard's
+  permissions and audit log. See [AI assistants (MCP server)](mcp.md).
 
 ## How Cronlight compares
 

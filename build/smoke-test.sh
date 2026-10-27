@@ -41,8 +41,10 @@ EOF
   dotnet add package Quartz.Extensions.Hosting --version 3.13.1 >/dev/null
   dotnet add package Cronlight.Quartz.Dashboard --version "$version" >/dev/null
   dotnet add package Cronlight.Quartz.Dashboard.History --version "$version" >/dev/null
+  dotnet add package Cronlight.Quartz.Dashboard.Mcp --version "$version" >/dev/null
   cat > Program.cs <<'EOF'
 using Cronlight;
+using Cronlight.Mcp;
 using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -51,9 +53,11 @@ builder.Services.AddQuartz(q => q.ScheduleJob<SmokeJob>(
 builder.Services.AddQuartzHostedService();
 builder.Services.AddCronlight();
 builder.Services.AddCronlightHistory();
+builder.Services.AddCronlightMcp();
 
 var app = builder.Build();
 app.MapCronlight("/ops/jobs");
+app.MapCronlightMcp("/ops/jobs/mcp");
 app.Run();
 
 [CronlightJob("Smoke")]
@@ -78,6 +82,9 @@ EOF
   curl -sf "$url/favicon.svg" -o /dev/null || { echo "::error::$tfm: static asset not served"; exit 1; }
   contains "$url/api/jobs" '"name":"smoke"' || { echo "::error::$tfm: job not listed by the API"; exit 1; }
   contains "$url/api/openapi.json" '/api/jobs/import"' || { cat app.log; echo "::error::$tfm: OpenAPI document not served"; exit 1; }
+  mcp=$(curl -sf -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" "$url/mcp" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_jobs","arguments":{}}}') || mcp=""
+  [[ $mcp == *'"total":1'* ]] || { cat app.log; echo "::error::$tfm: MCP server did not list the job"; exit 1; }
   curl -sf -X POST -H "X-Cronlight-Request: 1" "$url/api/jobs/checks/smoke/trigger" -o /dev/null || { echo "::error::$tfm: trigger failed"; exit 1; }
   for _ in $(seq 20); do
     contains "$url/api/history?status=Succeeded" '"jobName":"smoke"' && break

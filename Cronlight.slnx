@@ -4,6 +4,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Cronlight.History/Cronlight.History.csproj" />
+    <Project Path="src/Cronlight.Mcp/Cronlight.Mcp.csproj" />
     <Project Path="src/Cronlight/Cronlight.csproj" />
   </Folder>
   <Folder Name="/tests/">

@@ -149,6 +149,7 @@ jobs:
         run: |
           dotnet pack src/Cronlight --configuration Release --no-build -p:Version="$VERSION" --output artifacts
           dotnet pack src/Cronlight.History --configuration Release --no-build -p:Version="$VERSION" --output artifacts
+          dotnet pack src/Cronlight.Mcp --configuration Release --no-build -p:Version="$VERSION" --output artifacts
 
       - name: Verify packages
         run: ./build/verify-packages.sh artifacts "$VERSION"

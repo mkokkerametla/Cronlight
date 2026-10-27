@@ -473,28 +473,7 @@ internal static class DashboardApi
             .ProducesProblem(StatusCodes.Status400BadRequest);
 
         api.MapGet("/cron/preview", (string expression, string? timeZone, int? count) =>
-        {
-            if (!TryResolveTimeZone(timeZone, out var tz))
-                return Results.Ok(new CronPreviewDto(false, expression, null, [], $"Unknown time zone '{timeZone}'"));
-            try
-            {
-                var cron = new CronExpression(expression) { TimeZone = tz };
-                var times = new List<DateTimeOffset>();
-                DateTimeOffset? next = DateTimeOffset.UtcNow;
-                for (var i = 0; i < Math.Clamp(count ?? 5, 1, 10) && next != null; i++)
-                {
-                    next = cron.GetNextValidTimeAfter(next.Value);
-                    if (next != null)
-                        times.Add(next.Value);
-                }
-                // Quartz has no human-readable summary (GetExpressionSummary is a debug dump), so leave it to the UI
-                return Results.Ok(new CronPreviewDto(true, expression, null, times, null));
-            }
-            catch (FormatException ex)
-            {
-                return Results.Ok(new CronPreviewDto(false, expression, null, [], ex.Message));
-            }
-        })
+            Results.Ok(PreviewCron(expression, timeZone, Math.Clamp(count ?? 5, 1, 10))))
             .WithTags(Tags.Cron).WithSummary("Checks a cron expression and lists its next fire times")
             .WithDescription("timeZone is the zone it is read in, UTC when left out; count is how many fire times, 5 unless it says otherwise, at most 10.")
             .Produces<CronPreviewDto>();
@@ -547,7 +526,7 @@ internal static class DashboardApi
         api.MapPost("/jobs/{group}/{name}/resume", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
             OnJob(http, o.Value, group, name, ResumeJob))
             .WithTags(Tags.Jobs).WithSummary("Resumes a job's triggers, and those Quartz stopped (Error)").OnOneJob();
-        api.MapPost("/jobs/{group}/{name}/trigger", RunJob)
+        api.MapPost("/jobs/{group}/{name}/trigger", RunJobEndpoint)
             .WithTags(Tags.Runs).WithSummary("Runs a job now, optionally with some of its data replaced for this run only")
             .OnOneJob().ProducesProblem(StatusCodes.Status400BadRequest);
         api.MapDelete("/jobs/{group}/{name}", (string group, string name, HttpContext http, IOptions<CronlightOptions> o) =>
@@ -713,6 +692,31 @@ internal static class DashboardApi
         }), null);
     }
 
+    /// <summary>Whether a cron expression is valid, and its next fire times in the time zone (UTC when null).</summary>
+    internal static CronPreviewDto PreviewCron(string expression, string? timeZone, int count)
+    {
+        if (!TryResolveTimeZone(timeZone, out var tz))
+            return new CronPreviewDto(false, expression, null, [], $"Unknown time zone '{timeZone}'");
+        try
+        {
+            var cron = new CronExpression(expression) { TimeZone = tz };
+            var times = new List<DateTimeOffset>();
+            DateTimeOffset? next = DateTimeOffset.UtcNow;
+            for (var i = 0; i < count && next != null; i++)
+            {
+                next = cron.GetNextValidTimeAfter(next.Value);
+                if (next != null)
+                    times.Add(next.Value);
+            }
+            // Quartz has no human-readable summary (GetExpressionSummary is a debug dump), so leave it to the UI
+            return new CronPreviewDto(true, expression, null, times, null);
+        }
+        catch (FormatException ex)
+        {
+            return new CronPreviewDto(false, expression, null, [], ex.Message);
+        }
+    }
+
     /// <summary>The groups of endpoints the OpenAPI description lists.</summary>
     private static class Tags
     {
@@ -767,7 +771,7 @@ internal static class DashboardApi
     /// of a job it could not create in Error, and they never fire again until reset. Once the cause is fixed (a missing
     /// dependency registered, say), resuming the job lets it run.
     /// </summary>
-    private static async Task ResumeJob(IScheduler scheduler, JobKey key)
+    internal static async Task ResumeJob(IScheduler scheduler, JobKey key)
     {
         // Resetting does not wake the scheduler, which could sleep for 30 seconds before it sees the triggers; resuming does
         await ResetErrors(scheduler, key, CancellationToken.None);
@@ -835,12 +839,15 @@ internal static class DashboardApi
     /// Runs the job now, optionally with some of its data replaced for this run. The replacements go in the run's
     /// trigger data, so the saved job is unchanged and the job reads them as usual from its merged data.
     /// </summary>
-    private static async Task<IResult> RunJob(string group, string name, RunJobRequest? request, HttpContext http,
-        JobTypeCatalog catalog, IOptions<CronlightOptions> options)
+    private static async Task<IResult> RunJobEndpoint(string group, string name, RunJobRequest? request, HttpContext http,
+        JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
+        await RunJob(await Scheduler(http), JobKeyFrom(group, name), request, http, catalog, options.Value);
+
+    /// <summary>Runs the job now, as api/jobs/{group}/{name}/trigger does, in the scheduler given.</summary>
+    internal static async Task<IResult> RunJob(IScheduler scheduler, JobKey key, RunJobRequest? request, HttpContext http,
+        JobTypeCatalog catalog, CronlightOptions options)
     {
-        var scheduler = await Scheduler(http);
-        var key = JobKeyFrom(group, name);
-        var (existing, problem) = await GetManageableJob(scheduler, key, options.Value);
+        var (existing, problem) = await GetManageableJob(scheduler, key, options);
         if (problem != null)
             return problem;
 
@@ -867,7 +874,7 @@ internal static class DashboardApi
             var secretKeys = SecretKeys(existing.JobType);
             if (info != null && ValidateParameters(info, Merged(saved, overrides!)) is { } invalid)
                 return Invalid(invalid);
-            if (CheckSecretReferences(http, overrides, secretKeys, options.Value) is { } unresolved)
+            if (CheckSecretReferences(http, overrides, secretKeys, options) is { } unresolved)
                 return Invalid(unresolved);
 
             foreach (var (k, v) in overrides)
@@ -875,7 +882,7 @@ internal static class DashboardApi
                 var old = saved.TryGetValue(k, out var o) ? o : null;
                 // Keeps the saved value's type, as editing the job does
                 data[k] = old is not (null or string) ? TryConvert(v, old.GetType()) ?? v : v;
-                changes[$"data.{k}"] = new(Display(k, old?.ToString(), secretKeys, options.Value), Display(k, v, secretKeys, options.Value));
+                changes[$"data.{k}"] = new(Display(k, old?.ToString(), secretKeys, options), Display(k, v, secretKeys, options));
             }
         }
         Audit.RecordChanges(http, changes);
@@ -943,7 +950,7 @@ internal static class DashboardApi
         }
     }
 
-    private static async Task<IResult> OnJob(HttpContext http, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)
+    internal static async Task<IResult> OnJob(HttpContext http, CronlightOptions options, string group, string name, Func<IScheduler, JobKey, Task> action)
     {
         var scheduler = await Scheduler(http);
         var key = JobKeyFrom(group, name);
@@ -1299,7 +1306,7 @@ internal static class DashboardApi
     private static readonly string[] JobStatuses = ["Active", "Paused", "Unloadable", "Error"];
 
     /// <summary>The job as the dashboard shows it, or null when it does not exist (e.g. deleted meanwhile).</summary>
-    private static async Task<JobDto?> LoadJob(IScheduler scheduler, JobKey key, JobTypeCatalog catalog, CronlightOptions options)
+    internal static async Task<JobDto?> LoadJob(IScheduler scheduler, JobKey key, JobTypeCatalog catalog, CronlightOptions options)
     {
         IJobDetail? detail;
         try
@@ -1416,7 +1423,7 @@ internal static class DashboardApi
         }
     }
 
-    private static async Task<bool> CanManage(HttpContext http, CronlightOptions options, string schedulerName)
+    internal static async Task<bool> CanManage(HttpContext http, CronlightOptions options, string schedulerName)
     {
         if (options.ReadOnly)
             return false;
@@ -1425,10 +1432,10 @@ internal static class DashboardApi
             && await Authorized(http, access?.ManagePolicy ?? access?.ViewPolicy);
     }
 
-    private static async Task<bool> CanView(HttpContext http, CronlightOptions options, string schedulerName) =>
+    internal static async Task<bool> CanView(HttpContext http, CronlightOptions options, string schedulerName) =>
         !options.Schedulers.TryGetValue(schedulerName, out var access) || await Authorized(http, access.ViewPolicy);
 
-    private static async Task<bool> Authorized(HttpContext http, string? policy)
+    internal static async Task<bool> Authorized(HttpContext http, string? policy)
     {
         if (policy == null)
             return true;

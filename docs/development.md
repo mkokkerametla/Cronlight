@@ -8,6 +8,7 @@ Building, running and testing Cronlight, its CI and how releases are published.
 |---|---|
 | `src/Cronlight` | The library (net10.0). The built UI is embedded in the assembly |
 | `src/Cronlight.History` | Optional execution history: listener, database and in-memory stores, schema scripts |
+| `src/Cronlight.Mcp` | Optional MCP server: tools for AI assistants, on the dashboard's permissions and audit log |
 | `src/Cronlight.UI` | UI source: React, TypeScript, Vite, Tailwind and shadcn/ui. Built into `src/Cronlight/wwwroot` |
 | `samples/Cronlight.SampleHost` | Host app using SQLite, with an HTTP job, demo endpoints and demo `X-Demo-Role` header auth, which lets anyone claim any role: not for copying |
 | `tests/Cronlight.Tests` | Integration tests (TestServer; SQLite, PostgreSQL, SQL Server, MySQL) |
@@ -142,10 +143,10 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
    `CRONLIGHT_REQUIRE_DATABASES=true` makes a missing database fail the run rather than skip its tests. A test
    stuck for 5 minutes fails the run and names the test, and what the test hosts logged as warnings and errors
    is uploaded with the test results (`server-errors.log`).
-4. Pack both packages as `0.1.0-ci.<run>` and verify them with `build/verify-packages.sh` (net10.0 assembly,
+4. Pack the three packages as `0.1.0-ci.<run>` and verify them with `build/verify-packages.sh` (net10.0 assembly,
    UI embedded, README, license, symbols, matching dependency versions).
    `build/smoke-test.sh` then installs them into a new .NET 10 web app on Quartz 3.13.1, runs it and checks
-   the dashboard, API, OpenAPI document and history respond.
+   the dashboard, API, OpenAPI document, MCP server and history respond.
 5. Upload the packages and test results as workflow artifacts.
 6. End-to-end tests (a separate job): Playwright runs `tests/Cronlight.E2E` against the sample host and
    uploads its report when a test fails.
