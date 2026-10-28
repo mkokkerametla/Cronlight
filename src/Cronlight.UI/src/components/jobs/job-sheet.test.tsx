@@ -6,7 +6,8 @@ import { api } from '@/api'
 import { JobSheet } from '@/components/jobs/job-sheet'
 import type { DashboardActions } from '@/hooks/use-dashboard'
 import { formatDateTime } from '@/lib/format'
-import { execution, job, trigger } from '@/test/fixtures'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { execution, historyStats, job, trigger } from '@/test/fixtures'
 import type { HistoryPage, Job } from '@/types'
 
 // Recent runs, the cron preview and the next fire times ask the server
@@ -53,7 +54,12 @@ function renderSheet(subject: Job, overrides: Partial<Parameters<typeof JobSheet
       />
     )
   }
-  render(<Harness />)
+  // As main.tsx provides it
+  render(
+    <TooltipProvider>
+      <Harness />
+    </TooltipProvider>
+  )
   const poll = (next: Job) => act(() => handle.show(next))
   return { actions, onClose, onViewHistory, poll }
 }
@@ -524,17 +530,60 @@ describe('JobSheet', () => {
     const { onViewHistory } = renderSheet(job({ group: 'billing' }), { historyEnabled: true })
 
     expect(await sheet().findByText('Upstream API returned 503')).toBeInTheDocument()
-    expect(sheet().getByText('Failed')).toBeInTheDocument()
-    expect(sheet().getByText('Succeeded')).toBeInTheDocument()
-    const [path] = vi.mocked(api).mock.calls[0] as [string]
+    const runs = within(sheet().getByText('Recent runs').closest('section')!)
+    expect(runs.getByText('Failed')).toBeInTheDocument()
+    expect(runs.getByText('Succeeded')).toBeInTheDocument()
+    // More than are listed, for the chart of their durations
+    const path = vi
+      .mocked(api)
+      .mock.calls.map(c => c[0] as string)
+      .find(p => p.startsWith('history?'))!
     expect(Object.fromEntries(new URLSearchParams(path.split('?')[1]))).toMatchObject({
-      limit: '5',
+      limit: '30',
       group: 'billing',
       name: 'nightly',
     })
 
     await userEvent.click(sheet().getByRole('button', { name: /All runs/ }))
     expect(onViewHistory).toHaveBeenCalledWith('billing', 'nightly')
+  })
+
+  it("shows the job's figures for a day and a week, and its recent runs' durations", async () => {
+    history = {
+      records: [
+        execution(3, { status: 'Failed', durationMs: 4000 }),
+        execution(2, { durationMs: 1000 }),
+        execution(1, { status: 'Misfired', durationMs: null }),
+      ],
+      nextBefore: null,
+    }
+    vi.mocked(api).mockImplementation(async path => {
+      const params = new URLSearchParams((path as string).split('?')[1])
+      if ((path as string).startsWith('history/stats'))
+        return params.get('hours') === '24'
+          ? historyStats({ runs: 10, successRate: 1, averageDurationMs: 800 })
+          : historyStats({ runs: 70, successRate: 0.8, averageDurationMs: 2500 })
+      return history
+    })
+    renderSheet(job({ group: 'billing' }), { historyEnabled: true })
+
+    const table = within(await sheet().findByRole('table'))
+    const row = (label: string) =>
+      Array.from(
+        table.getByRole('rowheader', { name: label }).parentElement!.querySelectorAll('td'),
+        td => td.textContent
+      )
+    expect(await table.findByText('70')).toBeInTheDocument()
+    expect(row('Runs')).toEqual(['10', '70'])
+    expect(row('Success rate')).toEqual(['100%', '80%'])
+    expect(row('Average duration')).toEqual(['800ms', '2.5s'])
+
+    // The runs that ran, oldest first: a misfire has no duration
+    const chart = sheet().getByRole('img', { name: /Durations of the last 2 runs/ })
+    expect(chart).toHaveAccessibleName(
+      'Durations of the last 2 runs, oldest first: 1.0s succeeded, 4.0s failed'
+    )
+    expect(sheet().getByText('longest 4.0s')).toBeInTheDocument()
   })
 
   it('marks misfires, retry attempts and late starts among the recent runs', async () => {
@@ -567,8 +616,10 @@ describe('JobSheet', () => {
     vi.mocked(api).mockRejectedValue(new Error('History table is missing'))
     renderSheet(job(), { historyEnabled: true })
 
-    expect(await sheet().findByText('History table is missing')).toBeInTheDocument()
+    // The run statistics say so too, rather than load for ever
+    expect(await sheet().findAllByText('History table is missing')).toHaveLength(2)
     expect(sheet().queryByText('Loading…')).toBeNull()
+    expect(sheet().queryByRole('table')).toBeNull()
   })
 
   it('says when a job has not run yet', async () => {

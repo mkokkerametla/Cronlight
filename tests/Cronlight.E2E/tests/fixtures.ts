@@ -4,18 +4,20 @@ import os from 'node:os'
 import path from 'node:path'
 import { test as base } from '@playwright/test'
 import { sampleHostDir, sampleHostDll } from '../global-setup'
+import { SmtpReceiver } from './smtp'
 import { WebhookReceiver } from './webhooks'
 
 export { expect } from '@playwright/test'
 
 /**
- * The sample host a worker's tests run against, the SQLite file it keeps its jobs and history in, and the receiver
- * its alerts are posted to.
+ * The sample host a worker's tests run against, the SQLite file it keeps its jobs and history in, and the receivers
+ * its alerts are posted and emailed to.
  */
 export interface SampleHost {
   baseURL: string
   database: string
   webhooks: WebhookReceiver
+  mail: SmtpReceiver
 }
 
 const basePort = Number(process.env.E2E_PORT ?? 5199)
@@ -25,13 +27,17 @@ const basePort = Number(process.env.E2E_PORT ?? 5199)
  * without seeing each other's jobs or history. Within a worker, tests run one after another and share
  * the host, so they use their own job names. A worker that hits a failure is replaced, with a new host.
  */
-export const test = base.extend<object, { sampleHost: SampleHost }>({
+export const test = base.extend<object, { sampleHost: SampleHost; hostSettings: Record<string, string> }>({
+  // More of the sample host's settings, as environment variables. A file that sets them with test.use gets workers
+  // of its own, with hosts started with them
+  hostSettings: [{}, { scope: 'worker', option: true }],
   sampleHost: [
-    async ({}, use, workerInfo) => {
+    async ({ hostSettings }, use, workerInfo) => {
       const port = basePort + workerInfo.parallelIndex
       const database = path.join(os.tmpdir(), `cronlight-e2e-${process.pid}-${workerInfo.workerIndex}.db`)
       const baseURL = `http://127.0.0.1:${port}/ops/jobs/`
       const webhooks = await WebhookReceiver.start()
+      const mail = await SmtpReceiver.start()
       const host = spawn('dotnet', [sampleHostDll], {
         cwd: sampleHostDir,
         stdio: ['ignore', 'ignore', 'pipe'],
@@ -46,7 +52,9 @@ export const test = base.extend<object, { sampleHost: SampleHost }>({
           Cronlight__RefreshSeconds: '1',
           // The sample alerts after two failures in a row
           ...webhooks.settings,
+          ...mail.settings,
           CronlightAlerts__DashboardUrl: baseURL,
+          ...hostSettings,
         },
       })
       let stderr = ''
@@ -55,7 +63,7 @@ export const test = base.extend<object, { sampleHost: SampleHost }>({
 
       try {
         await waitUntilServing(`http://127.0.0.1:${port}/`, exited, () => stderr)
-        await use({ baseURL, database, webhooks })
+        await use({ baseURL, database, webhooks, mail })
       } finally {
         host.kill('SIGTERM')
         // The sample waits for running jobs on shutdown; a long one is not worth waiting for
@@ -63,6 +71,7 @@ export const test = base.extend<object, { sampleHost: SampleHost }>({
         await exited
         clearTimeout(killed)
         await webhooks.close()
+        await mail.close()
         await Promise.all(['', '-wal', '-shm'].map(suffix => rm(database + suffix, { force: true })))
       }
     },

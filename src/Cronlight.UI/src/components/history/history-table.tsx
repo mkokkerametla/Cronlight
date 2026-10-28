@@ -20,6 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { RunLog } from '@/components/history/run-log'
+import { RunStatsRow } from '@/components/history/run-stats'
 import { ExecutionStatusBadge } from '@/components/jobs/status-badge'
 import { useHistory } from '@/hooks/use-history'
 import { useRefreshInterval } from '@/hooks/use-polling'
@@ -32,6 +33,7 @@ import {
   recordTime,
   shortType,
   startedLate,
+  statsPeriods,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { ExecutionRecord, ExecutionStatus, HistoryFilter, JobType } from '@/types'
@@ -45,6 +47,8 @@ interface Props {
   onRetry?: (record: ExecutionRecord) => Promise<boolean>
   /** The job types the dashboard describes, so a run shows its type's name as the job list does */
   jobTypes?: JobType[]
+  /** This node's scheduler instance id: only the node running a job has its log so far */
+  localInstanceId?: string
 }
 
 // Runs that ended without succeeding and will not be retried automatically
@@ -57,7 +61,12 @@ export function HistoryTable({
   canManage = false,
   onRetry,
   jobTypes = [],
+  localInstanceId,
 }: Props) {
+  // A run going on here shows its log so far; one on another node only once it has finished
+  const liveLog = (r: ExecutionRecord) =>
+    r.status === 'Running' && localInstanceId !== undefined && r.instanceName === localInstanceId
+  const logged = (r: ExecutionRecord) => r.hasLog || liveLog(r)
   const typeName = (type: string | null) =>
     jobTypes.find(t => t.typeName === type)?.displayName ?? shortType(type)
   const {
@@ -74,6 +83,7 @@ export function HistoryTable({
   } = useHistory(filter)
   const refreshMs = useRefreshInterval()
   const [openLog, setOpenLog] = useState<number | null>(null)
+  const [hours, setHours] = useState(24)
   const columns = canManage && onRetry ? 6 : 5
 
   return (
@@ -102,6 +112,18 @@ export function HistoryTable({
             <SelectItem value="Misfired">Misfired</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={String(hours)} onValueChange={v => setHours(Number(v))}>
+          <SelectTrigger className="w-40" aria-label="Period of the figures">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {statsPeriods.map(p => (
+              <SelectItem key={p.hours} value={String(p.hours)}>
+                {p.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {filter.job && (
           <Badge variant="secondary" className="gap-1 py-1">
             {filter.job.group}.{filter.job.name}
@@ -125,6 +147,8 @@ export function HistoryTable({
           </span>
         )}
       </div>
+
+      <RunStatsRow job={filter.job} hours={hours} filtered={filter.status !== 'all'} />
 
       {error && (
         <Alert variant="destructive">
@@ -206,7 +230,7 @@ export function HistoryTable({
                             </span>
                           </>
                         )}
-                        {r.hasLog && (
+                        {logged(r) && (
                           <>
                             {' · '}
                             <button
@@ -216,7 +240,7 @@ export function HistoryTable({
                               onClick={() => setOpenLog(openLog === r.id ? null : r.id)}
                             >
                               <ScrollText className="size-3" />
-                              {openLog === r.id ? 'hide log' : 'log'}
+                              {openLog === r.id ? 'hide log' : liveLog(r) ? 'log so far' : 'log'}
                             </button>
                           </>
                         )}
@@ -260,10 +284,19 @@ export function HistoryTable({
                       </TableCell>
                     )}
                   </TableRow>
-                  {openLog === r.id && (
+                  {openLog === r.id && logged(r) && (
                     <TableRow className="hover:bg-transparent">
                       <TableCell colSpan={columns} className="whitespace-normal">
-                        <RunLog id={r.id} />
+                        {/* Keyed apart, so a run that finishes loads its saved log afresh */}
+                        {liveLog(r) ? (
+                          <RunLog
+                            key="live"
+                            path={`running/${encodeURIComponent(r.fireInstanceId)}/log`}
+                            live
+                          />
+                        ) : (
+                          <RunLog key="saved" path={`history/${r.id}/log`} />
+                        )}
                       </TableCell>
                     </TableRow>
                   )}

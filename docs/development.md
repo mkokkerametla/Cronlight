@@ -108,11 +108,15 @@ Chromium: creating, editing, pausing, running and deleting jobs (several trigger
 one-time and interval triggers, the next five fire times, manual-only jobs, secrets kept on edit, secret
 references), cron schedules firing on their own, bulk pause and resume, pausing a group or every job,
 search, filters and paging of the job list, the stat cards, the running jobs view and cancelling a run,
-history (paging, job filter, failing and succeeding HTTP jobs, run logs with secrets masked), retries,
+history (paging, job filter, failing and succeeding HTTP jobs, run logs with secrets masked, a running job's log so
+far, run statistics on the History tab and a job's page), retries,
 running a job with different data, running a failed run again, exporting and importing jobs, read-only jobs from
 other apps sharing the scheduler, server errors, changes made elsewhere, a lost connection, viewer and anonymous
 access, the scheduler details and the theme switch. Each worker also runs a webhook receiver that its host posts
-alerts to, as JSON, Slack and Teams webhooks, for the tests of failure and recovery alerts.
+alerts to, as JSON, Slack and Teams webhooks, and an SMTP receiver it emails them to (`tests/webhooks.ts`,
+`tests/smtp.ts`), for the tests of failure, recovery and misfire alerts. A file that needs other host settings sets
+them with `test.use({ hostSettings })` and gets workers and hosts of its own: the misfire test's host counts a
+trigger 3 seconds late as missed (`Quartz:quartz.jobStore.misfireThreshold`) and alerts on misfires.
 They need Node.js 22.13 or later, for its built-in SQLite module.
 
 ```bash
@@ -163,7 +167,7 @@ API or the dashboard may need the demo changed too.
 git tag v0.1.0-beta.3 && git push origin v0.1.0-beta.3   # a -suffix marks a prerelease
 ```
 
-It runs the full CI pipeline with the tag's version, then, in the `nuget` environment, pushes both packages and
+It runs the full CI pipeline with the tag's version, then, in the `nuget` environment, pushes the three packages and
 symbols to nuget.org and creates a GitHub release with generated notes. A flaky test can fail the CI part; re-run
 the failed jobs and the release carries on.
 

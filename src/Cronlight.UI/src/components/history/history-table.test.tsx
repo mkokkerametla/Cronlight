@@ -2,12 +2,15 @@ import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '@/api'
+import { api, ApiError } from '@/api'
 import { HistoryTable } from '@/components/history/history-table'
-import { execution } from '@/test/fixtures'
+import { execution, historyStats } from '@/test/fixtures'
 import type { ExecutionRecord, HistoryFilter, HistoryPage, JobType } from '@/types'
 
-vi.mock('@/api', () => ({ api: vi.fn() }))
+vi.mock('@/api', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/api')>()),
+  api: vi.fn(),
+}))
 
 let pages: Record<string, HistoryPage>
 const onOpenJob = vi.fn()
@@ -22,6 +25,7 @@ function Harness({
   onRetry?: (record: ExecutionRecord) => Promise<boolean>
   jobTypes?: JobType[]
 }) {
+  // The fixtures' runs are on node-1, the node serving the dashboard
   const [filter, setFilter] = useState(initial)
   return (
     <HistoryTable
@@ -31,20 +35,26 @@ function Harness({
       canManage={onRetry !== undefined}
       onRetry={onRetry}
       jobTypes={jobTypes}
+      localInstanceId="node-1"
     />
   )
 }
 
 const all: HistoryFilter = { status: 'all', job: null }
+const calls = (prefix: string) =>
+  vi
+    .mocked(api)
+    .mock.calls.map(c => c[0] as string)
+    .filter(path => path.startsWith(prefix))
+/** The query of the nth request for the list of runs */
 const query = (call: number) =>
-  Object.fromEntries(
-    new URLSearchParams((vi.mocked(api).mock.calls[call][0] as string).split('?')[1])
-  )
+  Object.fromEntries(new URLSearchParams(calls('history?')[call].split('?')[1]))
 
 describe('HistoryTable', () => {
   beforeEach(() => {
     pages = {}
     vi.mocked(api).mockImplementation(async path => {
+      if ((path as string).startsWith('history/stats')) return historyStats()
       const params = new URLSearchParams((path as string).split('?')[1])
       return (
         pages[params.get('before') ?? params.get('status') ?? 'all'] ?? {
@@ -227,6 +237,32 @@ describe('HistoryTable', () => {
     expect(screen.getByText('own data')).toHaveAttribute('title', 'region = us\ncursor = 5')
   })
 
+  it('shows the figures for the job and period it is filtered to, over every outcome', async () => {
+    render(<Harness initial={{ status: 'all', job: { group: 'billing', name: 'invoices' } }} />)
+
+    const figures = within(await screen.findByRole('region', { name: 'Run statistics' }))
+    const figure = (label: string) => figures.getByText(label).nextElementSibling?.textContent
+    expect(await figures.findByText('40')).toBeInTheDocument()
+    expect(figure('Success rate')).toBe('92.5%')
+    // Failed and blocked
+    expect(figure('Failures')).toBe('3')
+    expect(figure('Average duration')).toBe('1.2s')
+    expect(figure('P95 duration')).toBe('4.5s')
+    expect(figures.getByText(/3 retries · 1 blocked/)).toBeInTheDocument()
+    const stats = (n: number) =>
+      Object.fromEntries(new URLSearchParams(calls('history/stats')[n].split('?')[1]))
+    expect(stats(0)).toEqual({ hours: '24', group: 'billing', name: 'invoices' })
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Period of the figures' }))
+    await userEvent.click(await screen.findByRole('option', { name: 'Last 7 days' }))
+    expect(stats(calls('history/stats').length - 1)).toMatchObject({ hours: '168' })
+
+    // The outcome filter is the list's: a success rate over failures alone says nothing
+    await userEvent.click(screen.getByRole('combobox', { name: 'Filter by outcome' }))
+    await userEvent.click(await screen.findByRole('option', { name: 'Failed' }))
+    expect(calls('history/stats').every(path => !path.includes('status'))).toBe(true)
+  })
+
   describe('run log', () => {
     const log = (id: number, answer: (signal: AbortSignal) => Promise<unknown>) => {
       const fallback = vi.mocked(api).getMockImplementation()!
@@ -294,7 +330,15 @@ describe('HistoryTable', () => {
       const signals: AbortSignal[] = []
       log(5, signal => {
         signals.push(signal)
-        if (signals.length > 1) return Promise.resolve([])
+        if (signals.length > 1)
+          return Promise.resolve([
+            {
+              timeUtc: '2030-01-01T00:00:01Z',
+              level: 'Information',
+              category: 'Acme',
+              message: 'Started',
+            },
+          ])
         // As fetch does when its request is aborted
         return new Promise((_, reject) =>
           signal.addEventListener('abort', () =>
@@ -312,10 +356,132 @@ describe('HistoryTable', () => {
       expect(await screen.findByRole('list', { name: 'Run log' })).toBeInTheDocument()
       expect(signals).toHaveLength(2)
     })
+    it("reads a running run's log so far until it ends", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      pages.all = {
+        records: [execution(9, { status: 'Running', fireInstanceId: 'fire 9', durationMs: null })],
+        nextBefore: null,
+      }
+      const entry = (message: string) => ({
+        timeUtc: '2030-01-01T00:00:01Z',
+        level: 'Information' as const,
+        category: 'Acme',
+        message,
+      })
+      let answer: () => Promise<unknown> = async () => [entry('Started')]
+      const fallback = vi.mocked(api).getMockImplementation()!
+      vi.mocked(api).mockImplementation(async (path, options) =>
+        path === 'running/fire%209/log' ? answer() : fallback(path, options)
+      )
+      render(<Harness initial={all} />)
+
+      await user.click(await screen.findByRole('button', { name: 'log so far' }))
+      const log = await screen.findByRole('list', { name: 'Run log so far' })
+      expect(within(log).getAllByRole('listitem')).toHaveLength(1)
+
+      answer = async () => [entry('Started'), entry('Halfway')]
+      await act(() => vi.advanceTimersByTimeAsync(2000))
+      expect(within(log).getAllByRole('listitem')).toHaveLength(2)
+
+      // A read that fails for a moment keeps what was read, and the next one tries again
+      answer = async () => {
+        throw new ApiError('Bad gateway', 502)
+      }
+      await act(() => vi.advanceTimersByTimeAsync(2000))
+      expect(
+        screen.getByText(/Could not read the log just now \(Bad gateway\)/)
+      ).toBeInTheDocument()
+      expect(within(log).getAllByRole('listitem')).toHaveLength(2)
+      answer = async () => [entry('Started'), entry('Halfway'), entry('Nearly')]
+      await act(() => vi.advanceTimersByTimeAsync(2000))
+      expect(within(log).getAllByRole('listitem')).toHaveLength(3)
+      expect(screen.queryByText(/Could not read the log just now/)).toBeNull()
+
+      // Gone from this node: no more to read
+      answer = async () => {
+        throw new ApiError('Run fire 9 is not running on this node. It may have finished.', 404)
+      }
+      await act(() => vi.advanceTimersByTimeAsync(2000))
+      expect(screen.getByText(/It may have finished/)).toBeInTheDocument()
+      const reads = calls('running/').length
+      await act(() => vi.advanceTimersByTimeAsync(6000))
+      expect(calls('running/')).toHaveLength(reads)
+    })
+
+    it('does not read a live log again while a read is still waiting', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      pages.all = {
+        records: [execution(9, { status: 'Running', durationMs: null })],
+        nextBefore: null,
+      }
+      let answer!: (entries: unknown) => void
+      const fallback = vi.mocked(api).getMockImplementation()!
+      vi.mocked(api).mockImplementation(async (path, options) =>
+        (path as string).startsWith('running/')
+          ? new Promise(resolve => (answer = resolve))
+          : fallback(path, options)
+      )
+      render(<Harness initial={all} />)
+
+      await user.click(await screen.findByRole('button', { name: 'log so far' }))
+      await act(() => vi.advanceTimersByTimeAsync(7000))
+      expect(calls('running/')).toHaveLength(1)
+      await act(async () => answer([]))
+      expect(screen.getByText('Nothing logged yet.')).toBeInTheDocument()
+    })
+
+    it('shows the saved log once a run it showed live has finished', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      pages.all = {
+        records: [execution(9, { status: 'Running', durationMs: null })],
+        nextBefore: null,
+      }
+      const fallback = vi.mocked(api).getMockImplementation()!
+      vi.mocked(api).mockImplementation(async (path, options) => {
+        if ((path as string).startsWith('running/'))
+          throw new ApiError('Run fire-9 is not running on this node. It may have finished.', 404)
+        if (path === 'history/9/log')
+          return [
+            {
+              timeUtc: '2030-01-01T00:00:01Z',
+              level: 'Information',
+              category: 'Acme',
+              message: 'All done',
+            },
+          ]
+        return fallback(path, options)
+      })
+      render(<Harness initial={all} />)
+      await user.click(await screen.findByRole('button', { name: 'log so far' }))
+      expect(await screen.findByText(/It may have finished/)).toBeInTheDocument()
+
+      // The next refresh finds it finished, with its log
+      pages.all = { records: [execution(9, { hasLog: true })], nextBefore: null }
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+      expect(await screen.findByText('All done')).toBeInTheDocument()
+      expect(screen.queryByText(/It may have finished/)).toBeNull()
+    })
+
+    it('offers no log so far for a run on another node, which has it', async () => {
+      pages.all = {
+        records: [execution(9, { status: 'Running', durationMs: null, instanceName: 'node-2' })],
+        nextBefore: null,
+      }
+      render(<Harness initial={all} />)
+
+      expect(await screen.findByText('node-2')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'log so far' })).toBeNull()
+    })
   })
 
   it('shows a load error', async () => {
-    vi.mocked(api).mockRejectedValue(new Error('History table is missing'))
+    vi.mocked(api).mockImplementation(async path => {
+      if ((path as string).startsWith('history/stats')) return historyStats()
+      throw new Error('History table is missing')
+    })
     render(<Harness initial={all} />)
 
     expect(await screen.findByText('History table is missing')).toBeInTheDocument()
@@ -327,17 +493,17 @@ describe('HistoryTable', () => {
     pages.all = { records: [execution(3, { status: 'Failed' })], nextBefore: null }
     const { unmount } = render(<Harness initial={all} onRetry={vi.fn(async () => true)} />)
     const runAgain = await screen.findByRole('button', { name: /Run .* again/ })
-    const calls = () => vi.mocked(api).mock.calls.length
+    const requests = () => calls('history?').length
 
     await user.click(runAgain)
-    const before = calls()
+    const before = requests()
     await act(() => vi.advanceTimersByTimeAsync(1000))
-    expect(calls()).toBe(before + 1)
+    expect(requests()).toBe(before + 1)
 
     await user.click(runAgain)
     unmount()
     await act(() => vi.advanceTimersByTimeAsync(1000))
-    expect(calls()).toBe(before + 1)
+    expect(requests()).toBe(before + 1)
   })
 
   describe('while the pointer is over it', () => {

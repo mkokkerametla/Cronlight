@@ -310,6 +310,38 @@ export interface HistorySummary {
   running: number
 }
 
+/** Runs counted by outcome, with durations and late starts (api/history/stats) */
+export interface RunStatistics {
+  /** Runs that came to an end: succeeded, failed, blocked or cancelled; retried attempts are not runs of their own */
+  runs: number
+  succeeded: number
+  failed: number
+  vetoed: number
+  cancelled: number
+  /** Attempts that failed and were retried */
+  retries: number
+  misfires: number
+  running: number
+  /** Succeeded out of succeeded, failed and blocked, from 0 to 1; null without any */
+  successRate: number | null
+  /** Over attempts that ran: succeeded, failed, retried and cancelled */
+  averageDurationMs: number | null
+  medianDurationMs: number | null
+  p95DurationMs: number | null
+  maxDurationMs: number | null
+  /** Attempts that started 5 seconds or more after their scheduled time */
+  lateStarts: number
+  maxLateMs: number | null
+  /** The store read only the newest 20,000 runs, so the figures cover those */
+  truncated?: boolean
+}
+
+export interface HistoryStats {
+  fromUtc: string
+  toUtc: string
+  stats: RunStatistics
+}
+
 export interface HistoryFilter {
   status: ExecutionStatus | 'all'
   job: { group: string; name: string } | null

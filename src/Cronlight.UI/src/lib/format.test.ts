@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  formatRate,
   describeMisfire,
   describeRetry,
   everySeconds,
@@ -249,5 +250,13 @@ describe('misfires and late starts', () => {
         retryOn: ['TimeoutException'],
       })
     ).toBe('1 retry, after 30s, only on TimeoutException')
+  })
+
+  it('gives a success rate as a percentage, never rounded up to 100%', () => {
+    expect(formatRate(1)).toBe('100%')
+    expect(formatRate(0.9999)).toBe('99.9%')
+    expect(formatRate(0.925)).toBe('92.5%')
+    expect(formatRate(0.5)).toBe('50%')
+    expect(formatRate(null)).toBe('-')
   })
 })

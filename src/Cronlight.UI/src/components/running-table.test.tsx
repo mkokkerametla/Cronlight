@@ -1,9 +1,15 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import { api } from '@/api'
 import { RunningTable } from '@/components/running-table'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { RunningJob, RunningJobs } from '@/types'
+
+vi.mock('@/api', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/api')>()),
+  api: vi.fn(),
+}))
 
 const renderTable = (
   running: RunningJobs,
@@ -98,5 +104,49 @@ describe('RunningTable', () => {
     renderTable({ source: 'local', jobs: [run()] }, { canManage: false, onCancel: vi.fn() })
 
     expect(screen.queryByRole('button', { name: 'Cancel invoices' })).not.toBeInTheDocument()
+  })
+
+  describe('log so far', () => {
+    it('shows what a run on this node has logged so far', async () => {
+      vi.mocked(api).mockResolvedValue([
+        {
+          timeUtc: '2030-01-01T09:00:01Z',
+          level: 'Information',
+          category: 'Acme',
+          message: 'Sent 40 of 120',
+        },
+      ])
+      renderTable(
+        { source: 'cluster', jobs: [run({ instanceName: 'node-1' })] },
+        { logs: true, localInstanceId: 'node-1' }
+      )
+
+      await userEvent.click(screen.getByRole('button', { name: 'Log of invoices' }))
+
+      const log = await screen.findByRole('list', { name: 'Run log so far' })
+      expect(within(log).getByText('Sent 40 of 120')).toBeInTheDocument()
+      expect(api).toHaveBeenCalledWith('running/fire-1/log', expect.anything())
+      await userEvent.click(screen.getByRole('button', { name: 'Hide the log of invoices' }))
+      expect(screen.queryByRole('list', { name: 'Run log so far' })).toBeNull()
+    })
+
+    it("says that another node's run shows its log on that node", async () => {
+      renderTable(
+        { source: 'cluster', jobs: [run({ instanceName: 'node-2' })] },
+        { logs: true, localInstanceId: 'node-1' }
+      )
+
+      const button = screen.getByRole('button', { name: 'Log of invoices' })
+      expect(button).toBeDisabled()
+      await userEvent.hover(button.parentElement!)
+      expect(await screen.findByRole('tooltip')).toHaveTextContent(
+        /Runs on node-2, which has its log so far/
+      )
+    })
+
+    it('offers no log without execution history, which keeps runs logs', () => {
+      renderTable({ source: 'local', jobs: [run()] })
+      expect(screen.queryByRole('button', { name: 'Log of invoices' })).toBeNull()
+    })
   })
 })

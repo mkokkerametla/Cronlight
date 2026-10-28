@@ -5,25 +5,15 @@ using ModelContextProtocol.Server;
 
 namespace Cronlight.Mcp;
 
-/// <summary>Runs counted by outcome, with durations and late starts.</summary>
-/// <param name="Runs">Runs that came to an end: succeeded, failed, blocked or cancelled. Retried attempts are not runs of their own.</param>
-/// <param name="Vetoed">Blocked before they ran, e.g. by a secret that could not be found.</param>
-/// <param name="Retries">Attempts that failed and were retried; the run's outcome is its last attempt's.</param>
-/// <param name="Misfires">Fire times the scheduler missed.</param>
-/// <param name="SuccessRate">Succeeded out of succeeded, failed and blocked, from 0 to 1; null without any.</param>
-/// <param name="AverageDurationMs">Over attempts that ran: succeeded, failed, retried and cancelled.</param>
-/// <param name="P95DurationMs">95% of attempts took this long or less.</param>
-/// <param name="LateStarts">Attempts that started 5 seconds or more after their scheduled time.</param>
-internal record RunStats(int Runs, int Succeeded, int Failed, int Vetoed, int Cancelled, int Retries, int Misfires, int Running,
-    double? SuccessRate, long? AverageDurationMs, long? MedianDurationMs, long? P95DurationMs, long? MaxDurationMs, int LateStarts,
-    long? MaxLateMs);
-
 /// <param name="Previous">The same figures for the window of the same length just before, when asked to compare.</param>
-internal record JobStats(string JobGroup, string JobName, RunStats Stats, RunStats? Previous);
+internal record JobStats(string JobGroup, string JobName, JobRunStatistics Stats, JobRunStatistics? Previous);
 
-/// <param name="Truncated">More runs were recorded in the window than were read (20,000), so the figures cover the newest ones only.</param>
+/// <param name="Truncated">
+/// More runs were recorded in the window than were read (20,000), so the jobs' figures cover the newest ones only. The
+/// totals are the store's, over every run.
+/// </param>
 /// <param name="TotalJobs">Jobs with runs in the window; Jobs lists the first of them, in the order asked for.</param>
-internal record RunStatistics(TimeWindow Window, TimeWindow? PreviousWindow, bool Truncated, RunStats Totals, RunStats? PreviousTotals,
+internal record RunStatistics(TimeWindow Window, TimeWindow? PreviousWindow, bool Truncated, JobRunStatistics Totals, JobRunStatistics? PreviousTotals,
     int TotalJobs, IReadOnlyList<JobStats> Jobs);
 
 /// <param name="StartUtc">The start of the hour or day; each bucket runs until the next one starts.</param>
@@ -49,7 +39,6 @@ internal record ErrorPatterns(TimeWindow Window, bool Truncated, int Errors, IRe
 [McpServerToolType]
 internal sealed partial class CronlightMcpAnalytics(McpAccess access)
 {
-    private static readonly TimeSpan LateStart = TimeSpan.FromSeconds(5);
     private static readonly string[] Sorts = ["failures", "runs", "successRate", "p95Duration", "slowdown"];
 
     [McpServerTool(Name = "run_statistics", Title = "Run statistics", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
@@ -76,12 +65,16 @@ internal sealed partial class CronlightMcpAnalytics(McpAccess access)
             throw new McpException("Sorting by slowdown compares with the window before: set compare to true.");
 
         var window = TimeWindow.Resolve(hours, fromUtc, toUtc);
-        var (records, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window, group, name, null, cancellationToken);
-        var previous = compare ? await HistoryScan.Read(access.History, s.SchedulerName, window.Previous, group, name, null, cancellationToken) : default;
-        var before = compare ? previous.Records.GroupBy(r => (r.JobGroup, r.JobName)).ToDictionary(g => g.Key, g => Stats(g.ToList())) : null;
+        var (records, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window.FromUtc, window.ToUtc, group, name, null, cancellationToken);
+        var previous = compare
+            ? await HistoryScan.Read(access.History, s.SchedulerName, window.Previous.FromUtc, window.Previous.ToUtc, group, name, null, cancellationToken)
+            : default;
+        var before = compare
+            ? previous.Records.GroupBy(r => (r.JobGroup, r.JobName)).ToDictionary(g => g.Key, g => HistoryStatistics.Compute(g.ToList()))
+            : null;
 
         var jobs = records.GroupBy(r => (r.JobGroup, r.JobName))
-            .Select(g => new JobStats(g.Key.JobGroup, g.Key.JobName, Stats(g.ToList()), before?.GetValueOrDefault(g.Key)))
+            .Select(g => new JobStats(g.Key.JobGroup, g.Key.JobName, HistoryStatistics.Compute(g.ToList()), before?.GetValueOrDefault(g.Key)))
             .ToList();
         IOrderedEnumerable<JobStats> sorted = sort.ToLowerInvariant() switch
         {
@@ -92,8 +85,11 @@ internal sealed partial class CronlightMcpAnalytics(McpAccess access)
                 .OrderByDescending(j => (double)j.Stats.P95DurationMs!.Value / j.Previous!.P95DurationMs!.Value),
             _ => jobs.OrderByDescending(j => j.Stats.Failed + j.Stats.Vetoed).ThenByDescending(j => j.Stats.Runs),
         };
-        return new RunStatistics(window, compare ? window.Previous : null, truncated || previous.Truncated, Stats(records),
-            compare ? Stats(previous.Records) : null, jobs.Count,
+        // The totals as the store counts them, as the dashboard shows them: over every run, however many
+        Task<JobRunStatistics> Totals(TimeWindow w) => access.History.Statistics(s.SchedulerName,
+            new JobHistoryQuery { JobGroup = group, JobName = name, FiredFromUtc = w.FromUtc, FiredBeforeUtc = w.ToUtc }, cancellationToken);
+        return new RunStatistics(window, compare ? window.Previous : null, truncated || previous.Truncated, await Totals(window),
+            compare ? await Totals(window.Previous) : null, jobs.Count,
             sorted.ThenBy(j => j.JobGroup).ThenBy(j => j.JobName).Take(Math.Clamp(limit, 1, 100)).ToList());
     }
 
@@ -120,7 +116,7 @@ internal sealed partial class CronlightMcpAnalytics(McpAccess access)
         var window = TimeWindow.Resolve(hours, fromUtc, toUtc);
         if (window.Length / size > 24 * 31)
             throw new McpException("That is more than 744 buckets: use day buckets, or a shorter window.");
-        var (records, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window, group, name, null, cancellationToken);
+        var (records, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window.FromUtc, window.ToUtc, group, name, null, cancellationToken);
 
         DateTimeOffset Start(DateTimeOffset time) => new(time.UtcTicks - time.UtcTicks % size.Ticks, TimeSpan.Zero);
         var counted = records.GroupBy(r => Start(r.FiredTimeUtc)).ToDictionary(g => g.Key, g => g.ToList());
@@ -151,7 +147,7 @@ internal sealed partial class CronlightMcpAnalytics(McpAccess access)
     {
         var s = await access.View(scheduler, cancellationToken);
         var window = TimeWindow.Resolve(hours, fromUtc, toUtc);
-        var (records, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window, group, null, null, cancellationToken);
+        var (records, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window.FromUtc, window.ToUtc, group, null, null, cancellationToken);
         var errors = records
             .Where(r => r.Error != null && r.Status is JobExecutionStatus.Failed or JobExecutionStatus.Retried or JobExecutionStatus.Vetoed)
             .ToList();
@@ -167,40 +163,6 @@ internal sealed partial class CronlightMcpAnalytics(McpAccess access)
             .ToList();
         return new ErrorPatterns(window, truncated, errors.Count, patterns);
     }
-
-    /// <summary>The figures for some runs of one job, or of many.</summary>
-    internal static RunStats Stats(IReadOnlyList<JobExecutionRecord> records)
-    {
-        int Count(JobExecutionStatus status) => records.Count(r => r.Status == status);
-        var succeeded = Count(JobExecutionStatus.Succeeded);
-        var failed = Count(JobExecutionStatus.Failed);
-        var vetoed = Count(JobExecutionStatus.Vetoed);
-        var cancelled = Count(JobExecutionStatus.Cancelled);
-        var decided = succeeded + failed + vetoed;
-
-        var durations = records
-            .Where(r => r.DurationMs != null && r.Status is JobExecutionStatus.Succeeded or JobExecutionStatus.Failed
-                or JobExecutionStatus.Retried or JobExecutionStatus.Cancelled)
-            .Select(r => r.DurationMs!.Value)
-            .Order()
-            .ToList();
-        // A misfire's fired time is when Quartz noticed it, not a start
-        var late = records
-            .Where(r => r.Status != JobExecutionStatus.Misfired && r.ScheduledFireTimeUtc != null)
-            .Select(r => r.FiredTimeUtc - r.ScheduledFireTimeUtc!.Value)
-            .Where(d => d >= LateStart)
-            .ToList();
-
-        return new RunStats(decided + cancelled, succeeded, failed, vetoed, cancelled, Count(JobExecutionStatus.Retried),
-            Count(JobExecutionStatus.Misfired), Count(JobExecutionStatus.Running),
-            decided == 0 ? null : Math.Round((double)succeeded / decided, 4),
-            durations.Count == 0 ? null : (long)durations.Average(), Percentile(durations, 0.5), Percentile(durations, 0.95),
-            durations.Count == 0 ? null : durations[^1], late.Count, late.Count == 0 ? null : (long)late.Max().TotalMilliseconds);
-    }
-
-    /// <summary>The nearest-rank percentile of sorted values.</summary>
-    private static long? Percentile(List<long> sorted, double p) =>
-        sorted.Count == 0 ? null : sorted[Math.Max(0, (int)Math.Ceiling(p * sorted.Count) - 1)];
 
     private static string FirstLine(string error)
     {

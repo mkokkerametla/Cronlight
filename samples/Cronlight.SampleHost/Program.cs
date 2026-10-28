@@ -25,6 +25,8 @@ builder.Services.AddQuartz(q =>
         store.PerformSchemaValidation = true;
     });
 });
+// Quartz properties from configuration too, e.g. Quartz:quartz.jobStore.misfireThreshold (in milliseconds)
+builder.Services.Configure<QuartzOptions>(builder.Configuration.GetSection("Quartz"));
 builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
 // A second, in-memory scheduler built in code, to show the dashboard's scheduler picker
 builder.Services.AddHostedService<ReportsScheduler>();

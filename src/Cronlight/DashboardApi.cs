@@ -168,6 +168,9 @@ internal record SchedulerDto(
 /// <param name="NextBefore">The before= value of the next page; null on the last page.</param>
 internal record HistoryPageDto(IReadOnlyList<JobExecutionRecord> Records, long? NextBefore);
 
+/// <summary>Figures over the runs that started from <paramref name="FromUtc"/> until <paramref name="ToUtc"/>.</summary>
+internal record HistoryStatsDto(DateTimeOffset FromUtc, DateTimeOffset ToUtc, JobRunStatistics Stats);
+
 internal record JobKeyDto(string Name, string Group);
 
 internal record MessageDto(string Message);
@@ -391,6 +394,22 @@ internal static class DashboardApi
             .WithDescription("Read from the job store, which covers every node of a cluster (source: cluster), or else this node's runs (source: local).")
             .Produces<RunningJobsDto>();
 
+        api.MapGet("/running/{fireInstanceId}/log", async (string fireInstanceId, HttpContext http, CancellationToken ct) =>
+        {
+            var scheduler = await Scheduler(http, ct);
+            var run = (await scheduler.GetCurrentlyExecutingJobs(ct)).FirstOrDefault(c => c.FireInstanceId == fireInstanceId);
+            if (run == null)
+                return Missing($"Run {fireInstanceId} is not running on this node. It may have finished, and its log is then in History; " +
+                               "a run on another node shows its log so far on that node's dashboard.");
+            // Listed a moment before it starts, and makes its log: nothing logged yet
+            return run.JobInstance is IKeepsRunLog job
+                ? Results.Ok(job.Log?.Read() ?? [])
+                : Missing("What this run logs is not kept: run logs need execution history, with CaptureLogs on.");
+        })
+            .WithTags(Tags.Runs).WithSummary("What a run going on now has logged so far")
+            .WithDescription("Only the node running it has its log: 404 on another node, and once it has finished, when its log is in history.")
+            .Produces<IReadOnlyList<JobRunLogEntry>>().ProducesProblem(StatusCodes.Status404NotFound);
+
         // History is optional: these return 404 unless the Cronlight.History package is registered
         api.MapGet("/history", async (HttpContext http, string? group, string? name, string? status, long? before, int? limit, CancellationToken ct) =>
         {
@@ -446,6 +465,42 @@ internal static class DashboardApi
         })
             .WithTags(Tags.History).WithSummary("How many runs succeeded and failed in the last hours (24 unless hours says otherwise)")
             .Produces<JobHistorySummary>().ProducesProblem(StatusCodes.Status404NotFound);
+
+        api.MapGet("/history/stats", async (HttpContext http, string? group, string? name, string? status, int? hours, DateTimeOffset? from,
+            DateTimeOffset? to, CancellationToken ct) =>
+        {
+            if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
+                return Missing("Execution history is not enabled.");
+            JobExecutionStatus? statusFilter = null;
+            if (status != null)
+            {
+                if (!Enum.TryParse<JobExecutionStatus>(status, ignoreCase: true, out var parsed))
+                    return Invalid($"Unknown status '{status}'");
+                statusFilter = parsed;
+            }
+            var end = to ?? DateTimeOffset.UtcNow;
+            var start = from ?? end.AddHours(-Math.Clamp(hours ?? 24, 1, 24 * 90));
+            if (start >= end)
+                return Invalid("The period starts at or after it ends");
+            if (end - start > TimeSpan.FromDays(90))
+                return Invalid("The period is longer than 90 days");
+
+            var scheduler = await Scheduler(http, ct);
+            var stats = await store.Statistics(scheduler.SchedulerName, new JobHistoryQuery
+            {
+                JobGroup = group,
+                JobName = name,
+                Status = statusFilter,
+                FiredFromUtc = start,
+                FiredBeforeUtc = end,
+            }, ct);
+            return Results.Ok(new HistoryStatsDto(start, end, stats));
+        })
+            .WithTags(Tags.History).WithSummary("Runs by outcome, success rate and durations over a period")
+            .WithDescription("The period is the last 24 hours unless hours, or from and to, say otherwise, at most 90 days. group and name pick " +
+                "one job's runs, and status one outcome. A run is counted by its outcome, a retried attempt as a retry; durations are over " +
+                "attempts that ran, and the median and P95 by nearest rank. 404 when execution history is not enabled.")
+            .Produces<HistoryStatsDto>().ProducesProblem(StatusCodes.Status400BadRequest).ProducesProblem(StatusCodes.Status404NotFound);
 
         api.MapGet("/jobs/export", JobTransfer.Export)
             .WithTags(Tags.Transfer).WithSummary("Exports the jobs to a JSON or YAML file")

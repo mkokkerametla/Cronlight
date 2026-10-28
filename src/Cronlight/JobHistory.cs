@@ -93,6 +93,30 @@ public record JobHistoryQuery
 
 public record JobHistorySummary(DateTimeOffset SinceUtc, int Succeeded, int Failed, int Vetoed, int Running);
 
+/// <summary>Runs counted by outcome, with durations and late starts.</summary>
+/// <param name="Runs">Runs that came to an end: succeeded, failed, blocked or cancelled. Retried attempts are not runs of their own.</param>
+/// <param name="Vetoed">Blocked before they ran, e.g. by a secret that could not be found.</param>
+/// <param name="Retries">Attempts that failed and were retried; the run's outcome is its last attempt's.</param>
+/// <param name="Misfires">Fire times the scheduler missed.</param>
+/// <param name="Running">Attempts still running.</param>
+/// <param name="SuccessRate">Succeeded out of succeeded, failed and blocked, from 0 to 1; null without any.</param>
+/// <param name="AverageDurationMs">Over attempts that ran: succeeded, failed, retried and cancelled.</param>
+/// <param name="MedianDurationMs">Half of those attempts took this long or less (nearest rank).</param>
+/// <param name="P95DurationMs">95% of those attempts took this long or less (nearest rank).</param>
+/// <param name="LateStarts">Attempts that started 5 seconds or more after their scheduled time.</param>
+/// <param name="MaxLateMs">How late the latest of them started.</param>
+public record JobRunStatistics(int Runs, int Succeeded, int Failed, int Vetoed, int Cancelled, int Retries, int Misfires, int Running,
+    double? SuccessRate, long? AverageDurationMs, long? MedianDurationMs, long? P95DurationMs, long? MaxDurationMs, int LateStarts,
+    long? MaxLateMs)
+{
+    /// <summary>
+    /// The store read the newest 20,000 records only, as one that does not count in its database does, so the figures
+    /// cover those.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Truncated { get; init; }
+}
+
 /// <summary>
 /// Storage for execution history. Implemented by the Cronlight.History package; the dashboard
 /// shows history whenever an implementation is registered.
@@ -115,6 +139,13 @@ public interface IJobHistoryStore
     Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken);
 
     Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Figures over the records the query picks (job, group, outcome and fired time; its paging is ignored). A store that
+    /// does not implement it gets them from <see cref="Query"/>, reading up to 20,000 records, newest first.
+    /// </summary>
+    Task<JobRunStatistics> Statistics(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken) =>
+        HistoryStatistics.Scan(this, schedulerName, query, cancellationToken);
 
     /// <summary>
     /// Deletes this scheduler's records fired before the cutoff and returns how many were removed.

@@ -60,13 +60,7 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore, 
         lock (gate)
         {
             IReadOnlyList<JobExecutionRecord> result = records
-                .Where(r => r.SchedulerName == schedulerName
-                    && (query.JobGroup == null || r.JobGroup == query.JobGroup)
-                    && (query.JobName == null || r.JobName == query.JobName)
-                    && (query.Status == null || r.Status == query.Status)
-                    && (query.BeforeId == null || r.Id < query.BeforeId)
-                    && (query.FiredFromUtc == null || r.FiredTimeUtc >= query.FiredFromUtc)
-                    && (query.FiredBeforeUtc == null || r.FiredTimeUtc < query.FiredBeforeUtc))
+                .Where(r => Matches(r, schedulerName, query) && (query.BeforeId == null || r.Id < query.BeforeId))
                 .Take(Math.Clamp(query.Limit, 1, 500))
                 // Logs are read one run at a time, as the database store does
                 .Select(r => r with { Log = null, HasLog = r.Log != null })
@@ -84,6 +78,12 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore, 
             return Task.FromResult(new JobHistorySummary(sinceUtc, Count(JobExecutionStatus.Succeeded),
                 Count(JobExecutionStatus.Failed), Count(JobExecutionStatus.Vetoed), Count(JobExecutionStatus.Running)));
         }
+    }
+
+    public Task<JobRunStatistics> Statistics(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
+    {
+        lock (gate)
+            return Task.FromResult(HistoryStatistics.Compute(records.Where(r => Matches(r, schedulerName, query)).ToList()));
     }
 
     public Task<IReadOnlyList<JobRunLogEntry>?> GetLog(string schedulerName, long id, CancellationToken cancellationToken)
@@ -110,6 +110,14 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore, 
         }
         return Task.FromResult(removed);
     }
+
+    private static bool Matches(JobExecutionRecord r, string schedulerName, JobHistoryQuery query) =>
+        r.SchedulerName == schedulerName
+        && (query.JobGroup == null || r.JobGroup == query.JobGroup)
+        && (query.JobName == null || r.JobName == query.JobName)
+        && (query.Status == null || r.Status == query.Status)
+        && (query.FiredFromUtc == null || r.FiredTimeUtc >= query.FiredFromUtc)
+        && (query.FiredBeforeUtc == null || r.FiredTimeUtc < query.FiredBeforeUtc);
 
     private void Add(JobExecutionRecord record)
     {

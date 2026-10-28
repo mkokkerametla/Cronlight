@@ -1,5 +1,13 @@
 import { jobStatus, typeLabel } from '@/lib/format'
-import type { ExecutionRecord, Job, JobPage, SchedulerInfo, Trigger } from '@/types'
+import type {
+  ExecutionRecord,
+  HistoryStats,
+  Job,
+  JobPage,
+  RunStatistics,
+  SchedulerInfo,
+  Trigger,
+} from '@/types'
 
 export const trigger = (overrides: Partial<Trigger> = {}): Trigger => ({
   name: 't1',
@@ -105,3 +113,28 @@ export function jobPage(jobs: Job[], path = 'jobs/search?'): JobPage {
     types: [...new Set(jobs.map(typeLabel))].sort(),
   }
 }
+
+export const runStats = (overrides: Partial<RunStatistics> = {}): RunStatistics => ({
+  runs: 40,
+  succeeded: 37,
+  failed: 2,
+  vetoed: 1,
+  cancelled: 0,
+  retries: 3,
+  misfires: 0,
+  running: 0,
+  successRate: 0.925,
+  averageDurationMs: 1200,
+  medianDurationMs: 900,
+  p95DurationMs: 4500,
+  maxDurationMs: 6000,
+  lateStarts: 0,
+  maxLateMs: null,
+  ...overrides,
+})
+
+export const historyStats = (overrides: Partial<RunStatistics> = {}): HistoryStats => ({
+  fromUtc: '2030-01-01T00:00:00Z',
+  toUtc: '2030-01-02T00:00:00Z',
+  stats: runStats(overrides),
+})

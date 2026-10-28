@@ -65,7 +65,12 @@ These are listed so the roadmap below is read against them:
   runs, logs and failure and status summaries, and opt-in pause, resume, run and run again, on the dashboard's
   permissions and audit log, and history analytics: per-job run statistics (success rate, average, median and P95
   duration, compared with the window before), runs over time, and errors grouped across jobs. See
-  [AI assistants (MCP server)](mcp.md). The dashboard itself does not show these statistics yet (#29).
+  [AI assistants (MCP server)](mcp.md).
+- Run statistics in the dashboard (#29): runs, success rate, failures and average and P95 duration above History, for
+  a period and the job it is filtered to, and per job on its page with a chart of recent durations by outcome,
+  counted in SQL by the database store (`api/history/stats`). See [Execution history](history.md).
+- A running job's log so far, on the Running tab and in History, read again every 2 seconds from the node running it
+  (`api/running/{fireInstanceId}/log`).
 
 ## How Cronlight compares
 
@@ -98,7 +103,7 @@ It lags on:
 - **Quartz 4 support.** Cronlight is built on Quartz 3.13 and does not run on 4.x, which is now the
   current line. Quartz 4 also brings its own retries and execution history, which overlap Cronlight's.
 - remote schedulers (HTTP, agent)
-- live updates and job progress (captured log lines are now kept per run, but shown once the run has finished)
+- live updates and job progress (a running job's log so far is read every 2 seconds, but there is no event stream)
 - adoption
 
 Suggested order: Quartz 4 support once 4.x settles (see
@@ -152,7 +157,7 @@ affected. To decide:
 
 - **Live updates** (an event stream and a Live view, [#26](https://github.com/mkokkerametla/Cronlight/issues/26)) are not planned: polling every 10 seconds suits a
   jobs dashboard, and a stream brings proxy, fallback and cluster limits (a node only sees its own events). A
-  running job's log so far could later be read on each refresh, without a stream.
+  running job's log so far is read every 2 seconds instead, without a stream.
 
 ### Deferred
 
@@ -161,8 +166,6 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 - Branding options and an embedded mode for showing the dashboard inside an app's own layout ([#23](https://github.com/mkokkerametla/Cronlight/issues/23)).
 - Cancelling a run on any node of a cluster, through the store ([#27](https://github.com/mkokkerametla/Cronlight/issues/27); Quartz 4 does this).
 - An Activity tab showing the audit trail in the dashboard ([#28](https://github.com/mkokkerametla/Cronlight/issues/28)).
-- Run statistics in the dashboard: success rate and average and P95 duration over History and per job ([#29](https://github.com/mkokkerametla/Cronlight/issues/29)).
-  The MCP server's `run_statistics` already counts them, which the dashboard could show.
 - Attaching to a Quartz database and listing every scheduler in it ([#39](https://github.com/mkokkerametla/Cronlight/issues/39); Quartz 4 does this).
 
 ## 2.0
@@ -180,10 +183,12 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 
 ## Known gaps
 
-- Run logs are shown once a run has finished; a running job's log so far is not visible.
+- A running job's log so far is shown only by the node running it; in a cluster, the other nodes' dashboards show it
+  once the run has finished.
+- The job list cannot yet be sorted by the run statistics ("slowest", "failing most"); the MCP server's
+  `run_statistics` sorts by them.
 - The misfire counter can count a misfire twice when a database store rolls back its misfire handling and
   reports it again; history keeps one record per misfire.
-- No end-to-end tests for email alerts or misfire alerts; the integration tests cover both.
 - On Quartz before 3.17, a job with a retry policy that fails with `RefireImmediately` is retried as well as
   refired: Quartz reports that attempt's end to listeners there, and the retry planner does not check for a
   refire. 3.17 and later do not report it, so it does not happen there. The tests run on 3.22.7, so this path

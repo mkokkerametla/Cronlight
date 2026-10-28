@@ -61,3 +61,24 @@ test('a failed run keeps its log, with what the HTTP client logged and the jobâ€
   expect(entries).toContain('returned 500')
   expect(entries).not.toContain(apiKey)
 })
+
+test('a running jobâ€™s log so far shows on the Running tab, until it finishes', async ({ page, request, baseURL }) => {
+  const name = uniqueName('live-log')
+  // The demo's slow endpoint answers after 10 seconds; the HTTP client logs the request as it starts
+  await createJob(request, { type: jobTypes.http, name, data: { url: `${new URL(baseURL!).origin}/demo/slow`, method: 'GET' } })
+  await openDashboard(page)
+  await triggerJob(request, 'DEFAULT', name)
+
+  await page.getByRole('tab', { name: /Running/ }).click()
+  await page.getByRole('button', { name: `Log of ${name}` }).click()
+  const log = page.getByRole('list', { name: 'Run log so far' })
+  await expect(log).toContainText(`Start processing HTTP request GET ${new URL(baseURL!).origin}/demo/slow`)
+
+  // Once it finishes it leaves the Running tab, and its whole log is in History
+  await expect(page.getByRole('button', { name: `Hide the log of ${name}` })).toBeHidden({ timeout: 20_000 })
+  await page.getByRole('tab', { name: /History/ }).click()
+  const run = page.getByRole('row').filter({ hasText: name })
+  await expect(run).toContainText('Succeeded')
+  await run.getByRole('button', { name: 'log', exact: true }).click()
+  await expect(page.getByRole('list', { name: 'Run log' })).toContainText('returned 200')
+})

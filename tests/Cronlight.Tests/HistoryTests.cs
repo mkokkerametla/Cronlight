@@ -242,6 +242,72 @@ internal static class HistoryScenarios
         (await client.GetFromJsonAsync<JsonElement>($"api/history{query}")).GetProperty("records").EnumerateArray().ToList();
 
     /// <summary>History is written in the background, so poll until it shows what the test expects.</summary>
+    /// <summary>
+    /// The store's statistics: runs by outcome, success rate, durations and late starts over a window, as counted from its
+    /// records, and through the API.
+    /// </summary>
+    public static async Task CountsStatistics(TestHost host)
+    {
+        var store = host.Services.GetRequiredService<IJobHistoryStore>();
+        await WaitForStore(store);
+        var now = DateTimeOffset.UtcNow;
+        var n = 0;
+        async Task Add(string job, JobExecutionStatus status, long? durationMs, TimeSpan late = default, DateTimeOffset? fired = null)
+        {
+            var at = fired ?? now.AddMinutes(-30);
+            await store.RecordFinished(new JobExecutionRecord
+            {
+                SchedulerName = host.SchedulerName,
+                FireInstanceId = $"stats-{++n}",
+                InstanceName = "node",
+                JobName = job,
+                JobGroup = "stats",
+                ScheduledFireTimeUtc = at - late,
+                FiredTimeUtc = at,
+                FinishedTimeUtc = status == JobExecutionStatus.Running ? null : at,
+                DurationMs = durationMs,
+                Status = status,
+            }, CancellationToken.None);
+        }
+        foreach (var ms in new long[] { 100, 200, 300, 400 })
+            await Add("a", JobExecutionStatus.Succeeded, ms);
+        await Add("a", JobExecutionStatus.Failed, 1000, TimeSpan.FromSeconds(10));
+        await Add("a", JobExecutionStatus.Retried, 50);
+        await Add("b", JobExecutionStatus.Cancelled, 700);
+        await Add("b", JobExecutionStatus.Vetoed, null);
+        // Noticed two minutes after the fire time it missed: not a late start
+        await Add("b", JobExecutionStatus.Misfired, null, TimeSpan.FromMinutes(2));
+        await Add("b", JobExecutionStatus.Running, null, TimeSpan.FromSeconds(1));
+        // Before the window
+        await Add("a", JobExecutionStatus.Succeeded, 9999, fired: now.AddDays(-2));
+
+        var window = new JobHistoryQuery { JobGroup = "stats", FiredFromUtc = now.AddHours(-24), FiredBeforeUtc = now };
+        var stats = await store.Statistics(host.SchedulerName, window, CancellationToken.None);
+        // Durations 50 100 200 300 400 700 1000: the median the 4th, the P95 the 7th
+        Assert.Equal(new JobRunStatistics(Runs: 7, Succeeded: 4, Failed: 1, Vetoed: 1, Cancelled: 1, Retries: 1, Misfires: 1, Running: 1,
+            SuccessRate: 0.6667, AverageDurationMs: 392, MedianDurationMs: 300, P95DurationMs: 1000, MaxDurationMs: 1000, LateStarts: 1,
+            MaxLateMs: 10_000), stats);
+        // As counted from the records themselves
+        Assert.Equal(stats, await HistoryStatistics.Scan(store, host.SchedulerName, window, CancellationToken.None));
+
+        var one = await store.Statistics(host.SchedulerName, window with { JobName = "b" }, CancellationToken.None);
+        Assert.Equal((2, 0, 700L), (one.Runs, one.Succeeded, one.P95DurationMs!.Value));
+        var failed = await store.Statistics(host.SchedulerName, window with { Status = JobExecutionStatus.Failed }, CancellationToken.None);
+        Assert.Equal((1, 0.0, 1000L), (failed.Runs, failed.SuccessRate!.Value, failed.MedianDurationMs!.Value));
+        var none = await store.Statistics(host.SchedulerName, window with { JobName = "nothing" }, CancellationToken.None);
+        Assert.Equal(new JobRunStatistics(0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null, null, 0, null), none);
+
+        var api = await host.Client().GetFromJsonAsync<JsonElement>("api/history/stats?group=stats&hours=24");
+        Assert.Equal(7, api.GetProperty("stats").GetProperty("runs").GetInt32());
+        Assert.Equal(0.6667, api.GetProperty("stats").GetProperty("successRate").GetDouble());
+        Assert.False(api.GetProperty("stats").TryGetProperty("truncated", out _));
+        var span = api.GetProperty("toUtc").GetDateTimeOffset() - api.GetProperty("fromUtc").GetDateTimeOffset();
+        Assert.Equal(TimeSpan.FromHours(24), span);
+        // The run from two days ago too
+        var week = await host.Client().GetFromJsonAsync<JsonElement>("api/history/stats?group=stats&name=a&hours=168");
+        Assert.Equal(6, week.GetProperty("stats").GetProperty("runs").GetInt32());
+    }
+
     // The writer creates the history table in the background after startup, and this test uses the store
     // directly. Reads return nothing until then, so probe with a write (under another scheduler name) instead.
     internal static async Task WaitForStore(IJobHistoryStore store)
@@ -306,6 +372,49 @@ public class HistoryTests
         Assert.Equal(0, await Count(fired.AddTicks(1), null));
         Assert.Equal(0, await Count(null, fired));
         Assert.Equal(1, await Count(fired.AddHours(-1), null));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task The_store_counts_runs_by_outcome_with_durations_and_late_starts(bool database)
+    {
+        await using var host = await TestHost.Start(history: database ? Database : InMemory);
+        await HistoryScenarios.CountsStatistics(host);
+    }
+
+    [Fact]
+    public async Task A_store_that_does_not_count_statistics_has_them_counted_from_its_records()
+    {
+        var store = new ListStore();
+        var now = DateTimeOffset.UtcNow;
+        foreach (var (status, ms) in new[] { (JobExecutionStatus.Succeeded, 10L), (JobExecutionStatus.Failed, 30L), (JobExecutionStatus.Retried, 20L) })
+            await store.RecordFinished(new JobExecutionRecord
+            {
+                SchedulerName = "s", FireInstanceId = status.ToString(), InstanceName = "n", JobName = "j", JobGroup = "g",
+                FiredTimeUtc = now.AddMinutes(-1), DurationMs = ms, Status = status,
+            }, CancellationToken.None);
+
+        var stats = await ((IJobHistoryStore)store).Statistics("s", new JobHistoryQuery { FiredFromUtc = now.AddHours(-1) }, CancellationToken.None);
+
+        Assert.Equal((2, 0.5, 20L, 30L, 1), (stats.Runs, stats.SuccessRate!.Value, stats.MedianDurationMs!.Value, stats.P95DurationMs!.Value, stats.Retries));
+    }
+
+    [Fact]
+    public async Task Statistics_refuse_a_period_that_is_backwards_too_long_or_for_an_unknown_outcome()
+    {
+        await using var host = await TestHost.Start(history: InMemory);
+        var client = host.Client();
+        async Task<string> Refused(string query)
+        {
+            var response = await client.GetAsync($"api/history/stats{query}");
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            return (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString()!;
+        }
+
+        Assert.Equal("The period starts at or after it ends", await Refused("?from=2026-10-02T00:00:00Z&to=2026-10-01T00:00:00Z"));
+        Assert.Equal("The period is longer than 90 days", await Refused("?from=2026-01-01T00:00:00Z&to=2026-10-01T00:00:00Z"));
+        Assert.Equal("Unknown status 'nope'", await Refused("?status=nope"));
     }
 
     [Fact]
@@ -1040,6 +1149,14 @@ public class DatabaseTests
     {
         await using var host = await Start(name);
         await HistoryScenarios.AddsTheOutcomeIndexToAnOlderTable(host);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task The_store_counts_runs_by_outcome_with_durations_and_late_starts(string name)
+    {
+        await using var host = await Start(name);
+        await HistoryScenarios.CountsStatistics(host);
     }
 
     [SkippableTheory]

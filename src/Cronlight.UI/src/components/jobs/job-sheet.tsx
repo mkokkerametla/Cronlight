@@ -38,6 +38,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { JobRunStats } from '@/components/history/run-stats'
 import { DataEditor } from '@/components/jobs/data-editor'
 import {
   ExecutionStatusBadge,
@@ -567,10 +568,16 @@ function RecentRuns({
   name: string
   onViewAll: () => void
 }) {
-  const { records, loaded, error } = useHistory({ status: 'all', job: { group, name } }, 5)
+  // More runs than are listed, for the chart of their durations
+  const { records, loaded, error } = useHistory({ status: 'all', job: { group, name } }, 30)
 
   return (
     <>
+      <Separator />
+      <section className="space-y-2">
+        <h3 className="text-sm font-medium">Run statistics</h3>
+        <JobRunStats group={group} name={name} records={records} />
+      </section>
       <Separator />
       <section className="space-y-2">
         <div className="flex items-center justify-between">
@@ -587,7 +594,7 @@ function RecentRuns({
           <p className="text-sm text-muted-foreground">No runs recorded yet.</p>
         ) : (
           <ul className="divide-y rounded-lg border text-sm">
-            {records.map(r => (
+            {records.slice(0, 5).map(r => (
               <li key={r.id} className="space-y-1 px-3 py-2">
                 <div className="flex items-center gap-2">
                   <ExecutionStatusBadge status={r.status} />

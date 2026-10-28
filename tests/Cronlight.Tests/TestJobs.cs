@@ -222,6 +222,14 @@ public class LoggingJob(Microsoft.Extensions.Logging.ILogger<LoggingJob> logger)
         var lines = int.TryParse(Get("lines"), out var n) ? n : 0;
         for (var i = 1; i <= lines; i++)
             Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(logger, "Line {Line}", i);
+        // Waits with its log so far, while a test reads it
+        if (Get("gate") is { } key)
+        {
+            var (started, release) = BlockingJob.Gate(key);
+            started.Release();
+            await release.WaitAsync(TimeSpan.FromSeconds(30));
+            Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(logger, "Done waiting");
+        }
     }
 }
 

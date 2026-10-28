@@ -157,4 +157,57 @@ public class RunLogTests
             await extra.Shutdown(waitForJobsToComplete: true);
         }
     }
+
+    [Theory]
+    [InlineData(JobHistoryStorage.Database)]
+    [InlineData(JobHistoryStorage.InMemory)]
+    public async Task A_running_jobs_log_so_far_can_be_read_until_it_finishes(JobHistoryStorage storage)
+    {
+        await using var host = await Start(storage);
+        var client = host.Client();
+        var gate = BlockingJob.Gate($"live-{host.SchedulerName}");
+        await HistoryScenarios.Create(client, typeof(LoggingJob), "live",
+            new { customer = "acme", apiToken = "tok-12345", gate = $"live-{host.SchedulerName}" });
+        await client.PostAsync("api/jobs/DEFAULT/live/trigger", null);
+        Assert.True(await gate.Started.WaitAsync(TimeSpan.FromSeconds(15)));
+
+        var running = await client.GetFromJsonAsync<JsonElement>("api/running");
+        var id = running.GetProperty("jobs").EnumerateArray().Single(j => j.GetProperty("name").GetString() == "live")
+            .GetProperty("fireInstanceId").GetString();
+        var log = await client.GetFromJsonAsync<JsonElement>($"api/running/{id}/log");
+        Assert.Equal(new[] { "Calling acme with token ********", "Retrying a call (TimeoutException: upstream slow)" },
+            log.EnumerateArray().Select(e => e.GetProperty("message").GetString()));
+
+        gate.Release.Release();
+        var record = Assert.Single(await HistoryScenarios.WaitForHistory(client, "?name=live",
+            r => r.Any(x => x.GetProperty("status").GetString() == "Succeeded")));
+        // Finished: its whole log is in history, and no longer read from the run
+        var gone = await client.GetAsync($"api/running/{id}/log");
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        Assert.Contains("its log is then in History", await gone.Content.ReadAsStringAsync());
+        Assert.Equal("Done waiting", (await Log(host, record))[^1].GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task A_running_jobs_log_is_not_there_with_capture_off()
+    {
+        await using var host = await Start(JobHistoryStorage.InMemory, o => o.CaptureLogs = false);
+        var client = host.Client();
+        var gate = BlockingJob.Gate($"uncaptured-{host.SchedulerName}");
+        await HistoryScenarios.Create(client, typeof(LoggingJob), "uncaptured", new { customer = "acme", gate = $"uncaptured-{host.SchedulerName}" });
+        await client.PostAsync("api/jobs/DEFAULT/uncaptured/trigger", null);
+        Assert.True(await gate.Started.WaitAsync(TimeSpan.FromSeconds(15)));
+        try
+        {
+            var running = await client.GetFromJsonAsync<JsonElement>("api/running");
+            var id = running.GetProperty("jobs")[0].GetProperty("fireInstanceId").GetString();
+            var response = await client.GetAsync($"api/running/{id}/log");
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Contains("What this run logs is not kept", await response.Content.ReadAsStringAsync());
+        }
+        finally
+        {
+            gate.Release.Release();
+        }
+    }
 }

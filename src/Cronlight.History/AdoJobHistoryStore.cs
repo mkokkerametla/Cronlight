@@ -153,38 +153,11 @@ internal sealed class AdoJobHistoryStore(
 
         await using var connection = await dataSource.OpenConnection(cancellationToken);
         await using var command = connection.CreateCommand();
-
-        var where = new StringBuilder($"WHERE SCHED_NAME = {P("sched")}");
-        Add(command, "sched", schedulerName);
-        if (query.JobGroup != null)
-        {
-            where.Append($" AND JOB_GROUP = {P("group")}");
-            Add(command, "group", query.JobGroup);
-        }
-        if (query.JobName != null)
-        {
-            where.Append($" AND JOB_NAME = {P("name")}");
-            Add(command, "name", query.JobName);
-        }
-        if (query.Status != null)
-        {
-            where.Append($" AND STATUS = {P("status")}");
-            Add(command, "status", query.Status.ToString());
-        }
+        var where = Where(command, schedulerName, query);
         if (query.BeforeId != null)
         {
-            where.Append($" AND ID < {P("before")}");
+            where += $" AND ID < {P("before")}";
             Add(command, "before", query.BeforeId);
-        }
-        if (query.FiredFromUtc != null)
-        {
-            where.Append($" AND FIRED_TIME >= {P("from")}");
-            Add(command, "from", query.FiredFromUtc.Value.UtcTicks);
-        }
-        if (query.FiredBeforeUtc != null)
-        {
-            where.Append($" AND FIRED_TIME < {P("to")}");
-            Add(command, "to", query.FiredBeforeUtc.Value.UtcTicks);
         }
 
         command.CommandText = dialect.SelectTop(Math.Clamp(query.Limit, 1, 500), Columns, $"FROM {tableName} {where} ORDER BY ID DESC");
@@ -216,6 +189,93 @@ internal sealed class AdoJobHistoryStore(
         int Count(JobExecutionStatus status) => counts.GetValueOrDefault(status.ToString());
         return new JobHistorySummary(sinceUtc, Count(JobExecutionStatus.Succeeded), Count(JobExecutionStatus.Failed),
             Count(JobExecutionStatus.Vetoed), Count(JobExecutionStatus.Running));
+    }
+
+    /// <summary>The WHERE clause for the query's scheduler, job, group, outcome and fired time, its parameters added.</summary>
+    private string Where(DbCommand command, string schedulerName, JobHistoryQuery query)
+    {
+        var where = new StringBuilder($"WHERE SCHED_NAME = {P("sched")}");
+        Add(command, "sched", schedulerName);
+        if (query.JobGroup != null)
+        {
+            where.Append($" AND JOB_GROUP = {P("group")}");
+            Add(command, "group", query.JobGroup);
+        }
+        if (query.JobName != null)
+        {
+            where.Append($" AND JOB_NAME = {P("name")}");
+            Add(command, "name", query.JobName);
+        }
+        if (query.Status != null)
+        {
+            where.Append($" AND STATUS = {P("status")}");
+            Add(command, "status", query.Status.ToString());
+        }
+        if (query.FiredFromUtc != null)
+        {
+            where.Append($" AND FIRED_TIME >= {P("from")}");
+            Add(command, "from", query.FiredFromUtc.Value.UtcTicks);
+        }
+        if (query.FiredBeforeUtc != null)
+        {
+            where.Append($" AND FIRED_TIME < {P("to")}");
+            Add(command, "to", query.FiredBeforeUtc.Value.UtcTicks);
+        }
+        return where.ToString();
+    }
+
+    /// <summary>
+    /// Counted in the database, so no records are loaded: counts and sums by outcome in one query, and the median and P95
+    /// durations each read as the one duration at their place in order.
+    /// </summary>
+    public async Task<JobRunStatistics> Statistics(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
+    {
+        if (NotReadyYet)
+            return HistoryStatistics.Compute([]);
+
+        await using var connection = await dataSource.OpenConnection(cancellationToken);
+        var counts = new Dictionary<string, (int Count, int Timed, long Total, long? Max, int Late, long? MaxLate)>(StringComparer.OrdinalIgnoreCase);
+        await using (var command = connection.CreateCommand())
+        {
+            var where = Where(command, schedulerName, query);
+            const string late = "SCHEDULED_TIME IS NOT NULL AND FIRED_TIME - SCHEDULED_TIME >= ";
+            command.CommandText =
+                $"SELECT STATUS, COUNT(*), COUNT(DURATION_MS), SUM(DURATION_MS), MAX(DURATION_MS), " +
+                $"SUM(CASE WHEN {late}{P("late")} THEN 1 ELSE 0 END), MAX(CASE WHEN {late}{P("late")} THEN FIRED_TIME - SCHEDULED_TIME END) " +
+                $"FROM {tableName} {where} GROUP BY STATUS";
+            Add(command, "late", HistoryStatistics.LateStart.Ticks);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            long? Long(int i) => reader.IsDBNull(i) ? null : Convert.ToInt64(reader.GetValue(i));
+            while (await reader.ReadAsync(cancellationToken))
+                counts[reader.GetString(0)] = ((int)Long(1)!.Value, (int)Long(2)!.Value, Long(3) ?? 0, Long(4), (int)(Long(5) ?? 0), Long(6));
+        }
+
+        var timed = HistoryStatistics.Timed.Select(s => counts.GetValueOrDefault(s.ToString())).ToList();
+        var started = counts.Where(c => !c.Key.Equals(nameof(JobExecutionStatus.Misfired), StringComparison.OrdinalIgnoreCase))
+            .Select(c => c.Value).ToList();
+        var timedCount = timed.Sum(t => t.Timed);
+        var durations = new Dictionary<int, long>();
+        // Each place read once: with one or two durations the median and P95 are the same one
+        var places = timedCount == 0 ? [] : new[] { 0.5, 0.95 }.Select(p => Math.Max(0, (int)Math.Ceiling(p * timedCount) - 1)).Distinct();
+        foreach (var place in places)
+        {
+            await using var command = connection.CreateCommand();
+            var where = Where(command, schedulerName, query);
+            var outcomes = string.Join(", ", HistoryStatistics.Timed.Select((s, i) =>
+            {
+                Add(command, $"timed{i}", s.ToString());
+                return P($"timed{i}");
+            }));
+            command.CommandText = dialect.SelectAt(place, "DURATION_MS",
+                $"FROM {tableName} {where} AND DURATION_MS IS NOT NULL AND STATUS IN ({outcomes}) ORDER BY DURATION_MS");
+            // No row there: runs were deleted since they were counted (retention, say), so the place is past the last
+            durations[place] = await command.ExecuteScalarAsync(cancellationToken) is { } value and not DBNull
+                ? Convert.ToInt64(value)
+                : timed.Max(t => t.Max) ?? 0;
+        }
+
+        return HistoryStatistics.Create(s => counts.GetValueOrDefault(s.ToString()).Count, timedCount,
+            timed.Sum(t => t.Total), timed.Max(t => t.Max), place => durations[place], started.Sum(c => c.Late), started.Max(c => c.MaxLate));
     }
 
     public async Task<IReadOnlyList<JobRunLogEntry>?> GetLog(string schedulerName, long id, CancellationToken cancellationToken)

@@ -182,3 +182,18 @@ export function describeRetry(policy: JobRetryPolicy | null | undefined): string
   if (!policy.exponential) return `${text}, ${formatSeconds(policy.delaySeconds)} apart${only}`
   return `${text}, after ${retryDelays(policy).map(formatSeconds).join(', ')}${only}`
 }
+
+/** The periods the History tab's figures can cover, in hours */
+export const statsPeriods = [
+  { hours: 1, label: 'Last hour' },
+  { hours: 24, label: 'Last 24 hours' },
+  { hours: 24 * 7, label: 'Last 7 days' },
+  { hours: 24 * 30, label: 'Last 30 days' },
+]
+
+/** A share from 0 to 1 as a percentage: whole when it is, else to one decimal, and never rounded up to 100% */
+export function formatRate(rate: number | null): string {
+  if (rate === null) return '-'
+  const percent = Math.floor(rate * 1000) / 10
+  return `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`
+}
