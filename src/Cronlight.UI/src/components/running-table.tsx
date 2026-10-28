@@ -1,4 +1,5 @@
-import { Coffee, OctagonX } from 'lucide-react'
+import { Fragment, useState } from 'react'
+import { Coffee, OctagonX, ScrollText } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { RunLog } from '@/components/history/run-log'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useRefreshInterval } from '@/hooks/use-polling'
 import { everySeconds, formatDateTime, formatDuration, shortType } from '@/lib/format'
@@ -30,15 +32,20 @@ export function RunningTable({
   canManage = false,
   localInstanceId,
   onCancel,
+  logs = false,
 }: {
   running: RunningJobs
   canManage?: boolean
   /** This node's scheduler instance id: Quartz can only cancel runs on the node serving the dashboard */
   localInstanceId?: string
   onCancel?: (job: RunningJob) => Promise<boolean>
+  /** Runs' logs are kept (execution history is on), so each can show what it has logged so far */
+  logs?: boolean
 }) {
   const showCancel = canManage && onCancel != null
   const refreshMs = useRefreshInterval()
+  const [openLog, setOpenLog] = useState<string | null>(null)
+  const columns = 5 + (logs ? 1 : 0) + (showCancel ? 1 : 0)
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -73,43 +80,107 @@ export function RunningTable({
                 <TableHead>Node</TableHead>
                 <TableHead>Started</TableHead>
                 <TableHead className="text-right">Running for</TableHead>
+                {logs && <TableHead className="w-0" />}
                 {showCancel && <TableHead className="w-0" />}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {running.jobs.map(job => (
-                <TableRow key={job.fireInstanceId}>
-                  <TableCell>
-                    <div className="font-medium">{job.name}</div>
-                    <div className="text-xs text-muted-foreground">{job.group}</div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{shortType(job.jobType)}</Badge>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{job.instanceName}</TableCell>
-                  <TableCell>{formatDateTime(job.firedTimeUtc)}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    <span className="inline-flex items-center gap-2">
-                      <span className="size-2 animate-pulse rounded-full bg-emerald-500" />
-                      {formatDuration(job.runningForMs)}
-                    </span>
-                  </TableCell>
-                  {showCancel && (
-                    <TableCell>
-                      <CancelRun
-                        job={job}
-                        local={running.source === 'local' || job.instanceName === localInstanceId}
-                        onCancel={onCancel}
-                      />
-                    </TableCell>
-                  )}
-                </TableRow>
-              ))}
+              {running.jobs.map(job => {
+                const local = running.source === 'local' || job.instanceName === localInstanceId
+                const open = openLog === job.fireInstanceId
+                return (
+                  <Fragment key={job.fireInstanceId}>
+                    <TableRow>
+                      <TableCell>
+                        <div className="font-medium">{job.name}</div>
+                        <div className="text-xs text-muted-foreground">{job.group}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">{shortType(job.jobType)}</Badge>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{job.instanceName}</TableCell>
+                      <TableCell>{formatDateTime(job.firedTimeUtc)}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <span className="inline-flex items-center gap-2">
+                          <span className="size-2 animate-pulse rounded-full bg-emerald-500" />
+                          {formatDuration(job.runningForMs)}
+                        </span>
+                      </TableCell>
+                      {logs && (
+                        <TableCell>
+                          <LogButton
+                            job={job}
+                            local={local}
+                            open={open}
+                            onToggle={() => setOpenLog(open ? null : job.fireInstanceId)}
+                          />
+                        </TableCell>
+                      )}
+                      {showCancel && (
+                        <TableCell>
+                          <CancelRun job={job} local={local} onCancel={onCancel} />
+                        </TableCell>
+                      )}
+                    </TableRow>
+                    {open && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell colSpan={columns} className="whitespace-normal">
+                          <RunLog
+                            path={`running/${encodeURIComponent(job.fireInstanceId)}/log`}
+                            live
+                          />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                )
+              })}
             </TableBody>
           </Table>
         )}
       </div>
     </div>
+  )
+}
+
+/** Shows what the run has logged so far; only the node running it has its log */
+function LogButton({
+  job,
+  local,
+  open,
+  onToggle,
+}: {
+  job: RunningJob
+  local: boolean
+  open: boolean
+  onToggle: () => void
+}) {
+  if (!local)
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span tabIndex={0}>
+            <Button size="sm" variant="ghost" disabled aria-label={`Log of ${job.name}`}>
+              <ScrollText /> Log
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          Runs on {job.instanceName}, which has its log so far: open the dashboard there, or see it
+          in History once it finishes.
+        </TooltipContent>
+      </Tooltip>
+    )
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      aria-expanded={open}
+      aria-label={`${open ? 'Hide the log' : 'Log'} of ${job.name}`}
+      onClick={onToggle}
+    >
+      <ScrollText /> {open ? 'Hide log' : 'Log'}
+    </Button>
   )
 }
 

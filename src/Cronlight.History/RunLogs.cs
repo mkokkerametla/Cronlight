@@ -11,10 +11,8 @@ namespace Cronlight.History;
 /// the job runs, awaited or not, and <see cref="RunLogProvider"/> adds what that code logs through ILogger.
 /// </summary>
 /// <param name="mask">Masks the run's secrets in a message. Applied before a long message is cut, so no part of a secret is kept.</param>
-internal sealed class RunLog(int maxEntries, int maxMessageLength, Func<string, string> mask)
+internal sealed class RunLog(int maxEntries, int maxMessageLength, Func<string, string> mask) : RunningLog
 {
-    public const string ContextKey = "Cronlight.RunLog";
-
     private static readonly AsyncLocal<RunLog?> current = new();
 
     private List<JobRunLogEntry> entries = [];
@@ -46,6 +44,13 @@ internal sealed class RunLog(int maxEntries, int maxMessageLength, Func<string, 
             entries.Add(new JobRunLogEntry(DateTimeOffset.UtcNow, level.ToString(), category,
                 message.Length <= maxMessageLength ? message : message[..(maxMessageLength - 1)] + "…"));
         }
+    }
+
+    /// <summary>What has been logged so far, while the run is going on; nothing once it has ended.</summary>
+    public override IReadOnlyList<JobRunLogEntry> Read()
+    {
+        lock (gate)
+            return [.. entries];
     }
 
     /// <summary>
@@ -120,18 +125,21 @@ internal sealed class RunLogJobFactory(IJobFactory inner, IOptions<JobHistoryOpt
 /// and is gone again once it returns. <see cref="IJobExecutionContext.JobInstance"/> is this wrapper; <see cref="Job"/>
 /// is the job.
 /// </summary>
-internal sealed class RunLogJob(IJob job, JobHistoryOptions options, RunLogMasks masks) : IJob
+internal sealed class RunLogJob(IJob job, JobHistoryOptions options, RunLogMasks masks) : IJob, IKeepsRunLog
 {
     /// <summary>What an attempt that asked to run again at once threw: Quartz 3.17 and later do not pass it to listeners.</summary>
     public const string RefireErrorKey = "Cronlight.RefireError";
 
     public IJob Job => job;
 
+    public RunningLog? Log { get; private set; }
+
     public async Task Execute(IJobExecutionContext context)
     {
         // Secret references are resolved by now: Quartz calls trigger listeners before the job runs
         var log = new RunLog(Math.Max(1, options.MaxLogEntries), Math.Max(1, options.MaxLogMessageLength), masks.For(context));
         context.Put(RunLog.ContextKey, log);
+        Log = log;
         log.Enter();
         try
         {

@@ -81,7 +81,8 @@ deletes or imports jobs.
 ## How the analytics count
 
 The analytics tools, and `failure_summary`, count on the server, so an assistant does not have to count runs itself
-(where language models make mistakes) and the answer comes in one call.
+(where language models make mistakes) and the answer comes in one call. The dashboard's
+[run statistics](history.md) count the same way, so an assistant and the History tab agree.
 
 - **The window** is the last `hours` (24 by default), or `fromUtc` to `toUtc`, at most 90 days. Each answer gives the
   window it covered, so an assistant can say exactly what "last Tuesday" was taken to mean. History is kept for 14
@@ -97,7 +98,8 @@ The analytics tools, and `failure_summary`, count on the server, so an assistant
 - **Errors are grouped** by their first line with numbers, GUIDs and long hex ids replaced by `#`, so
   `invoice 42 failed` and `invoice 43 failed` count as one pattern.
 - **At most 20,000 runs** are read for one answer, newest first. Past that the answer says `truncated`, and its figures
-  cover the newest runs only; a shorter window, or one job, counts them all.
+  cover the newest runs only; a shorter window, or one job, counts them all. `run_statistics`' totals are the
+  exception: the history store counts them, over every run, as it does for the dashboard.
 
 ## Safety
 

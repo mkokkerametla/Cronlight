@@ -22,6 +22,16 @@ const forScheduler = (path: string) =>
     ? `${path}${path.includes('?') ? '&' : '?'}${SCHEDULER_PARAM}=${encodeURIComponent(scheduler)}`
     : path
 
+/** A request the server answered with an error: its message, and the HTTP status */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message)
+  }
+}
+
 // Relative to the page, so it resolves to {prefix}/api/... wherever the dashboard is mapped.
 // Same-origin cookies flow automatically, so host cookie auth works without extra setup.
 export async function api<T = void>(
@@ -39,7 +49,7 @@ export async function api<T = void>(
     },
     body: body ? JSON.stringify(body) : undefined,
   })
-  if (!res.ok) throw new Error(await errorMessage(res))
+  if (!res.ok) throw new ApiError(await errorMessage(res), res.status)
   if (res.status === 204 || res.headers.get('content-length') === '0') return undefined as T
   return (await res.json()) as T
 }

@@ -23,6 +23,10 @@ internal sealed record SqlDialect(string Name, string SchemaResource, bool UsesT
     public string SelectTop(int limit, string columns, string rest) =>
         UsesTop ? $"SELECT TOP ({limit}) {columns} {rest}" : $"SELECT {columns} {rest} LIMIT {limit}";
 
+    /// <summary>SELECT of the one row at this place, from 0, in the order <paramref name="rest"/> ends with.</summary>
+    public string SelectAt(int offset, string columns, string rest) =>
+        UsesTop ? $"SELECT {columns} {rest} OFFSET {offset} ROWS FETCH NEXT 1 ROWS ONLY" : $"SELECT {columns} {rest} LIMIT 1 OFFSET {offset}";
+
     /// <summary>
     /// The CREATE TABLE/INDEX statements for this dialect, split into single statements. The table name may
     /// be schema-qualified; index names are built from the part after the schema.

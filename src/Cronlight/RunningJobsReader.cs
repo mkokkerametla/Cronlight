@@ -103,3 +103,25 @@ internal sealed class RunningJobsReader(QuartzDataSource hostDataSource, Cronlig
         return result;
     }
 }
+
+/// <summary>
+/// What a run going on now has logged so far, kept by Cronlight.History's run log capture in its
+/// <see cref="Quartz.IJobExecutionContext"/>, so the dashboard can show it before the run ends.
+/// </summary>
+internal abstract class RunningLog
+{
+    public const string ContextKey = "Cronlight.RunLog";
+
+    /// <summary>The entries so far, sensitive values masked.</summary>
+    public abstract IReadOnlyList<JobRunLogEntry> Read();
+}
+
+/// <summary>
+/// A job wrapped by the run log capture: the run's <see cref="Quartz.IJobExecutionContext.JobInstance"/> from before it
+/// starts, so a run listed as going on is known to keep a log even before its log is made.
+/// </summary>
+internal interface IKeepsRunLog
+{
+    /// <summary>The run's log; null until the run has started.</summary>
+    RunningLog? Log { get; }
+}

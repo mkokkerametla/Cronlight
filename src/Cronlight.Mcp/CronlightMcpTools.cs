@@ -206,7 +206,7 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
             return new RunList(page.Select(Summarize).ToList(), page.Count == size ? page[^1].Id : null, null);
         }
         var window = TimeWindow.Resolve(sinceHours, fromUtc, toUtc);
-        var (records, more) = await HistoryScan.Read(access.History, s.SchedulerName, window, group, name, statusFilter, cancellationToken, size, before);
+        var (records, more) = await HistoryScan.Read(access.History, s.SchedulerName, window.FromUtc, window.ToUtc, group, name, statusFilter, cancellationToken, size, before);
         return new RunList(records.Select(Summarize).ToList(), more ? records[^1].Id : null, window);
     }
 
@@ -269,7 +269,7 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
     {
         var s = await access.View(scheduler, cancellationToken);
         var window = TimeWindow.Resolve(hours, fromUtc, toUtc);
-        var (failures, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window, null, null, JobExecutionStatus.Failed,
+        var (failures, truncated) = await HistoryScan.Read(access.History, s.SchedulerName, window.FromUtc, window.ToUtc, null, null, JobExecutionStatus.Failed,
             cancellationToken);
 
         var jobs = failures

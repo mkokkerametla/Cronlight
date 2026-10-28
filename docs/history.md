@@ -3,7 +3,8 @@
 The optional package that records every run, what it logged, misfires and late starts.
 
 `Cronlight.Quartz.Dashboard.History` records every run (start, finish, duration, node, outcome, error message and
-what the job logged) and adds a History tab, a "Failed (24h)" card and recent runs per job to the dashboard.
+what the job logged) and adds a History tab, a "Failed (24h)" card, run statistics, and recent runs per job to the
+dashboard.
 
 ```csharp
 builder.Services.AddCronlightHistory(o =>
@@ -42,6 +43,10 @@ builder.Services.AddCronlightHistory(o =>
   secrets a job logs are kept as logged, so treat run logs like your other logs.
   - Logs are read one run at a time (`GET api/history/{id}/log`); the history list only says whether a run
     has one (`hasLog`).
+  - **While a run goes on**, its log so far shows under "Log" on the Running tab, and under "log so far" for a
+    Running row in History, read again every 2 seconds until the run ends (`GET api/running/{fireInstanceId}/log`).
+    Only the node running it has it: in a cluster, a run on another node shows its log on that node's dashboard, or
+    in History once it finishes.
   - Cronlight wraps the host's job factory to do this, so `context.JobInstance` is Cronlight's wrapper
     around the job. `CaptureLogs = false` turns it off. A factory set only through Quartz properties
     (`quartz.scheduler.jobFactory.type`) rather than `UseJobFactory` is left alone, with a warning. A scheduler built in code keeps logs once its job
@@ -74,6 +79,17 @@ builder.Services.AddCronlightHistory(o =>
   streaks read from history neither count them nor end at them.
 - **Late starts.** Any run that started 5 seconds or more after its scheduled time is marked "started …
   late" in History and in the job's recent runs.
+- **Run statistics.** Above the History list: runs, success rate, failures, and average and P95 duration over the
+  last hour, 24 hours, 7 days or 30 days, for the job the list is filtered to or for every job. They count every
+  outcome whatever the list's outcome filter is, since a success rate over failures alone says nothing. A job's page
+  shows the same for the last 24 hours and 7 days, and a chart of its recent runs' durations coloured by outcome.
+  - They are counted as [the MCP server's analytics](mcp.md#how-the-analytics-count) are: a run by its outcome, a
+    retried attempt as a retry and not a run, the success rate over succeeded, failed and blocked runs, and durations
+    over the attempts that ran, the median and P95 by nearest rank.
+  - The database store counts them in SQL, so no runs are loaded; the in-memory store from the runs it keeps. The
+    dashboard counts them again every 30 seconds (or every `RefreshSeconds`, if longer), not on every refresh.
+  - `GET api/history/stats` answers with them, for `hours` (24 by default) or `from` and `to`, at most 90 days,
+    and optionally `group` and `name`, and `status`.
 - **What a trigger does when it misses a run** shows on the job's page. Cron triggers made in the dashboard
   run once as soon as they can (Quartz's default), or, with "Skip missed runs", wait for the next fire time. Triggers with `IgnoreMisfirePolicy` fire every missed time instead
   and are not reported as misfires. Filter the History tab by *Misfired* to see them all.
@@ -82,7 +98,9 @@ builder.Services.AddCronlightHistory(o =>
 - **Your own store:** register an `IJobHistoryStore` before calling `AddCronlightHistory`. Its `Query` should honour
   every filter of `JobHistoryQuery`, including `FiredFromUtc` and `FiredBeforeUtc`: the MCP server's analytics read a
   window of runs with them. A store that ignores them still works, but reads every newer run first, so an answer about
-  a window long past can come back truncated.
+  a window long past can come back truncated. Run statistics come from `Statistics`, which by default counts the
+  newest 20,000 runs `Query` returns (and says so, `truncated`); a store that can count in its database implements
+  it.
 
 | Option | Default | |
 |---|---|---|

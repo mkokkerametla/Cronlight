@@ -229,6 +229,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
                     canManage={canManage}
                     localInstanceId={scheduler?.schedulerInstanceId}
                     onCancel={actions.cancel}
+                    logs={historyEnabled}
                   />
                 </TabsContent>
                 {historyEnabled && (
@@ -240,6 +241,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
                       canManage={canManage}
                       onRetry={actions.retry}
                       jobTypes={jobTypes}
+                      localInstanceId={scheduler?.schedulerInstanceId}
                     />
                   </TabsContent>
                 )}

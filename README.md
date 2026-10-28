@@ -20,8 +20,9 @@ second scheduler.
   triggers; pause or resume a job, a group or every job; run one now, or once with different data; cancel a run.
 - **Job types:** attributes give your `IJob` types a name, a form with typed and required parameters, and masked
   secrets, which can be kept out of the database as references to configuration.
-- **Execution history** (optional package): every run with its outcome, error and what it logged, plus misfires and
-  late starts.
+- **Execution history** (optional package): every run with its outcome, error and what it logged, a running job's
+  log so far, misfires and late starts, and run statistics: success rate and average and P95 duration, per job and
+  over a period.
 - **Retries:** failed runs retried automatically, as set per job type or per job.
 - **Alerts:** Slack, Teams, webhook or email when a job fails, recovers or is stopped by Quartz.
 - **Export and import:** jobs as JSON or YAML files, to move them between environments or keep them in source

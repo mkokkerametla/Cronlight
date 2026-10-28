@@ -3,7 +3,7 @@ import { expect, test } from './fixtures'
 import { createJob, jobTypes, runCount, triggerJob, uniqueName } from './helpers'
 
 // The sample alerts after two failures in a row and on recovery; each worker's host posts its alerts to a JSON, a
-// Slack and a Teams webhook on the worker's receiver (fixtures.ts). Alerts are sent one at a time, in the order
+// Slack and a Teams webhook on the worker's receiver, and emails them to its SMTP receiver (fixtures.ts). Alerts are sent one at a time, in the order
 // the runs finished, so once an alert has arrived, any the job's earlier runs raised have arrived too.
 
 /** Runs the job once and waits until history has its outcome, which the next run's streak follows on from. */
@@ -17,8 +17,11 @@ async function setFailureRate(request: APIRequestContext, name: string, rate: st
   expect(response.status(), await response.text()).toBe(204)
 }
 
-test('a job that fails twice in a row alerts each webhook once, and again when it recovers', async ({ request, sampleHost }) => {
-  const { webhooks, baseURL } = sampleHost
+test('a job that fails twice in a row alerts each webhook and by email once, and again when it recovers', async ({
+  request,
+  sampleHost,
+}) => {
+  const { webhooks, mail, baseURL } = sampleHost
   const name = uniqueName('alerting')
   await createJob(request, { type: jobTypes.flaky, name, data: { failureRate: '100' } })
 
@@ -60,6 +63,16 @@ test('a job that fails twice in a row alerts each webhook once, and again when i
   expect(cards[0].body[0]).toMatchObject({ text: `Job DEFAULT.${name} failed 2 times in a row`, color: 'Attention' })
   expect(cards[0].actions[0].url).toBe(baseURL)
   expect(cards[1].body[0]).toMatchObject({ text: `Job DEFAULT.${name} succeeded again after 3 failures in a row`, color: 'Good' })
+
+  // And by email, in plain text
+  await expect.poll(() => mail.emailsFor(name).length, { timeout: 20_000 }).toBe(2)
+  const [failingEmail, recoveredEmail] = mail.emailsFor(name)
+  expect(failingEmail.to).toEqual(['oncall@example.com'])
+  expect(failingEmail.subject).toBe(`[Cronlight] Job DEFAULT.${name} failed 2 times in a row`)
+  expect(failingEmail.body).toContain(`Job:       DEFAULT.${name}\nType:      ${jobTypes.flaky}\n`)
+  expect(failingEmail.body).toContain('HttpRequestException: Upstream API returned 503 Service Unavailable')
+  expect(failingEmail.body).toContain(`Open Cronlight: ${baseURL}`)
+  expect(recoveredEmail.subject).toBe(`[Cronlight] Job DEFAULT.${name} succeeded again after 3 failures in a row`)
 })
 
 test('only the last attempt of a retried run counts towards an alert', async ({ request, sampleHost }) => {
