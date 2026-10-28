@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -82,14 +83,29 @@ internal static class JobTransfer
         var scheduler = await DashboardApi.Scheduler(http);
         var keys = await scheduler.GetJobKeys(group == null ? GroupMatcher<JobKey>.AnyGroup() : GroupMatcher<JobKey>.GroupEquals(group));
         var jobs = new List<JobFileEntry>();
+        var notExported = 0;
         foreach (var key in keys.OrderBy(k => k.Group).ThenBy(k => k.Name))
         {
-            if (await Entry(scheduler, key, options.Value) is { } entry)
-                jobs.Add(entry);
+            IJobDetail? detail;
+            try
+            {
+                detail = await scheduler.GetJobDetail(key);
+            }
+            // Its class cannot be loaded here: it belongs to another app sharing the database
+            catch (JobPersistenceException)
+            {
+                notExported++;
+                continue;
+            }
+            if (detail != null)
+                jobs.Add(await Entry(scheduler, detail, options.Value));
         }
 
         var now = DateTimeOffset.UtcNow;
         var file = new JobFile(1, scheduler.SchedulerName, now, jobs);
+        // In a header rather than in the file, which version 1 readers would refuse: the dashboard warns that the download
+        // is not every job
+        http.Response.Headers[NotExportedHeader] = notExported.ToString(CultureInfo.InvariantCulture);
         var name = $"cronlight-{new string(scheduler.SchedulerName.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray())}-{now:yyyyMMdd-HHmmss}";
         http.Response.Headers.ContentDisposition = $"attachment; filename=\"{name}.{(yaml ? "yaml" : "json")}\"";
         return yaml
@@ -97,21 +113,13 @@ internal static class JobTransfer
             : Results.Text(JsonSerializer.Serialize(file, Json), "application/json; charset=utf-8");
     }
 
-    /// <summary>The job as a file has it, or null when it is gone or belongs to another app (its type cannot be loaded here).</summary>
-    private static async Task<JobFileEntry?> Entry(IScheduler scheduler, JobKey key, CronlightOptions options)
-    {
-        IJobDetail? detail;
-        try
-        {
-            detail = await scheduler.GetJobDetail(key);
-        }
-        catch (JobPersistenceException)
-        {
-            return null;
-        }
-        if (detail == null)
-            return null;
+    /// <summary>How many jobs an export left out, because their class cannot be loaded here.</summary>
+    public const string NotExportedHeader = "X-Cronlight-Not-Exported";
 
+    /// <summary>The job as a file has it.</summary>
+    private static async Task<JobFileEntry> Entry(IScheduler scheduler, IJobDetail detail, CronlightOptions options)
+    {
+        var key = detail.Key;
         var secretKeys = DashboardApi.SecretKeys(detail.JobType);
         var data = detail.JobDataMap
             .Where(kv => !Retries.IsReserved(kv.Key))
@@ -216,7 +224,18 @@ internal static class JobTransfer
         var result = new ImportResultDto(dryRun == true, results.Count(r => r.Action == "create"), results.Count(r => r.Action == "update"),
             results.Count(r => r.Action == "unchanged"), results);
         if (dryRun == true)
+        {
+            // What importing would do, as the import's own event records what it did
+            var preview = new Dictionary<string, CronlightAuditChange>();
+            foreach (var (change, create) in planned)
+            {
+                preview[change.Key.ToString()] = new(null, create ? "to create" : "to update");
+                foreach (var (field, value) in change.Changes)
+                    preview[$"{change.Key}: {field}"] = value;
+            }
+            Audit.RecordChanges(http, preview);
             return Results.Ok(result);
+        }
 
         // Filled in as each job is carried out, so if the scheduler fails partway the audit event lists what was done
         var audited = new Dictionary<string, CronlightAuditChange>();
@@ -364,6 +383,12 @@ internal static class JobTransfer
             var file = yaml ? JobFileYaml.Read(text).Deserialize<JobFile>(Json) : JsonSerializer.Deserialize<JobFile>(text, Json);
             return file == null ? (null, "The file is empty") : (file, null);
         }
+        // Not JSON, but perhaps YAML in flow style, which starts with a brace too: read as YAML if it is, and otherwise
+        // answer what is wrong with it as JSON, which is likelier what it was meant to be
+        catch (JsonException ex) when (!yaml && IsSyntaxError(ex) && ReadYaml(text) is { } file)
+        {
+            return (file, null);
+        }
         catch (JsonException ex)
         {
             // Its message names Cronlight's own classes; the path says where in the file the problem is
@@ -377,6 +402,21 @@ internal static class JobTransfer
         catch (YamlException ex)
         {
             return (null, $"The file is not valid YAML (line {ex.Start.Line}, column {ex.Start.Column}): {ex.Message}");
+        }
+    }
+
+    private static bool IsSyntaxError(JsonException ex) =>
+        !ex.Message.Contains("could not be mapped", StringComparison.Ordinal) && !ex.Message.Contains("could not be converted", StringComparison.Ordinal);
+
+    private static JobFile? ReadYaml(string text)
+    {
+        try
+        {
+            return JobFileYaml.Read(text).Deserialize<JobFile>(Json);
+        }
+        catch (Exception ex) when (ex is JsonException or YamlException)
+        {
+            return null;
         }
     }
 }

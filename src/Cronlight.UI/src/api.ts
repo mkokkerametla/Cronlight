@@ -72,7 +72,8 @@ export const jobPath = (job: Pick<Job, 'group' | 'name'>) =>
 
 /**
  * Downloads the scheduler's jobs as a JSON or YAML file, named as the server names it. Fetched rather than linked, so
- * a failure shows as an error instead of downloading it.
+ * a failure shows as an error instead of downloading it. Answers the file's name, and how many jobs were left out
+ * because their class cannot be loaded in this app.
  */
 export async function exportJobs(format: 'json' | 'yaml') {
   const res = await fetch(`api/${forScheduler(`jobs/export?format=${format}`)}`, {
@@ -88,7 +89,7 @@ export async function exportJobs(format: 'json' | 'yaml') {
   link.click()
   link.remove()
   URL.revokeObjectURL(url)
-  return name
+  return { name, notExported: Number(res.headers.get('x-cronlight-not-exported') ?? 0) || 0 }
 }
 
 /** What importing a file did or would do; a file with mistakes changes nothing, and says what is wrong with each job. */

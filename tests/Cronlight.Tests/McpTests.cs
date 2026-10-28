@@ -121,6 +121,13 @@ public class McpTests
         Assert.Single(older.GetProperty("runs").EnumerateArray());
         // No more pages: tool results leave out what is null
         Assert.False(older.TryGetProperty("nextBefore", out _));
+        // A page holding exactly the last runs has none after it, in a window or not
+        var exact = await Call(client, "query_runs", new() { ["status"] = "Failed", ["limit"] = 2 });
+        Assert.Equal(2, exact.GetProperty("runs").GetArrayLength());
+        Assert.False(exact.TryGetProperty("nextBefore", out _));
+        var exactWindow = await Call(client, "query_runs", new() { ["status"] = "Failed", ["limit"] = 2, ["sinceHours"] = 1 });
+        Assert.Equal(2, exactWindow.GetProperty("runs").GetArrayLength());
+        Assert.False(exactWindow.TryGetProperty("nextBefore", out _));
 
         var status = await Call(client, "status_summary");
         Assert.Equal(2, status.GetProperty("runs").GetProperty("failed").GetInt32());

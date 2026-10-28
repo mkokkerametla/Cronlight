@@ -286,6 +286,55 @@ describe('JobsTable', () => {
     expect(names()).toHaveLength(3)
   })
 
+  it('shows each job’s recent runs only when history is on', () => {
+    const withRuns = [
+      {
+        ...jobs[0],
+        recentRuns: [
+          {
+            id: 1,
+            status: 'Failed' as const,
+            firedTimeUtc: '2026-10-28T06:00:00Z',
+            durationMs: 10,
+            attempt: 1,
+          },
+        ],
+      },
+      ...jobs.slice(1),
+    ]
+    renderTable({ jobs: withRuns })
+    expect(screen.queryByRole('columnheader', { name: 'Recent runs' })).not.toBeInTheDocument()
+  })
+
+  it('lists recent runs in their own column, with empty slots for jobs without runs, and none when history cannot be read', () => {
+    const withRuns = [
+      {
+        ...jobs[0],
+        recentRuns: [
+          {
+            id: 1,
+            status: 'Failed' as const,
+            firedTimeUtc: '2026-10-28T06:00:00Z',
+            durationMs: 10,
+            attempt: 1,
+          },
+        ],
+      },
+      { ...jobs[1], recentRuns: [] },
+      // History could not be read
+      { ...jobs[2], recentRuns: null },
+    ]
+    renderTable({ jobs: withRuns, history: true })
+
+    expect(screen.getByRole('columnheader', { name: 'Recent runs' })).toBeInTheDocument()
+    expect(within(row('send-invoices')).getByRole('list')).toHaveAccessibleName('Last run: failed')
+    expect(within(row('cleanup')).getByRole('list')).toHaveAccessibleName('No runs yet')
+    expect(within(row('foreign')).queryByRole('list')).not.toBeInTheDocument()
+    expect(
+      within(row('foreign')).getByTitle('History could not be read: see the History tab')
+    ).toBeInTheDocument()
+  })
+
   it('lets a read-only user export the jobs, but not import them', async () => {
     renderTable({ canManage: false })
 

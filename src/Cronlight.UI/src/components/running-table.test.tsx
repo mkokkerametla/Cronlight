@@ -35,6 +35,22 @@ const run = (overrides: Partial<RunningJob> = {}): RunningJob => ({
 })
 
 describe('RunningTable', () => {
+  it('leaves out the Node column on a scheduler that is not clustered', () => {
+    renderTable({ source: 'local', jobs: [run()] }, { clustered: false })
+
+    expect(screen.queryByRole('columnheader', { name: 'Node' })).not.toBeInTheDocument()
+    expect(screen.queryByText('node-1')).not.toBeInTheDocument()
+  })
+
+  it('shows the Node column when runs come from more than one node, clustered or not', () => {
+    renderTable(
+      { source: 'local', jobs: [run(), run({ fireInstanceId: 'fire-2', instanceName: 'node-2' })] },
+      { clustered: false }
+    )
+
+    expect(screen.getByRole('columnheader', { name: 'Node' })).toBeInTheDocument()
+  })
+
   it('lists running jobs with their node and how long they have run', () => {
     renderTable({
       source: 'cluster',

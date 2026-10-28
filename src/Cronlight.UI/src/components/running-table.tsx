@@ -33,6 +33,7 @@ export function RunningTable({
   localInstanceId,
   onCancel,
   logs = false,
+  clustered = true,
 }: {
   running: RunningJobs
   canManage?: boolean
@@ -41,11 +42,14 @@ export function RunningTable({
   onCancel?: (job: RunningJob) => Promise<boolean>
   /** Runs' logs are kept (execution history is on), so each can show what it has logged so far */
   logs?: boolean
+  /** The scheduler runs as a cluster; otherwise the Node column is shown only when runs come from more than one */
+  clustered?: boolean
 }) {
   const showCancel = canManage && onCancel != null
+  const showNode = clustered || new Set(running.jobs.map(j => j.instanceName)).size > 1
   const refreshMs = useRefreshInterval()
   const [openLog, setOpenLog] = useState<string | null>(null)
-  const columns = 5 + (logs ? 1 : 0) + (showCancel ? 1 : 0)
+  const columns = 4 + (showNode ? 1 : 0) + (logs ? 1 : 0) + (showCancel ? 1 : 0)
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -77,7 +81,7 @@ export function RunningTable({
               <TableRow>
                 <TableHead>Job</TableHead>
                 <TableHead>Type</TableHead>
-                <TableHead>Node</TableHead>
+                {showNode && <TableHead>Node</TableHead>}
                 <TableHead>Started</TableHead>
                 <TableHead className="text-right">Running for</TableHead>
                 {logs && <TableHead className="w-0" />}
@@ -98,7 +102,9 @@ export function RunningTable({
                       <TableCell>
                         <Badge variant="secondary">{shortType(job.jobType)}</Badge>
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{job.instanceName}</TableCell>
+                      {showNode && (
+                        <TableCell className="font-mono text-xs">{job.instanceName}</TableCell>
+                      )}
                       <TableCell>{formatDateTime(job.firedTimeUtc)}</TableCell>
                       <TableCell className="text-right tabular-nums">
                         <span className="inline-flex items-center gap-2">

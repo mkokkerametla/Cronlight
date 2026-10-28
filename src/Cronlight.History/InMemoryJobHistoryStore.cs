@@ -86,6 +86,21 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore, 
             return Task.FromResult(HistoryStatistics.Compute(records.Where(r => Matches(r, schedulerName, query)).ToList()));
     }
 
+    public Task<IReadOnlyDictionary<(string Group, string Name), IReadOnlyList<JobExecutionRecord>>> RecentRuns(
+        string schedulerName, IReadOnlyCollection<(string Group, string Name)> jobs, int count, CancellationToken cancellationToken)
+    {
+        var wanted = jobs.ToHashSet();
+        lock (gate)
+        {
+            IReadOnlyDictionary<(string Group, string Name), IReadOnlyList<JobExecutionRecord>> runs = records
+                .Where(r => r.SchedulerName == schedulerName && wanted.Contains((r.JobGroup, r.JobName)))
+                .GroupBy(r => (r.JobGroup, r.JobName))
+                .ToDictionary(g => g.Key, IReadOnlyList<JobExecutionRecord> (g) =>
+                    HistoryStatistics.RecentRuns(g, count).Select(r => r with { Log = null, HasLog = r.Log != null }).ToList());
+            return Task.FromResult(runs);
+        }
+    }
+
     public Task<IReadOnlyList<JobRunLogEntry>?> GetLog(string schedulerName, long id, CancellationToken cancellationToken)
     {
         lock (gate)

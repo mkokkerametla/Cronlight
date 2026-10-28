@@ -90,6 +90,14 @@ builder.Services.AddCronlightHistory(o =>
     dashboard counts them again every 30 seconds (or every `RefreshSeconds`, if longer), not on every refresh.
   - `GET api/history/stats` answers with them, for `hours` (24 by default) or `from` and `to`, at most 90 days,
     and optionally `group` and `name`, and `status`.
+- **Recent runs in the job list.** A column of each job's last 5 runs, oldest on the left: a check for a success, a
+  cross for a failure (orange while its retry waits), and icons of their own for cancelled, blocked and missed runs, with
+  a pulsing dot for one going on. Empty slots stand for runs a job has not had yet. A run counts by its final outcome,
+  so attempts that were retried are not runs of their own, and a run that needed retries has a small orange mark.
+  Hover for its outcome, start and duration; click the row for the job's page. It refreshes with the list, and is left
+  out on narrow screens.
+  - `GET api/jobs/search` answers each job's runs as `recentRuns` (`id`, `status`, `firedTimeUtc`, `durationMs`,
+    `attempt`), newest first, read in one query for the page's jobs.
 - **What a trigger does when it misses a run** shows on the job's page. Cron triggers made in the dashboard
   run once as soon as they can (Quartz's default), or, with "Skip missed runs", wait for the next fire time. Triggers with `IgnoreMisfirePolicy` fire every missed time instead
   and are not reported as misfires. Filter the History tab by *Misfired* to see them all.
@@ -100,7 +108,8 @@ builder.Services.AddCronlightHistory(o =>
   window of runs with them. A store that ignores them still works, but reads every newer run first, so an answer about
   a window long past can come back truncated. Run statistics come from `Statistics`, which by default counts the
   newest 20,000 runs `Query` returns (and says so, `truncated`); a store that can count in its database implements
-  it.
+  it. The job list's recent runs come from `RecentRuns`, which by default asks `Query` once per job on the page; a
+  store that can read them all at once implements it.
 
 | Option | Default | |
 |---|---|---|

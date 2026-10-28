@@ -197,6 +197,11 @@ internal static class HistoryScenarios
         var second = await client.GetFromJsonAsync<JsonElement>($"api/history?name=paged&limit=2&before={before}");
         Assert.Single(second.GetProperty("records").EnumerateArray());
         Assert.Equal(JsonValueKind.Null, second.GetProperty("nextBefore").ValueKind);
+
+        // A page holding exactly the last runs has none after it
+        var exact = await client.GetFromJsonAsync<JsonElement>("api/history?name=paged&limit=3");
+        Assert.Equal(3, exact.GetProperty("records").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, exact.GetProperty("nextBefore").ValueKind);
     }
 
     public static async Task RetentionIsScopedToTheScheduler(TestHost host)
@@ -241,7 +246,63 @@ internal static class HistoryScenarios
     public static async Task<List<JsonElement>> History(HttpClient client, string query) =>
         (await client.GetFromJsonAsync<JsonElement>($"api/history{query}")).GetProperty("records").EnumerateArray().ToList();
 
-    /// <summary>History is written in the background, so poll until it shows what the test expects.</summary>
+    /// <summary>
+    /// The store's recent runs: each job's newest runs by their final outcome, retried attempts left out unless the newest,
+    /// for the jobs asked about only; and the job list carrying them.
+    /// </summary>
+    public static async Task ReadsRecentRuns(TestHost host)
+    {
+        var store = host.Services.GetRequiredService<IJobHistoryStore>();
+        await WaitForStore(store);
+        var now = DateTimeOffset.UtcNow;
+        var n = 0;
+        async Task Add(string job, JobExecutionStatus status, int attempt = 1, string? scheduler = null) =>
+            await store.RecordFinished(new JobExecutionRecord
+            {
+                SchedulerName = scheduler ?? host.SchedulerName,
+                FireInstanceId = $"recent-{++n}",
+                InstanceName = "node",
+                JobName = job,
+                JobGroup = "recent",
+                FiredTimeUtc = now.AddMinutes(n - 100),
+                FinishedTimeUtc = now.AddMinutes(n - 100),
+                DurationMs = n,
+                Status = status,
+                Attempt = attempt,
+            }, CancellationToken.None);
+        foreach (var status in new[] { JobExecutionStatus.Failed, JobExecutionStatus.Succeeded, JobExecutionStatus.Failed })
+            await Add("a", status);
+        await Add("a", JobExecutionStatus.Retried);
+        await Add("a", JobExecutionStatus.Succeeded, attempt: 2);
+        await Add("a", JobExecutionStatus.Misfired);
+        await Add("a", JobExecutionStatus.Cancelled);
+        await Add("a", JobExecutionStatus.Running);
+        await Add("b", JobExecutionStatus.Vetoed);
+        await Add("b", JobExecutionStatus.Failed, scheduler: "another");
+        await Add("other", JobExecutionStatus.Succeeded);
+        // Its newest attempt failed, and its retry has not started yet
+        await Add("waiting", JobExecutionStatus.Succeeded);
+        await Add("waiting", JobExecutionStatus.Retried);
+
+        var runs = await store.RecentRuns(host.SchedulerName, [("recent", "a"), ("recent", "b"), ("recent", "waiting"), ("recent", "none")], 5,
+            CancellationToken.None);
+
+        Assert.Equal([("recent", "a"), ("recent", "b"), ("recent", "waiting")], runs.Keys.Order());
+        Assert.Equal([JobExecutionStatus.Retried, JobExecutionStatus.Succeeded], runs[("recent", "waiting")].Select(r => r.Status));
+        // At most 50 runs, and at least one, whatever is asked for
+        Assert.Single((await store.RecentRuns(host.SchedulerName, [("recent", "a")], 0, CancellationToken.None))[("recent", "a")]);
+        Assert.Equal([JobExecutionStatus.Running, JobExecutionStatus.Cancelled, JobExecutionStatus.Misfired, JobExecutionStatus.Succeeded,
+            JobExecutionStatus.Failed], runs[("recent", "a")].Select(r => r.Status));
+        Assert.Equal([1, 1, 1, 2, 1], runs[("recent", "a")].Select(r => r.Attempt));
+        Assert.Equal(JobExecutionStatus.Vetoed, Assert.Single(runs[("recent", "b")]).Status);
+        Assert.Empty(await store.RecentRuns(host.SchedulerName, [], 5, CancellationToken.None));
+
+        // Every job on the page carries its runs, none for a job without any
+        var page = await host.Client().GetFromJsonAsync<JsonElement>("api/jobs/search");
+        foreach (var job in page.GetProperty("jobs").EnumerateArray())
+            Assert.Equal(JsonValueKind.Array, job.GetProperty("recentRuns").ValueKind);
+    }
+
     /// <summary>
     /// The store's statistics: runs by outcome, success rate, durations and late starts over a window, as counted from its
     /// records, and through the API.
@@ -381,6 +442,35 @@ public class HistoryTests
     {
         await using var host = await TestHost.Start(history: database ? Database : InMemory);
         await HistoryScenarios.CountsStatistics(host);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task The_store_reads_each_jobs_recent_runs_by_their_final_outcome(bool database)
+    {
+        await using var host = await TestHost.Start(history: database ? Database : InMemory);
+        await HistoryScenarios.ReadsRecentRuns(host);
+    }
+
+    [Fact]
+    public async Task A_store_that_does_not_read_recent_runs_has_them_read_per_job()
+    {
+        var store = new ListStore();
+        var now = DateTimeOffset.UtcNow;
+        var n = 0;
+        foreach (var status in new[] { JobExecutionStatus.Failed, JobExecutionStatus.Retried, JobExecutionStatus.Succeeded, JobExecutionStatus.Retried })
+            await store.RecordFinished(new JobExecutionRecord
+            {
+                SchedulerName = "s", FireInstanceId = $"{++n}", InstanceName = "n", JobName = "j", JobGroup = "g",
+                FiredTimeUtc = now.AddMinutes(n), Status = status,
+            }, CancellationToken.None);
+
+        var runs = await ((IJobHistoryStore)store).RecentRuns("s", [("g", "j"), ("g", "none")], 5, CancellationToken.None);
+
+        // The newest attempt waits for its retry; the one retried before it is left out
+        Assert.Equal([JobExecutionStatus.Retried, JobExecutionStatus.Succeeded, JobExecutionStatus.Failed],
+            Assert.Single(runs).Value.Select(r => r.Status));
     }
 
     [Fact]
@@ -1157,6 +1247,14 @@ public class DatabaseTests
     {
         await using var host = await Start(name);
         await HistoryScenarios.CountsStatistics(host);
+    }
+
+    [SkippableTheory]
+    [MemberData(nameof(Databases))]
+    public async Task The_store_reads_each_jobs_recent_runs_by_their_final_outcome(string name)
+    {
+        await using var host = await Start(name);
+        await HistoryScenarios.ReadsRecentRuns(host);
     }
 
     [SkippableTheory]

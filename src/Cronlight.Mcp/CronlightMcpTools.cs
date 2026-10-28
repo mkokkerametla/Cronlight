@@ -201,9 +201,11 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
         var size = Math.Clamp(limit, 1, 100);
         if (sinceHours == null && fromUtc == null && toUtc == null)
         {
+            // One more than the page, which says whether another page follows
             var page = await access.History.Query(s.SchedulerName,
-                new JobHistoryQuery { JobGroup = group, JobName = name, Status = statusFilter, BeforeId = before, Limit = size }, cancellationToken);
-            return new RunList(page.Select(Summarize).ToList(), page.Count == size ? page[^1].Id : null, null);
+                new JobHistoryQuery { JobGroup = group, JobName = name, Status = statusFilter, BeforeId = before, Limit = size + 1 }, cancellationToken);
+            var runs = page.Take(size).ToList();
+            return new RunList(runs.Select(Summarize).ToList(), page.Count > size ? runs[^1].Id : null, null);
         }
         var window = TimeWindow.Resolve(sinceHours, fromUtc, toUtc);
         var (records, more) = await HistoryScan.Read(access.History, s.SchedulerName, window.FromUtc, window.ToUtc, group, name, statusFilter, cancellationToken, size, before);

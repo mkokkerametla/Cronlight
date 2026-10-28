@@ -148,6 +148,30 @@ public interface IJobHistoryStore
         HistoryStatistics.Scan(this, schedulerName, query, cancellationToken);
 
     /// <summary>
+    /// The last <paramref name="count"/> runs of each job (from 1 to 50), newest first, by its final outcome: attempts
+    /// that were retried are left out, since a later attempt has the run's outcome, except the job's newest record, whose
+    /// retry has not started yet. Jobs without runs are missing from the answer. A store that does not implement it reads
+    /// each job's runs with <see cref="Query"/>, a few jobs at a time.
+    /// </summary>
+    async Task<IReadOnlyDictionary<(string Group, string Name), IReadOnlyList<JobExecutionRecord>>> RecentRuns(
+        string schedulerName, IReadOnlyCollection<(string Group, string Name)> jobs, int count, CancellationToken cancellationToken)
+    {
+        var runs = new System.Collections.Concurrent.ConcurrentDictionary<(string Group, string Name), IReadOnlyList<JobExecutionRecord>>();
+        var parallel = new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = cancellationToken };
+        await Parallel.ForEachAsync(jobs.Distinct(), parallel, async (job, ct) =>
+        {
+            // Enough to fill the count past a few retried attempts
+            var records = await Query(schedulerName,
+                new JobHistoryQuery { JobGroup = job.Group, JobName = job.Name, Limit = HistoryStatistics.RecentRunLimit(count) * 4 }, ct);
+            // Checked here too, for a store that does not filter by job
+            var recent = HistoryStatistics.RecentRuns(records.Where(r => r.JobGroup == job.Group && r.JobName == job.Name), count);
+            if (recent.Count > 0)
+                runs[job] = recent;
+        });
+        return runs;
+    }
+
+    /// <summary>
     /// Deletes this scheduler's records fired before the cutoff and returns how many were removed.
     /// Scoped by scheduler so apps sharing a database keep their own retention.
     /// </summary>
