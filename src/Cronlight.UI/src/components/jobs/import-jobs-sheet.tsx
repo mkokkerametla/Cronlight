@@ -49,8 +49,11 @@ export function ImportJobsSheet({ open, onOpenChange, onImported }: Props) {
   )
 }
 
-/** JSON starts with a brace; anything else is read as YAML, which JSON also is */
-const isYaml = (text: string) => !text.trimStart().startsWith('{')
+/**
+ * Sent as JSON when it starts with a brace or bracket, so a mistake in JSON is answered as JSON; the server reads what
+ * is not JSON but YAML in flow style, which starts with a brace too, as YAML. Anything else is sent as YAML.
+ */
+const isYaml = (text: string) => !/^\s*[[{]/.test(text)
 
 function ImportForm({ onDone }: { onDone: (imported: boolean) => void }) {
   const [text, setText] = useState('')

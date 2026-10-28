@@ -25,7 +25,8 @@ namespace Cronlight;
 /// What a create or update set, by field: description, triggers, retry, or data.&lt;key&gt;. For a run (trigger),
 /// the data changed for that run only, and retryOf when it repeats a failed run. For a group or the whole scheduler,
 /// jobs: how many jobs it held. For an import, &lt;group&gt;.&lt;name&gt; (created or updated) for each job it changed, and
-/// &lt;group&gt;.&lt;name&gt;: &lt;field&gt; for what it changed.
+/// &lt;group&gt;.&lt;name&gt;: &lt;field&gt; for what it changed; for a dry run the same, as to create or to update, for what
+/// importing would change.
 /// </param>
 /// <param name="Scheduler">The scheduler the job is in.</param>
 /// <param name="Via">How the change was asked for: null for the dashboard or its API, mcp for an MCP client's tool call.</param>

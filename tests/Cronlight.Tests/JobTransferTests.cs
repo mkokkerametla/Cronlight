@@ -180,7 +180,11 @@ public class JobTransferTests
         Assert.Equal("updated", audited["billing.invoices"].After);
         Assert.Equal("created", audited["DEFAULT.fresh"].After);
         Assert.Equal(new CronlightAuditChange("42", "43"), audited["billing.invoices: data.customerId"]);
-        Assert.Empty(sink.Events.First(e => e.Action == "import-dry-run").Changes);
+        // The check recorded what importing would do
+        var checkedChanges = sink.Events.First(e => e.Action == "import-dry-run").Changes;
+        Assert.Equal("to update", checkedChanges["billing.invoices"].After);
+        Assert.Equal("to create", checkedChanges["DEFAULT.fresh"].After);
+        Assert.Equal(new CronlightAuditChange("42", "43"), checkedChanges["billing.invoices: data.customerId"]);
     }
 
     [Fact]
@@ -289,6 +293,33 @@ public class JobTransferTests
             "Job data 'hosts' is a list or an object; job data values are text",
         ], errors);
         Assert.False(await (await host.Scheduler()).CheckExists(new JobKey("fine")));
+    }
+
+    [Fact]
+    public async Task Yaml_in_flow_style_sent_as_json_is_read_as_yaml_and_broken_json_is_answered_as_json()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+
+        var flow = await Imported(client, $"{{version: 1, jobs: [{{name: flow, type: {Plain}}}]}}", yaml: false);
+        Assert.Equal("create", Actions(flow)["DEFAULT.flow"]);
+
+        var broken = await Import(client, "{\"version\": 1, \"jobs\": [}", yaml: false);
+        Assert.Equal(HttpStatusCode.BadRequest, broken.StatusCode);
+        Assert.StartsWith("The file is not valid JSON", (await broken.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString());
+    }
+
+    [Fact]
+    public async Task An_export_says_how_many_jobs_it_left_out()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        await CreateJobs(client);
+
+        var export = await client.GetAsync("api/jobs/export");
+
+        Assert.Equal("0", Assert.Single(export.Headers.GetValues("X-Cronlight-Not-Exported")));
+        Assert.False((await export.Content.ReadFromJsonAsync<JsonElement>()).TryGetProperty("notExported", out _));
     }
 
     [Theory]

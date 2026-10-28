@@ -63,6 +63,21 @@ export interface Job {
   triggers: Trigger[]
   /** The policy the job runs with, its own or its type's; null when failed runs are not retried */
   retry: JobRetryPolicy | null
+  /**
+   * From jobs/search with history on: the job's last runs, newest first, each by its final outcome. Null or missing when
+   * history could not be read.
+   */
+  recentRuns?: RecentRun[] | null
+}
+
+/** One of a job's last runs, as the job list shows it */
+export interface RecentRun {
+  id: number
+  status: ExecutionStatus
+  firedTimeUtc: string
+  durationMs: number | null
+  /** Above 1 when the run's earlier attempts failed and were retried */
+  attempt: number
 }
 
 export type JobParameterType = 'String' | 'Int' | 'Bool' | 'Url' | 'Text' | 'Secret'

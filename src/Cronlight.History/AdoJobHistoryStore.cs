@@ -36,9 +36,10 @@ internal sealed class AdoJobHistoryStore(
     private bool Has(string column) => addedColumns.Contains(column);
     private string InsertColumns => string.Join(", ", [BaseColumns, .. addedColumns]);
 
-    // Queries read whether a run has a log, not the log itself, which can be long
-    private string Columns => string.Join(", ",
-        ["ID", BaseColumns, .. addedColumns.Select(c => c == LogColumn ? $"CASE WHEN {c} IS NULL THEN 0 ELSE 1 END" : c)]);
+    // Queries read whether a run has a log, not the log itself, which can be long. A query selects the added columns as
+    // they were when it began and reads them back the same way: a background upgrade may add one meanwhile.
+    private static string ColumnsOf(string[] added) => string.Join(", ",
+        ["ID", BaseColumns, .. added.Select(c => c == LogColumn ? $"CASE WHEN {c} IS NULL THEN 0 ELSE 1 END AS HAS_LOG" : c)]);
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -160,13 +161,55 @@ internal sealed class AdoJobHistoryStore(
             Add(command, "before", query.BeforeId);
         }
 
-        command.CommandText = dialect.SelectTop(Math.Clamp(query.Limit, 1, 500), Columns, $"FROM {tableName} {where} ORDER BY ID DESC");
+        var added = addedColumns;
+        command.CommandText = dialect.SelectTop(Math.Clamp(query.Limit, 1, 500), ColumnsOf(added), $"FROM {tableName} {where} ORDER BY ID DESC");
 
         var records = new List<JobExecutionRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
-            records.Add(Read(reader));
+            records.Add(Read(reader, added));
         return records;
+    }
+
+    /// <summary>
+    /// One query: each job's newest runs read through the job index, joined with UNION ALL, so a job with many runs costs
+    /// no more than one with a few. A retried attempt is left out unless it is the job's newest record: its retry has not
+    /// started yet.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<(string Group, string Name), IReadOnlyList<JobExecutionRecord>>> RecentRuns(
+        string schedulerName, IReadOnlyCollection<(string Group, string Name)> jobs, int count, CancellationToken cancellationToken)
+    {
+        var runs = new Dictionary<(string Group, string Name), IReadOnlyList<JobExecutionRecord>>();
+        var wanted = jobs.Distinct().ToList();
+        if (NotReadyYet || wanted.Count == 0)
+            return runs;
+
+        await using var connection = await dataSource.OpenConnection(cancellationToken);
+        await using var command = connection.CreateCommand();
+        Add(command, "sched", schedulerName);
+        Add(command, "retried", nameof(JobExecutionStatus.Retried));
+        var limit = HistoryStatistics.RecentRunLimit(count);
+        var added = addedColumns;
+        var columns = ColumnsOf(added);
+        command.CommandText = string.Join(" UNION ALL ", wanted.Select((job, i) =>
+        {
+            Add(command, $"group{i}", job.Group);
+            Add(command, $"name{i}", job.Name);
+            var thisJob = $"SCHED_NAME = {P("sched")} AND JOB_GROUP = {P($"group{i}")} AND JOB_NAME = {P($"name{i}")}";
+            return $"SELECT * FROM ({dialect.SelectTop(limit, columns,
+                $"FROM {tableName} WHERE {thisJob} AND (STATUS <> {P("retried")} OR ID = (SELECT MAX(ID) FROM {tableName} WHERE {thisJob})) " +
+                "ORDER BY ID DESC")}) r{i}";
+        }));
+
+        var found = new List<JobExecutionRecord>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+                found.Add(Read(reader, added));
+        }
+        foreach (var job in found.GroupBy(r => (r.JobGroup, r.JobName)))
+            runs[job.Key] = job.OrderByDescending(r => r.Id).ToList();
+        return runs;
     }
 
     public async Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken)
@@ -497,13 +540,14 @@ internal sealed class AdoJobHistoryStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private JobExecutionRecord Read(DbDataReader reader)
+    /// <param name="added">The added columns the query selected.</param>
+    private static JobExecutionRecord Read(DbDataReader reader, string[] added)
     {
         string? Text(int i) => reader.IsDBNull(i) ? null : reader.GetString(i);
         long? Long(int i) => reader.IsDBNull(i) ? null : Convert.ToInt64(reader.GetValue(i));
         DateTimeOffset? Time(int i) => Long(i) is { } ticks ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
         // Added columns follow the base ones, in the order present
-        int? Added(string column) => Array.IndexOf(addedColumns, column) is >= 0 and var i ? 16 + i : null;
+        int? Added(string column) => Array.IndexOf(added, column) is >= 0 and var i ? 16 + i : null;
 
         return new JobExecutionRecord
         {

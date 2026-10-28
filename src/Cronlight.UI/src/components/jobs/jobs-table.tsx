@@ -52,6 +52,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { RecentRuns } from '@/components/jobs/recent-runs'
 import { StatusBadge } from '@/components/jobs/status-badge'
 import { exportJobs } from '@/api'
 import type { DashboardActions } from '@/hooks/use-dashboard'
@@ -85,7 +86,15 @@ interface Props {
   onNewJob: () => void
   onImport: () => void
   actions: DashboardActions
+  /** Execution history is on: each job's last runs are shown */
+  history?: boolean
 }
+
+// Phones keep the job, its status and its actions, which the next fire time's schedule would push off the screen; the
+// job's panel has it. Selecting several jobs is for wider screens.
+const fromSm = 'hidden sm:table-cell'
+const fromMd = 'hidden md:table-cell'
+const fromLg = 'hidden lg:table-cell'
 
 export function JobsTable({
   jobs,
@@ -99,6 +108,7 @@ export function JobsTable({
   onNewJob,
   onImport,
   actions,
+  history = false,
 }: Props) {
   const [search, setSearch] = useState(query.search)
   const [checked, setChecked] = useState<Set<string>>(new Set())
@@ -268,7 +278,7 @@ export function JobsTable({
       </div>
 
       {canManage && checkedJobs.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/50 px-3 py-2 text-sm">
+        <div className="hidden flex-wrap items-center gap-2 rounded-lg border bg-muted/50 px-3 py-2 text-sm sm:flex">
           <span className="font-medium">{checkedJobs.length} selected</span>
           <Button size="sm" variant="outline" disabled={bulkBusy} onClick={() => runBulk('pause')}>
             <Pause /> Pause
@@ -301,7 +311,7 @@ export function JobsTable({
             <TableHeader>
               <TableRow>
                 {canManage && (
-                  <TableHead className="w-10">
+                  <TableHead className={cn('w-10', fromSm)}>
                     <Checkbox
                       aria-label="Select all"
                       checked={
@@ -318,9 +328,10 @@ export function JobsTable({
                   </TableHead>
                 )}
                 <TableHead>Job</TableHead>
-                <TableHead>Type</TableHead>
+                <TableHead className={fromMd}>Type</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Next fire</TableHead>
+                {history && <TableHead className={fromLg}>Recent runs</TableHead>}
+                <TableHead className={fromSm}>Next fire</TableHead>
                 {canManage && <TableHead className="w-28 text-right">Actions</TableHead>}
               </TableRow>
             </TableHeader>
@@ -344,7 +355,7 @@ export function JobsTable({
                     onClick={() => onSelect(job)}
                   >
                     {canManage && (
-                      <TableCell onClick={e => e.stopPropagation()}>
+                      <TableCell className={fromSm} onClick={e => e.stopPropagation()}>
                         <Checkbox
                           aria-label={`Select ${job.name}`}
                           checked={checked.has(key)}
@@ -357,7 +368,7 @@ export function JobsTable({
                       <div className="font-medium text-foreground">{job.name}</div>
                       <div className="text-xs text-muted-foreground">{job.group}</div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className={fromMd}>
                       <Badge
                         variant={job.loadable ? 'secondary' : 'outline'}
                         className={cn(!job.loadable && 'text-destructive')}
@@ -371,7 +382,22 @@ export function JobsTable({
                     <TableCell>
                       <StatusBadge job={job} />
                     </TableCell>
-                    <TableCell title={next ? formatDateTime(next) : undefined}>
+                    {history && (
+                      <TableCell className={fromLg}>
+                        {job.recentRuns ? (
+                          <RecentRuns runs={job.recentRuns} />
+                        ) : (
+                          // History could not be read: not the same as no runs yet
+                          <span
+                            className="text-muted-foreground"
+                            title="History could not be read: see the History tab"
+                          >
+                            -
+                          </span>
+                        )}
+                      </TableCell>
+                    )}
+                    <TableCell className={fromSm} title={next ? formatDateTime(next) : undefined}>
                       <div>{nextFireTime(next) ?? '-'}</div>
                       {schedule && <div className="text-xs text-muted-foreground">{schedule}</div>}
                     </TableCell>
@@ -593,9 +619,18 @@ function SchedulerActions({
 }) {
   const [confirming, setConfirming] = useState<BulkTarget | null>(null)
   const download = (format: 'json' | 'yaml') =>
-    exportJobs(format).catch((err: Error) =>
-      toast.error('Could not export the jobs', { description: err.message })
-    )
+    exportJobs(format)
+      .then(({ notExported }) => {
+        if (notExported > 0)
+          toast.warning(
+            `${notExported} ${notExported === 1 ? 'job was' : 'jobs were'} not exported`,
+            {
+              description:
+                'Their classes cannot be loaded in this app: they belong to another app sharing the database. Export them from that app.',
+            }
+          )
+      })
+      .catch((err: Error) => toast.error('Could not export the jobs', { description: err.message }))
   return (
     <>
       <DropdownMenu>

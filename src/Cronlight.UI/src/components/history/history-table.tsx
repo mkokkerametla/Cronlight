@@ -49,6 +49,11 @@ interface Props {
   jobTypes?: JobType[]
   /** This node's scheduler instance id: only the node running a job has its log so far */
   localInstanceId?: string
+  /**
+   * The scheduler runs as a cluster. Otherwise every run is on this node, so the Node column is shown only when the
+   * runs listed came from more than one (a cluster earlier, say).
+   */
+  clustered?: boolean
 }
 
 // Runs that ended without succeeding and will not be retried automatically
@@ -62,6 +67,7 @@ export function HistoryTable({
   onRetry,
   jobTypes = [],
   localInstanceId,
+  clustered = true,
 }: Props) {
   // A run going on here shows its log so far; one on another node only once it has finished
   const liveLog = (r: ExecutionRecord) =>
@@ -84,7 +90,8 @@ export function HistoryTable({
   const refreshMs = useRefreshInterval()
   const [openLog, setOpenLog] = useState<number | null>(null)
   const [hours, setHours] = useState(24)
-  const columns = canManage && onRetry ? 6 : 5
+  const showNode = clustered || new Set(records.map(r => r.instanceName)).size > 1
+  const columns = 4 + (showNode ? 1 : 0) + (canManage && onRetry ? 1 : 0)
 
   return (
     // New runs wait while the pointer is over the list, so a click lands on the run aimed at
@@ -181,7 +188,7 @@ export function HistoryTable({
                 <TableHead>Outcome</TableHead>
                 <TableHead>Fired</TableHead>
                 <TableHead className="text-right">Duration</TableHead>
-                <TableHead>Node</TableHead>
+                {showNode && <TableHead>Node</TableHead>}
                 {canManage && onRetry && (
                   <TableHead>
                     <span className="sr-only">Actions</span>
@@ -264,9 +271,11 @@ export function HistoryTable({
                     <TableCell className="text-right tabular-nums">
                       {formatDuration(r.durationMs)}
                     </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {r.instanceName}
-                    </TableCell>
+                    {showNode && (
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {r.instanceName}
+                      </TableCell>
+                    )}
                     {canManage && onRetry && (
                       <TableCell className="text-right">
                         {retryable.includes(r.status) && (

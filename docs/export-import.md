@@ -101,7 +101,8 @@ gives the value or, better, a secret reference that each environment's configura
 
 ## What is not exported
 
-- Jobs of other apps sharing the scheduler (types this app cannot load) are left out.
+- Jobs of other apps sharing the scheduler (types this app cannot load) are left out. The `X-Cronlight-Not-Exported`
+  response header counts them, and the dashboard warns after the download. Export them from the app they belong to.
 - Waiting retries, pending manual runs, triggers of other kinds, and the Quartz calendar, priority and data of
   triggers.
 - Whether a job is durable: jobs the import creates are durable, as jobs created from the dashboard are.
@@ -111,4 +112,5 @@ gives the value or, better, a secret reference that each environment's configura
 ## Audit
 
 An import is audited as one event, `import` (`import-dry-run` for a check), with `<group>.<name>` set to `created` or
-`updated` for each job it changed and `<group>.<name>: <field>` for each change, secrets masked.
+`updated` for each job it changed and `<group>.<name>: <field>` for each change, secrets masked. A check records the
+same preview, with `to create` or `to update` for each job importing would change.

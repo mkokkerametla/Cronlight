@@ -35,6 +35,8 @@ claude mcp add --transport http cronlight https://ops.contoso.com/ops/jobs/mcp -
 
 The sample host takes its demo role header, so locally:
 `claude mcp add --transport http cronlight http://localhost:5099/ops/jobs/mcp --header "X-Demo-Role: admin"`.
+The sample host turns `AllowActions` on, so its MCP clients can pause, resume and run jobs: an app that copies its
+setup gets that too. Leave it out to keep the server read-only.
 
 Clients that support MCP's OAuth sign-in can use it when your app's authentication is set up for it; Cronlight leaves
 authentication to the host, as it does for the dashboard.

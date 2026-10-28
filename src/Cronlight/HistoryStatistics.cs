@@ -61,6 +61,16 @@ internal static class HistoryStatistics
         };
     }
 
+    /// <summary>How many of a job's last runs a store reads at most, whatever it is asked for.</summary>
+    public static int RecentRunLimit(int count) => Math.Clamp(count, 1, 50);
+
+    /// <summary>
+    /// A job's last runs from its records, newest first: each run by its final outcome, so a retried attempt is left out,
+    /// unless it is the newest record, whose retry has not started yet.
+    /// </summary>
+    public static List<JobExecutionRecord> RecentRuns(IEnumerable<JobExecutionRecord> newestFirst, int count) =>
+        newestFirst.Where((r, i) => i == 0 || r.Status != JobExecutionStatus.Retried).Take(RecentRunLimit(count)).ToList();
+
     /// <summary>The figures read from the store's records, for a store that does not count them itself.</summary>
     public static async Task<JobRunStatistics> Scan(IJobHistoryStore store, string schedulerName, JobHistoryQuery query,
         CancellationToken cancellationToken)
@@ -83,7 +93,10 @@ internal static class HistoryScan
 
     /// <param name="fromUtc">Runs that started at or after this time; every run when null.</param>
     /// <param name="toUtc">Runs that started before this time; up to now when null.</param>
-    /// <param name="limit">Stop once this many runs in the window are read.</param>
+    /// <param name="limit">
+    /// Stop once this many runs in the window are read. Truncated then means another run follows them, not only that the
+    /// limit was reached.
+    /// </param>
     public static async Task<(List<JobExecutionRecord> Records, bool Truncated)> Read(IJobHistoryStore store, string scheduler,
         DateTimeOffset? fromUtc, DateTimeOffset? toUtc, string? group, string? name, JobExecutionStatus? status,
         CancellationToken cancellationToken, int limit = MaxRecords, long? beforeId = null)
@@ -101,14 +114,15 @@ internal static class HistoryScan
             read += page.Count;
             foreach (var record in page.Where(r => (fromUtc == null || r.FiredTimeUtc >= fromUtc) && (toUtc == null || r.FiredTimeUtc < toUtc)))
             {
-                records.Add(record);
                 if (records.Count >= limit)
                     return (records, true);
+                records.Add(record);
             }
             // Records are in the order they were made, which is the order runs started, give or take a moment
             if (page.Count < PageSize || (fromUtc != null && page[^1].FiredTimeUtc < fromUtc))
                 return (records, false);
-            if (read >= MaxRecords)
+            // Past the cap by one page at most, which says whether a window holding exactly the cap has more
+            if (read > MaxRecords)
                 return (records, true);
             before = page[^1].Id;
         }

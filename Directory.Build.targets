@@ -4,4 +4,10 @@
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
     <None Include="$(MSBuildThisFileDirectory)assets/icon.png" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
+
+  <!-- NuGet shows release notes on the package page: they point to the GitHub release the tag creates. Here, where the
+       version is known, from the tag in CI or VersionPrefix locally. -->
+  <PropertyGroup Condition="'$(IsPackable)' == 'true' And '$(GITHUB_REPOSITORY)' != ''">
+    <PackageReleaseNotes>What is new in $(Version): $(GITHUB_SERVER_URL)/$(GITHUB_REPOSITORY)/releases/tag/v$(Version)</PackageReleaseNotes>
+  </PropertyGroup>
 </Project>

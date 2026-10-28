@@ -221,6 +221,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
                     onNewJob={() => setCreating(true)}
                     onImport={() => setImporting(true)}
                     actions={actions}
+                    history={historyEnabled}
                   />
                 </TabsContent>
                 <TabsContent value="running" className="pt-2">
@@ -230,6 +231,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
                     localInstanceId={scheduler?.schedulerInstanceId}
                     onCancel={actions.cancel}
                     logs={historyEnabled}
+                    clustered={scheduler?.jobStoreClustered ?? true}
                   />
                 </TabsContent>
                 {historyEnabled && (
@@ -242,6 +244,7 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
                       onRetry={actions.retry}
                       jobTypes={jobTypes}
                       localInstanceId={scheduler?.schedulerInstanceId}
+                      clustered={scheduler?.jobStoreClustered ?? true}
                     />
                   </TabsContent>
                 )}

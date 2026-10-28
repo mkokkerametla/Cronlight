@@ -63,8 +63,14 @@ internal record JobDto(
     // The policy the job runs with, its own or its type's; null when failed runs are not retried
     JobRetryPolicy? Retry = null,
     // The [CronlightJob] description of the job's type, as opposed to Description, which is this job's own
-    string? TypeDescription = null
+    string? TypeDescription = null,
+    // jobs/search only, with history on: the job's last runs, newest first, each by its final outcome
+    IReadOnlyList<RecentRunDto>? RecentRuns = null
 );
+
+/// <summary>One of a job's last runs, as the job list shows it.</summary>
+/// <param name="Attempt">Above 1 when the run's earlier attempts failed and were retried.</param>
+internal record RecentRunDto(long Id, JobExecutionStatus Status, DateTimeOffset FiredTimeUtc, long? DurationMs, int Attempt);
 
 /// <summary>One page of the job list, with counts over every job for the dashboard's stat cards.</summary>
 /// <param name="Total">Jobs matching the search and filters, on every page.</param>
@@ -349,13 +355,17 @@ internal static class DashboardApi
                     jobs.Add(job);
             }
 
+            if (http.RequestServices.GetService<IJobHistoryStore>() is { } store && jobs.Count > 0)
+                jobs = await WithRecentRuns(store, scheduler.SchedulerName, jobs, http.RequestServices.GetRequiredService<ILoggerFactory>(), ct);
+
             var counts = JobCounts(all);
             var types = all.Select(j => j.TypeLabel).Distinct().Order().ToList();
             return Results.Ok(new JobPageDto(jobs, matching.Count, current, size, counts, types));
         })
             .WithTags(Tags.Jobs).WithSummary("Searches, filters and pages the jobs")
             .WithDescription("search matches names and groups; type is a job type label; status is Active, Paused, Unloadable or Error. " +
-                "Pages hold 50 jobs unless pageSize says otherwise, at most 200. The counts are over every job, whatever the filters.")
+                "Pages hold 50 jobs unless pageSize says otherwise, at most 200. The counts are over every job, whatever the filters. " +
+                "With history on, each job carries its last 5 runs (recentRuns), newest first, each by its final outcome.")
             .Produces<JobPageDto>().ProducesProblem(StatusCodes.Status400BadRequest);
 
         api.MapGet("/jobs/{group}/{name}", async (string group, string name, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
@@ -432,10 +442,14 @@ internal static class DashboardApi
                 JobName = name,
                 Status = statusFilter,
                 BeforeId = before,
-                Limit = pageSize
+                // One more than the page, which says whether another page follows. Stores read at most 500, so a page of
+                // 500 that is full may have none after it.
+                Limit = pageSize + 1
             }, ct);
 
-            return Results.Ok(new HistoryPageDto(records, records.Count == pageSize ? records[^1].Id : null));
+            var more = records.Count > pageSize || (records.Count == pageSize && pageSize == 500);
+            var page = records.Take(pageSize).ToList();
+            return Results.Ok(new HistoryPageDto(page, more ? page[^1].Id : null));
         })
             .WithTags(Tags.History).WithSummary("Recorded runs, newest first")
             .WithDescription("group and name pick one job's runs, and status one outcome. Pages hold 50 runs unless limit says otherwise, " +
@@ -1396,6 +1410,34 @@ internal static class DashboardApi
     }
 
     private static readonly string[] JobStatuses = ["Active", "Paused", "Unloadable", "Error"];
+
+    /// <summary>How many of a job's last runs the job list shows.</summary>
+    internal const int RecentRunCount = 5;
+
+    /// <summary>
+    /// The jobs with their last runs, read in one call to the store. The list still loads when history cannot be read,
+    /// without them, so the dashboard shows no runs rather than none yet; the History tab says why.
+    /// </summary>
+    private static async Task<List<JobDto>> WithRecentRuns(IJobHistoryStore store, string schedulerName, List<JobDto> jobs,
+        ILoggerFactory loggers, CancellationToken ct)
+    {
+        IReadOnlyDictionary<(string Group, string Name), IReadOnlyList<JobExecutionRecord>> runs;
+        try
+        {
+            runs = await store.RecentRuns(schedulerName, jobs.Select(j => (j.Group, j.Name)).ToList(), RecentRunCount, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            loggers.CreateLogger("Cronlight").LogWarning(ex, "Could not read the recent runs of the job list from history in {Scheduler}",
+                schedulerName);
+            return jobs;
+        }
+        return jobs.Select(j => j with
+        {
+            RecentRuns = (runs.GetValueOrDefault((j.Group, j.Name)) ?? [])
+                .Select(r => new RecentRunDto(r.Id, r.Status, r.FiredTimeUtc, r.DurationMs, r.Attempt)).ToList()
+        }).ToList();
+    }
 
     /// <summary>The job as the dashboard shows it, or null when it does not exist (e.g. deleted meanwhile).</summary>
     internal static async Task<JobDto?> LoadJob(IScheduler scheduler, JobKey key, JobTypeCatalog catalog, CronlightOptions options)
