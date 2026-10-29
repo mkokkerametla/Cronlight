@@ -40,7 +40,8 @@ These are listed so the roadmap below is read against them:
     misfire is recorded at the fire time it makes up for.
   - Several schedulers: permissions per scheduler (`o.Schedulers[name]`); an added scheduler given its
     properties is read from its tables, like the host's own; each scheduler can offer only its own app's job
-    types in New job (`o.Schedulers[name].JobAssemblies`).
+    types in New job (`o.Schedulers[name].JobAssemblies`); each scheduler can read secret references from a
+    section of its own (`o.Schedulers[name].SecretsSection`).
 - Log output for each run: what a job logs through `ILogger` while it runs is kept with that run in history
   (`RUN_LOG` column), with sensitive job data values masked, and shown in the History tab. Captured by
   wrapping the host's job factory, so the log follows the run's async flow; a scheduler built in code opts in
@@ -73,7 +74,12 @@ These are listed so the roadmap below is read against them:
   (`api/running/{fireInstanceId}/log`).
 - AI mode, in the MCP package (`AddCronlightAssistant`): ask about jobs in plain language in the dashboard, answered by
   the app's own `IChatClient` with the MCP server's read-only tools, as the signed-in user. Answers stream in with each
-  tool shown as it runs, and job names link to the job. See [AI mode](ai-mode.md).
+  tool shown as it runs, and job names link to the job. Questions can be rate limited (`RateLimitPolicy`). See
+  [AI mode](ai-mode.md).
+- Accessibility: axe checks the main views against WCAG 2.2 AA in the end-to-end tests, in both themes; job names
+  in the list open the job from the keyboard, and every trigger field has a visible label.
+- Unsaved changes: closing a job's editor, Run with different data, New job or an import asks before discarding
+  what was entered.
 
 ## How Cronlight compares
 
@@ -114,6 +120,11 @@ Suggested order: Quartz 4 support once 4.x settles (see
 be built.
 
 ## Next (1.x)
+
+### A side nav
+
+One side nav for the dashboard's areas (Dashboard, Analytics and AI mode), in place of the tabs and the AI mode
+switch, which differ in style today ([#51](https://github.com/mkokkerametla/Cronlight/issues/51)).
 
 ### Quartz 4 support
 
@@ -182,7 +193,7 @@ Waiting for a user who asks for them, or for Quartz 4, which does some of them i
 
 - **Translations** of the dashboard.
 - **Time zones**: show and edit schedules in a chosen zone, and warn about daylight-saving gaps and repeats.
-- **Accessibility**: an axe scan in the tests, and tests at phone width.
+- **Accessibility**: end-to-end tests at phone width.
 
 ## Known gaps
 
