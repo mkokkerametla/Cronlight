@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import {
+  ArrowDown,
   ArrowUp,
   ChevronRight,
   Copy,
@@ -190,6 +191,8 @@ export function Assistant({
   }
 
   const retry = () => void ask(turns.slice(0, -1))
+  // Asking the same again would stop at the same limit: the model is asked to go on instead, in the open
+  const continueAnswer = () => askQuestion(continueQuestion)
 
   const startOver = () => {
     pending?.abort()
@@ -277,6 +280,7 @@ export function Assistant({
               turn={turn}
               onOpenJob={onOpenJob}
               onRetry={n === turns.length - 1 && !pending ? retry : undefined}
+              onContinue={n === turns.length - 1 && !pending ? continueAnswer : undefined}
             />
           )
         )}
@@ -311,15 +315,22 @@ function announcement(turn: Turn | undefined) {
   }
 }
 
+/** What Continue asks after an answer was cut off */
+const continueQuestion = 'Continue from where you stopped.'
+
 /** An answer: the tools it used, its text as it is written, and what can be done with it */
 function Answer({
   turn,
   onOpenJob,
   onRetry,
+  onContinue,
 }: {
   turn: Turn
   onOpenJob: (group: string, name: string) => void
+  /** Asks the question again; offered for the latest answer when it failed or was stopped */
   onRetry?: () => void
+  /** Asks the model to go on; offered for the latest answer when it was cut off */
+  onContinue?: () => void
 }) {
   const streaming = turn.status === 'streaming'
   const tools = turn.tools ?? []
@@ -335,12 +346,26 @@ function Answer({
         )}
         {turn.text && <Markdown text={turn.text} links={{ onOpenJob }} />}
         {turn.status === 'stopped' && (
-          <p className="text-xs text-muted-foreground italic">Stopped.</p>
+          <div className="-ml-2 flex items-center gap-1">
+            <p className="px-2 text-xs text-muted-foreground italic">Stopped.</p>
+            {onRetry && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-muted-foreground"
+                onClick={onRetry}
+              >
+                <RotateCw /> Try again
+              </Button>
+            )}
+          </div>
         )}
         {turn.cutOff && (
           <p className="text-xs text-muted-foreground italic">
-            Cut off: the answer reached the model's length limit. Ask for the rest, or for a shorter
-            answer.
+            Cut off: the answer reached the model's length limit.{' '}
+            {onContinue
+              ? 'Continue asks for the rest.'
+              : 'Ask for the rest, or for a shorter answer.'}
           </p>
         )}
         {turn.status === 'error' &&
@@ -385,6 +410,16 @@ function Answer({
             >
               <Copy /> Copy
             </Button>
+            {turn.cutOff && onContinue && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-muted-foreground"
+                onClick={onContinue}
+              >
+                <ArrowDown /> Continue
+              </Button>
+            )}
           </div>
         )}
       </div>

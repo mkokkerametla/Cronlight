@@ -175,6 +175,13 @@ describe('Assistant', () => {
 
     expect(await screen.findByText('Stopped.')).toBeInTheDocument()
     expect(screen.getByText('Half an answer')).toBeInTheDocument()
+
+    // Stopped by mistake: asked again, without the half answer
+    answers({ type: 'text', text: 'The whole answer.' }, { type: 'done' })
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByText('The whole answer.')).toBeInTheDocument()
+    expect(screen.queryByText('Half an answer')).toBeNull()
+    expect(vi.mocked(askAssistant).mock.calls[1][0]).toEqual([{ role: 'user', text: 'Hello?' }])
   })
 
   it("says when the answer was cut off at the model's length limit", async () => {
@@ -186,6 +193,19 @@ describe('Assistant', () => {
     expect(await screen.findByText(/Cut off: the answer reached/)).toBeInTheDocument()
     expect(screen.getByText('Half a table')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+
+    // Asking the same again would stop at the same limit: Continue asks for the rest, keeping what was written
+    answers({ type: 'text', text: 'The rest of it.' }, { type: 'done' })
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(await screen.findByText('The rest of it.')).toBeInTheDocument()
+    expect(vi.mocked(askAssistant).mock.calls[1][0]).toEqual([
+      { role: 'user', text: 'What failed?' },
+      { role: 'assistant', text: 'Half a table' },
+      { role: 'user', text: 'Continue from where you stopped.' },
+    ])
+    // Only the latest answer offers it
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
   })
 
   it('says when the connection closed before the answer finished, and does not send it back', async () => {
