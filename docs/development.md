@@ -40,14 +40,8 @@ cd src/Cronlight.UI && npm run dev
 build/run.sh --ui
 ```
 
-To try [AI mode](ai-mode.md#trying-it-with-the-sample-host), keep a model's key in the sample's user secrets
-(`Assistant:ApiKey`) and set `Assistant__Model`, and `Assistant__Endpoint` for a provider other than OpenAI, when
-starting it. User secrets are read only in Development, which `build/run.sh` and the command above set:
-
-```bash
-Assistant__Endpoint=https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/v1 \
-Assistant__Model=@cf/openai/gpt-oss-120b build/run.sh
-```
+To try AI mode, follow its [sample-host setup](ai-mode.md#trying-it-with-the-sample-host); the key lives in the
+sample's user secrets (`Assistant:ApiKey`), which are read only in Development (as `build/run.sh` sets).
 
 The tests never call a model: `AssistantTests` scripts one (`ScriptedChatClient`), and the UI tests mock the answer
 stream.
