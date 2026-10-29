@@ -103,6 +103,7 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
                   value={trigger.timeZone}
                   onChange={e => update(index, { timeZone: e.target.value })}
                   placeholder="Empty: UTC"
+                  title="An IANA time zone, such as America/Chicago"
                   aria-label="Time zone"
                 />
               </>
@@ -189,7 +190,7 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
               onInvalidChange={value => markInvalid(trigger.id, value)}
             />
           )}
-          {/* Where someone is stuck on cron, not only in the help text below */}
+          {/* Where someone is stuck on cron: the one link to the syntax */}
           {trigger.kind === 'Cron' &&
             (!trigger.cronExpression.trim() || invalid.has(trigger.id)) && (
               <p className="text-xs text-muted-foreground">
@@ -225,10 +226,6 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
         <Plus /> Add trigger
       </Button>
       <ul className="max-w-prose space-y-0.5 text-xs text-muted-foreground">
-        <li>
-          Cron: Quartz cron, with seconds (<CronSyntaxLink />
-          ), read in an IANA time zone such as America/Chicago.
-        </li>
         <li>One time and interval: in your local time.</li>
         <li>No triggers: the job runs only when triggered manually.</li>
       </ul>

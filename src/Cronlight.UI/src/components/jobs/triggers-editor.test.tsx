@@ -90,18 +90,18 @@ describe('TriggersEditor', () => {
     })
     render(<Editor initial={[emptyTrigger()]} />)
     const cron = screen.getByLabelText('Cron expression')
-    // Under the box, and in the help text below the triggers
-    expect(syntaxLinks()).toHaveLength(2)
+    // Under the box while it is empty
+    expect(syntaxLinks()).toHaveLength(1)
 
     await userEvent.type(cron, '0 0 9 * * ?')
     // The preview waits for typing to pause before it asks the server
     await screen.findByText('At 09:00', {}, { timeout: 3000 })
-    expect(syntaxLinks()).toHaveLength(1)
+    expect(syntaxLinks()).toHaveLength(0)
 
     await userEvent.clear(cron)
     await userEvent.type(cron, '0 0/30 * * *')
     // The preview reports the expression invalid to the editor in the render after it shows the error
-    await waitFor(() => expect(syntaxLinks()).toHaveLength(2), { timeout: 3000 })
+    await waitFor(() => expect(syntaxLinks()).toHaveLength(1), { timeout: 3000 })
     expect(screen.getByText('Unexpected end of expression.')).toBeInTheDocument()
   })
 
