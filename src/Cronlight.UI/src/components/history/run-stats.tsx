@@ -43,7 +43,7 @@ export function RunStatsRow({
   if (error) return <p className="text-sm text-destructive">{error}</p>
   const s = stats?.stats
   const figures = [
-    { label: 'Runs', value: s ? String(s.runs) : null },
+    { label: 'Runs', value: s ? s.runs.toLocaleString() : null },
     {
       label: 'Success rate',
       value: s ? formatRate(s.successRate) : null,
@@ -51,7 +51,7 @@ export function RunStatsRow({
     },
     {
       label: 'Failures',
-      value: s ? String(s.failed + s.vetoed) : null,
+      value: s ? (s.failed + s.vetoed).toLocaleString() : null,
       tone: s && s.failed + s.vetoed > 0 ? 'text-destructive' : undefined,
     },
     { label: 'Average duration', value: s ? formatDuration(s.averageDurationMs) : null },

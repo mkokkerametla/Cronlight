@@ -72,8 +72,9 @@ export async function refreshEvery(page: Page, seconds: number) {
 }
 
 /** A stat card, by its label. Its accessible name is the count followed by the label. */
+// The count comes first, with the locale's thousands separators once it reaches 1,000
 export const statCard = (page: Page, label: string) =>
-  page.getByRole('button', { name: new RegExp(`^\\d+\\s*${escapeRegExp(label)}`) })
+  page.getByRole('button', { name: new RegExp(`^\\d[\\d.,\\s]*${escapeRegExp(label)}`) })
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 

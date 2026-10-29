@@ -14,6 +14,7 @@ They are also on the [website](https://cronlight.pages.dev/docs/), next to a [li
 | [Failure alerts](alerts.md) | Slack, Teams, webhook, email or your own sink when jobs fail, recover, stop or misfire |
 | [Exporting and importing jobs](export-import.md) | Jobs as JSON or YAML files, to move them between environments or keep them in source control |
 | [AI assistants (MCP server)](mcp.md) | The optional package that lets Claude, Copilot or any MCP client read jobs, runs and logs, and act on jobs if allowed |
+| [AI mode](ai-mode.md) | Ask about jobs in plain language in the dashboard, answered by your app's own AI model with read-only tools |
 | [Audit log](audit.md) | What is recorded for every change, and how to keep it in your own store |
 | [Metrics and health checks](metrics-and-health.md) | OpenTelemetry metrics for every run, and a health check per scheduler |
 | [Several schedulers in one app](schedulers.md) | Serving schedulers the app builds in code, with permissions per scheduler |

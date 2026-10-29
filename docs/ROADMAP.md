@@ -71,6 +71,9 @@ These are listed so the roadmap below is read against them:
   counted in SQL by the database store (`api/history/stats`). See [Execution history](history.md).
 - A running job's log so far, on the Running tab and in History, read again every 2 seconds from the node running it
   (`api/running/{fireInstanceId}/log`).
+- AI mode, in the MCP package (`AddCronlightAssistant`): ask about jobs in plain language in the dashboard, answered by
+  the app's own `IChatClient` with the MCP server's read-only tools, as the signed-in user. Answers stream in with each
+  tool shown as it runs, and job names link to the job. See [AI mode](ai-mode.md).
 
 ## How Cronlight compares
 

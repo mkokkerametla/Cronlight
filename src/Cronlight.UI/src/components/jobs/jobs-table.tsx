@@ -347,7 +347,7 @@ export function JobsTable({
                     data-active={current === index ? 'true' : undefined}
                     className={cn(
                       // Tint plus an accent bar: the default bg-muted is too faint to spot
-                      'cursor-pointer data-[state=selected]:bg-primary/10 data-[state=selected]:shadow-[inset_3px_0_0_var(--primary)]',
+                      'cursor-pointer data-[state=selected]:bg-primary/10 data-[state=selected]:shadow-[inset_3px_0_0_var(--primary)] data-[state=selected]:[&_.text-muted-foreground]:text-foreground/70',
                       // The row the keyboard is on
                       'data-[active=true]:bg-muted data-[active=true]:shadow-[inset_3px_0_0_var(--muted-foreground)]',
                       jobStatus(job) === 'Paused' && 'text-muted-foreground'

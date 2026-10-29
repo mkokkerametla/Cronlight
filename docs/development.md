@@ -8,7 +8,7 @@ Building, running and testing Cronlight, its CI and how releases are published.
 |---|---|
 | `src/Cronlight` | The library (net10.0). The built UI is embedded in the assembly |
 | `src/Cronlight.History` | Optional execution history: listener, database and in-memory stores, schema scripts |
-| `src/Cronlight.Mcp` | Optional MCP server: tools for AI assistants, on the dashboard's permissions and audit log |
+| `src/Cronlight.Mcp` | Optional MCP server: tools for AI assistants, on the dashboard's permissions and audit log; and AI mode (`CronlightAssistant.cs`), which answers in the dashboard with those tools |
 | `src/Cronlight.UI` | UI source: React, TypeScript, Vite, Tailwind and shadcn/ui. Built into `src/Cronlight/wwwroot` |
 | `samples/Cronlight.SampleHost` | Host app using SQLite, with an HTTP job, demo endpoints and demo `X-Demo-Role` header auth, which lets anyone claim any role: not for copying |
 | `tests/Cronlight.Tests` | Integration tests (TestServer; SQLite, PostgreSQL, SQL Server, MySQL) |
@@ -39,6 +39,12 @@ cd src/Cronlight.UI && npm run dev
 # Or both at once (Ctrl+C stops both); --port changes the sample's port
 build/run.sh --ui
 ```
+
+To try AI mode, follow its [sample-host setup](ai-mode.md#trying-it-with-the-sample-host); the key lives in the
+sample's user secrets (`Assistant:ApiKey`), which are read only in Development (as `build/run.sh` sets).
+
+The tests never call a model: `AssistantTests` scripts one (`ScriptedChatClient`), and the UI tests mock the answer
+stream.
 
 In VS Code, Run and Debug has **Sample host** (with the debugger attached) and **Sample host + UI dev
 server** (`.vscode/launch.json`).

@@ -76,7 +76,7 @@ export function RecentRuns({ runs }: { runs: RecentRun[] }) {
 
 function RunIcon({ status }: { status: ExecutionStatus }) {
   if (status === 'Running')
-    return <span className="size-2.5 animate-pulse rounded-full bg-sky-500" aria-label="Running" />
+    return <span className="size-2.5 rounded-full bg-sky-500" aria-label="Running" />
   const { icon: Icon, tone } = outcome[status]
   return <Icon className={cn('size-4', tone)} aria-label={label[status]} />
 }

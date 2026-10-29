@@ -1,5 +1,5 @@
 import { Info } from 'lucide-react'
-import { Fragment } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import logo from '@/assets/logo.svg'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -53,6 +53,7 @@ export function Header({
   onSchedulerChange,
   layout,
   onLayoutChange,
+  nav,
 }: {
   scheduler: SchedulerInfo | null
   /** Shows another scheduler; offered when the app serves more than one */
@@ -60,6 +61,8 @@ export function Header({
   /** The page's width and row density, offered in a menu when given */
   layout?: Layout
   onLayoutChange?: (change: Partial<Layout>) => void
+  /** Switches between the dashboard's areas, beside the scheduler */
+  nav?: ReactNode
 }) {
   const state = scheduler && schedulerState(scheduler)
 
@@ -68,7 +71,7 @@ export function Header({
       <div className="flex min-w-0 items-center gap-2.5">
         <img src={logo} alt="Cronlight" className="size-9 shrink-0" />
         <div className="min-w-0">
-          <h1 className="truncate text-lg leading-tight font-semibold">
+          <h1 className="truncate text-xl leading-tight font-semibold tracking-tight">
             {scheduler?.schedulerName ?? 'Quartz'}
           </h1>
           <p className="text-xs text-muted-foreground">Cronlight · Quartz.NET</p>
@@ -88,6 +91,7 @@ export function Header({
           </SelectContent>
         </Select>
       )}
+      {nav}
 
       <div className="ml-auto flex items-center gap-2">
         {state && (

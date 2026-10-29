@@ -7,13 +7,15 @@
     <RootNamespace>Cronlight.Mcp</RootNamespace>
     <IsPackable>true</IsPackable>
     <PackageId>Cronlight.Quartz.Dashboard.Mcp</PackageId>
-    <Description>An MCP server for Cronlight: lets AI assistants (Claude, Copilot, any MCP client) read your Quartz.NET jobs, runs and logs, and, if you allow it, pause, resume and run jobs, through your own ASP.NET Core app.</Description>
+    <Description>An MCP server for Cronlight: lets AI assistants (Claude, Copilot, any MCP client) read your Quartz.NET jobs, runs and logs, and, if you allow it, pause, resume and run jobs, through your own ASP.NET Core app. Also AI mode: ask about your jobs in plain language in the dashboard, answered by your app's own AI model (any Microsoft.Extensions.AI IChatClient).</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\Cronlight\Cronlight.csproj" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
+    <!-- The assistant: function calling over any IChatClient the host registers -->
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.8.3" />
   </ItemGroup>
 
 </Project>

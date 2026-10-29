@@ -46,7 +46,8 @@ curl -X POST -H "X-Cronlight-Request: 1" -H "Content-Type: application/json" \
   -d '{"data":{"region":"us"}}' …/api/jobs/DEFAULT/nightly/trigger
 ```
 
-The History tab has **Run again** on runs that failed, were vetoed or were cancelled. It repeats the run
+The History tab has **Run again** on runs that failed, were vetoed or were cancelled, shown on the row under the
+pointer or when it has keyboard focus, and always on touch screens. It repeats the run
 with that run's own data: history keeps each run's trigger data (such as the values of a run with different
 data, shown as "own data"), with sensitive values masked, so a masked secret is run with the saved value. The
 audit log records which run it repeats as `retryOf`.

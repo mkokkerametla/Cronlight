@@ -81,14 +81,14 @@ importing, security headers and cross-site requests.
   and browser requests marked `Sec-Fetch-Site: cross-site` are refused. Scripts calling the API add the
   header, e.g. `curl -X POST -H "X-Cronlight-Request: 1" …/api/jobs/DEFAULT/nightly/trigger`. Reads
   need no header.
-- **Triggers** made in the dashboard are cron (with a time zone), one-time (runs once at a given time) or
-  interval (every so many seconds, minutes, hours or days, from a start time, forever or a set number of
-  runs). Editing a job in the dashboard replaces those three kinds. Waiting retries, manual runs waiting to
-  start (shown as "Run now"), other trigger types (calendar and daily time interval triggers) and interval
-  triggers that are not a whole number of seconds are shown but left alone. A trigger sent back unchanged is
-  not rescheduled, and a paused trigger stays paused when its schedule changes. An interval trigger whose
-  start has passed moves to its next run after now when it is changed, rather than running at once, and the
-  runs it has had count towards its number of runs.
+- **Triggers** made in the dashboard are cron (in an IANA time zone, UTC when left empty), one-time (runs
+  once at a given time) or interval (every so many seconds, minutes, hours or days, from a start time,
+  forever or a set number of runs). Editing a job in the dashboard replaces those three kinds. Waiting
+  retries, manual runs waiting to start (shown as "Run now"), other trigger types (calendar and daily time
+  interval triggers) and interval triggers that are not a whole number of seconds are shown but left alone.
+  A trigger sent back unchanged is not rescheduled, and a paused trigger stays paused when its schedule
+  changes. An interval trigger whose start has passed moves to its next run after now when it is changed,
+  rather than running at once, and the runs it has had count towards its number of runs.
   - **Set in code, kept on edit.** A trigger's Quartz calendar (`ModifiedByCalendar("holidays")`), priority,
     description and trigger data are not edited in the dashboard, and stay when its schedule changes, as long as it
     keeps its name. The job panel names the calendar ("Skips times excluded by holidays"), and a schedule its calendar

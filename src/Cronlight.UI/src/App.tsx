@@ -5,6 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { AreaNav } from '@/components/area-nav'
+import { Assistant } from '@/components/assistant/assistant'
 import { Header } from '@/components/header'
 import { HistoryTable } from '@/components/history/history-table'
 import { CreateJobSheet } from '@/components/jobs/create-job-sheet'
@@ -15,17 +17,19 @@ import { RunningTable } from '@/components/running-table'
 import { Stats, StatsSkeleton, type StatKey } from '@/components/stats'
 import { currentScheduler, selectScheduler } from '@/api'
 import { refreshMs, useDashboard } from '@/hooks/use-dashboard'
+import { useConversation } from '@/hooks/use-conversation'
 import { useLayout } from '@/hooks/use-layout'
 import { RefreshInterval } from '@/hooks/use-polling'
 import { jobKey } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { defaultView, readView, showView, type Tab, type View } from '@/lib/view-state'
+import { defaultView, readView, showView, type Area, type Tab, type View } from '@/lib/view-state'
 import type { HistoryFilter, Job, JobQuery } from '@/types'
 
-// The preset's active tab is a white pill on a near-white track; fill it with the accent instead
+// The preset's active tab is a white pill on a near-white track; fill it with the accent instead. Its hover rule
+// would turn the active tab's text dark on the fill, and a see-through badge is too faint on it, so both stay solid.
 const tabTrigger =
-  'px-3 data-active:bg-primary data-active:text-primary-foreground dark:data-active:border-transparent dark:data-active:bg-primary dark:data-active:text-primary-foreground ' +
-  'data-active:[&_[data-slot=badge]]:bg-primary-foreground/20 data-active:[&_[data-slot=badge]]:text-primary-foreground'
+  'px-3 data-active:bg-primary data-active:text-primary-foreground data-active:hover:text-primary-foreground dark:data-active:border-transparent dark:data-active:bg-primary dark:data-active:text-primary-foreground ' +
+  'data-active:[&_[data-slot=badge]]:bg-primary-foreground data-active:[&_[data-slot=badge]]:text-primary'
 const tabCount = 'h-4.5 min-w-4.5 px-1 tabular-nums'
 
 export default function App() {
@@ -44,6 +48,7 @@ export default function App() {
 function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | null) => void }) {
   // The view starts as the page's address names it, so links and reloads open where they were
   const [initial] = useState(() => readView(window.location.search))
+  const [area, setArea] = useState<Area>(initial.area)
   const [tab, setTab] = useState<Tab>(initial.tab)
   const [jobQuery, setJobQuery] = useState<JobQuery>(initial.jobQuery)
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>(initial.historyFilter)
@@ -51,23 +56,26 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
   const [layout, changeLayout] = useLayout()
+  // Kept here, so it is still there after a look at the jobs; each scheduler has its own
+  const [turns, setTurns] = useConversation(currentScheduler() ?? '')
 
-  // The address follows the view. Another tab, or a job opened, is a step Back returns from; filters, paging and
-  // closing a job change the current step.
+  // The address follows the view. Another area or tab, or a job opened, is a step Back returns from; filters,
+  // paging and closing a job change the current step.
   const shown = useRef<View>(initial)
   useEffect(() => {
-    const view = { tab, jobQuery, historyFilter, selection }
+    const view = { area, tab, jobQuery, historyFilter, selection }
     const opened =
       selection &&
       (!shown.current.selection || jobKey(selection) !== jobKey(shown.current.selection))
-    showView(view, tab !== shown.current.tab || Boolean(opened))
+    showView(view, area !== shown.current.area || tab !== shown.current.tab || Boolean(opened))
     shown.current = view
-  }, [tab, jobQuery, historyFilter, selection])
+  }, [area, tab, jobQuery, historyFilter, selection])
   // Back and Forward show the view their address names
   useEffect(() => {
     const onPopState = () => {
       const view = readView(window.location.search)
       shown.current = view
+      setArea(view.area)
       setTab(view.tab)
       setJobQuery(view.jobQuery)
       setHistoryFilter(view.historyFilter)
@@ -76,7 +84,9 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
-  const dashboard = useDashboard(jobQuery, selection)
+  // Known from the last scheduler loaded, so a link to AI mode in an app without it keeps the dashboard refreshing
+  const [hasAssistant, setHasAssistant] = useState(false)
+  const dashboard = useDashboard(jobQuery, selection, area === 'assistant' && hasAssistant)
   const { jobs, page, jobTypes, scheduler, running, summary, error, loading, refresh, actions } =
     dashboard
 
@@ -91,8 +101,18 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
   // A link to History, where history is off, shows the jobs
   const shownTab = tab === 'history' && !historyEnabled ? 'jobs' : tab
   const secretReferences = scheduler?.secretReferences ?? false
+  // Areas the app turns on; a link to one it does not have shows the dashboard. An API without features (the
+  // website's simulated one, until it adds them) has none
+  const assistant = scheduler?.features?.includes('assistant') ?? false
+  if (assistant !== hasAssistant) setHasAssistant(assistant)
+  const areas: Area[] = ['dashboard', ...(assistant ? (['assistant'] as const) : [])]
+  const shownArea = areas.includes(area) ? area : 'dashboard'
+  // Kept once opened, hidden while the dashboard is shown, so an answer being written carries on meanwhile
+  const [assistantOpened, setAssistantOpened] = useState(false)
+  if (shownArea === 'assistant' && !assistantOpened) setAssistantOpened(true)
 
   const changeTab = (next: Tab) => {
+    setArea('dashboard')
     setTab(next)
     if (next === 'running') void refresh()
   }
@@ -144,6 +164,9 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
           onSchedulerChange={name =>
             onSchedulerChange(name === scheduler?.schedulers[0] ? null : name)
           }
+          nav={
+            areas.length > 1 && <AreaNav areas={areas} area={shownArea} onAreaChange={setArea} />
+          }
         />
 
         {error && (
@@ -176,80 +199,99 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
           </div>
         ) : (
           scheduler && (
-            <>
-              <Stats
-                total={page?.counts.all ?? 0}
-                running={running.jobs.length}
-                paused={page?.counts.paused ?? 0}
-                unloadable={page?.counts.unloadable ?? 0}
-                error={page?.counts.error ?? 0}
-                failed={summary?.failed ?? null}
-                active={activeStat}
-                onSelect={selectStat}
-              />
+            <main className="space-y-5">
+              {assistant && assistantOpened && (
+                <div hidden={shownArea !== 'assistant'}>
+                  <Assistant
+                    scheduler={scheduler.schedulerName}
+                    status={{
+                      failed: historyEnabled ? summary?.failed : null,
+                      running: running.jobs.length,
+                      paused: page?.counts.paused ?? 0,
+                    }}
+                    turns={turns}
+                    onTurnsChange={setTurns}
+                    onOpenJob={(group, name) => setSelection({ group, name })}
+                  />
+                </div>
+              )}
+              {shownArea === 'dashboard' && (
+                <>
+                  <Stats
+                    total={page?.counts.all ?? 0}
+                    running={running.jobs.length}
+                    paused={page?.counts.paused ?? 0}
+                    unloadable={page?.counts.unloadable ?? 0}
+                    error={page?.counts.error ?? 0}
+                    failed={summary?.failed ?? null}
+                    active={activeStat}
+                    onSelect={selectStat}
+                  />
 
-              <Tabs value={shownTab} onValueChange={v => changeTab(v as Tab)}>
-                <TabsList>
-                  <TabsTrigger value="jobs" className={tabTrigger}>
-                    Jobs
-                    <Badge variant="secondary" className={tabCount}>
-                      {page?.counts.all ?? 0}
-                    </Badge>
-                  </TabsTrigger>
-                  <TabsTrigger value="running" className={tabTrigger}>
-                    Running
-                    <Badge variant="secondary" className={tabCount}>
-                      {running.jobs.length}
-                    </Badge>
-                  </TabsTrigger>
-                  {historyEnabled && (
-                    <TabsTrigger value="history" className={tabTrigger}>
-                      History
-                    </TabsTrigger>
-                  )}
-                </TabsList>
-                <TabsContent value="jobs" className="pt-2">
-                  <JobsTable
-                    jobs={jobs}
-                    canManage={canManage}
-                    canCreate={jobTypes.length > 0}
-                    page={page}
-                    query={jobQuery}
-                    onQueryChange={setJobQuery}
-                    selectedKey={selectedKey}
-                    onSelect={job => setSelection({ group: job.group, name: job.name })}
-                    onNewJob={() => setCreating(true)}
-                    onImport={() => setImporting(true)}
-                    actions={actions}
-                    history={historyEnabled}
-                  />
-                </TabsContent>
-                <TabsContent value="running" className="pt-2">
-                  <RunningTable
-                    running={running}
-                    canManage={canManage}
-                    localInstanceId={scheduler?.schedulerInstanceId}
-                    onCancel={actions.cancel}
-                    logs={historyEnabled}
-                    clustered={scheduler?.jobStoreClustered ?? true}
-                  />
-                </TabsContent>
-                {historyEnabled && (
-                  <TabsContent value="history" className="pt-2">
-                    <HistoryTable
-                      filter={historyFilter}
-                      onFilterChange={setHistoryFilter}
-                      onOpenJob={(group, name) => setSelection({ group, name })}
-                      canManage={canManage}
-                      onRetry={actions.retry}
-                      jobTypes={jobTypes}
-                      localInstanceId={scheduler?.schedulerInstanceId}
-                      clustered={scheduler?.jobStoreClustered ?? true}
-                    />
-                  </TabsContent>
-                )}
-              </Tabs>
-            </>
+                  <Tabs value={shownTab} onValueChange={v => changeTab(v as Tab)}>
+                    <TabsList>
+                      <TabsTrigger value="jobs" className={tabTrigger}>
+                        Jobs
+                        <Badge variant="secondary" className={tabCount}>
+                          {page?.counts.all ?? 0}
+                        </Badge>
+                      </TabsTrigger>
+                      <TabsTrigger value="running" className={tabTrigger}>
+                        Running
+                        <Badge variant="secondary" className={tabCount}>
+                          {running.jobs.length}
+                        </Badge>
+                      </TabsTrigger>
+                      {historyEnabled && (
+                        <TabsTrigger value="history" className={tabTrigger}>
+                          History
+                        </TabsTrigger>
+                      )}
+                    </TabsList>
+                    <TabsContent value="jobs" className="pt-2">
+                      <JobsTable
+                        jobs={jobs}
+                        canManage={canManage}
+                        canCreate={jobTypes.length > 0}
+                        page={page}
+                        query={jobQuery}
+                        onQueryChange={setJobQuery}
+                        selectedKey={selectedKey}
+                        onSelect={job => setSelection({ group: job.group, name: job.name })}
+                        onNewJob={() => setCreating(true)}
+                        onImport={() => setImporting(true)}
+                        actions={actions}
+                        history={historyEnabled}
+                      />
+                    </TabsContent>
+                    <TabsContent value="running" className="pt-2">
+                      <RunningTable
+                        running={running}
+                        canManage={canManage}
+                        localInstanceId={scheduler?.schedulerInstanceId}
+                        onCancel={actions.cancel}
+                        logs={historyEnabled}
+                        clustered={scheduler?.jobStoreClustered ?? true}
+                      />
+                    </TabsContent>
+                    {historyEnabled && (
+                      <TabsContent value="history" className="pt-2">
+                        <HistoryTable
+                          filter={historyFilter}
+                          onFilterChange={setHistoryFilter}
+                          onOpenJob={(group, name) => setSelection({ group, name })}
+                          canManage={canManage}
+                          onRetry={actions.retry}
+                          jobTypes={jobTypes}
+                          localInstanceId={scheduler?.schedulerInstanceId}
+                          clustered={scheduler?.jobStoreClustered ?? true}
+                        />
+                      </TabsContent>
+                    )}
+                  </Tabs>
+                </>
+              )}
+            </main>
           )
         )}
 

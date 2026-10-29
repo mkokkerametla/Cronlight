@@ -1,15 +1,18 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>17004bbb-7c4e-4520-89fe-7921fb8328c7</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Quartz.Extensions.Hosting" Version="3.22.7" />
     <PackageReference Include="Quartz.Serialization.Json" Version="3.22.7" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
+    <!-- An AI model for the dashboard's AI mode, from any OpenAI-compatible endpoint (OpenAI, Ollama, LM Studio...) -->
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.8.3" />
     <!-- Patched native SQLite (Microsoft.Data.Sqlite 10.0.2 brings a vulnerable 2.1.11) -->
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
   </ItemGroup>

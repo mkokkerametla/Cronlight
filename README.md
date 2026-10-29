@@ -32,6 +32,8 @@ second scheduler.
 - **Several schedulers** in one app, each with its own permissions.
 - **AI assistants** (optional package): an MCP server, so Claude, Copilot or any MCP client can read jobs, runs and
   logs, and if you allow it pause, resume and run jobs, under the dashboard's permissions and audit log.
+- **AI mode** (same package): ask about your jobs in plain language in the dashboard ("which jobs failed overnight,
+  and why?"), answered by your app's own AI model with read-only tools, as the signed-in user.
 
 ## Requirements
 
@@ -49,7 +51,7 @@ version (0.1.1) does not.
 ```bash
 dotnet add package Cronlight.Quartz.Dashboard
 dotnet add package Cronlight.Quartz.Dashboard.History   # optional: execution history
-dotnet add package Cronlight.Quartz.Dashboard.Mcp       # optional: an MCP server for AI assistants
+dotnet add package Cronlight.Quartz.Dashboard.Mcp       # optional: an MCP server for AI assistants, and AI mode
 ```
 
 The setup below also calls `AddQuartzHostedService()`, from `Quartz.Extensions.Hosting` (or `Quartz.AspNetCore`).
@@ -128,6 +130,7 @@ Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`, described by an OpenAPI docu
 - [Failure alerts](https://github.com/mkokkerametla/Cronlight/blob/main/docs/alerts.md)
 - [Exporting and importing jobs](https://github.com/mkokkerametla/Cronlight/blob/main/docs/export-import.md)
 - [AI assistants (MCP server)](https://github.com/mkokkerametla/Cronlight/blob/main/docs/mcp.md)
+- [AI mode](https://github.com/mkokkerametla/Cronlight/blob/main/docs/ai-mode.md)
 - [Audit log](https://github.com/mkokkerametla/Cronlight/blob/main/docs/audit.md)
 - [Metrics and health checks](https://github.com/mkokkerametla/Cronlight/blob/main/docs/metrics-and-health.md)
 - [Several schedulers in one app](https://github.com/mkokkerametla/Cronlight/blob/main/docs/schedulers.md)

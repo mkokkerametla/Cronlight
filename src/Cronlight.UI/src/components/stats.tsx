@@ -109,13 +109,29 @@ export function Stats({
           <Card
             className={cn(
               'gap-0 py-0 transition-colors hover:bg-muted/50',
-              active === key && 'bg-primary/5 ring-2 ring-primary'
+              // What is on screen is underlined, as a tab is, rather than ringed like an alert
+              active === key && 'shadow-[inset_0_-2px_0_var(--primary)]'
             )}
           >
             <CardContent className="flex items-center justify-between p-4">
               <div>
-                <div className={cn('text-2xl font-semibold tabular-nums', tone)}>{value}</div>
-                <div className="text-xs text-muted-foreground">{label}</div>
+                {/* A count of 0 steps back, so the one that needs attention stands out */}
+                <div
+                  className={cn(
+                    'text-2xl font-semibold tabular-nums',
+                    tone ?? (value === 0 && 'text-muted-foreground')
+                  )}
+                >
+                  {value.toLocaleString()}
+                </div>
+                <div
+                  className={cn(
+                    'text-xs',
+                    active === key ? 'text-foreground' : 'text-muted-foreground'
+                  )}
+                >
+                  {label}
+                </div>
               </div>
               <Icon className={cn('size-5 text-muted-foreground', tone)} />
             </CardContent>

@@ -1,4 +1,4 @@
-import type { ImportedJob, ImportResult, Job } from '@/types'
+import type { AssistantEvent, AssistantMessage, ImportedJob, ImportResult, Job } from '@/types'
 
 const SCHEDULER_PARAM = 'scheduler'
 
@@ -123,4 +123,37 @@ export async function importJobs(
   } catch {
     return { ok: false, message: body || `${res.status} ${res.statusText}`, jobs: [] }
   }
+}
+
+/**
+ * Asks the assistant, with the conversation so far, and hands over each event of its answer as it arrives. A question
+ * the server refuses (not set up, not allowed, too long) throws an ApiError before any event.
+ */
+export async function askAssistant(
+  messages: AssistantMessage[],
+  onEvent: (event: AssistantEvent) => void,
+  signal?: AbortSignal
+) {
+  const res = await fetch(`api/${forScheduler('assistant/ask')}`, {
+    method: 'POST',
+    signal,
+    credentials: 'same-origin',
+    headers: { 'X-Cronlight-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  })
+  if (!res.ok || !res.body) throw new ApiError(await errorMessage(res), res.status)
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+  // One JSON object a line; a read can end mid-line, so the rest waits for the next
+  let rest = ''
+  const emit = (line: string) => {
+    if (line.trim()) onEvent(JSON.parse(line) as AssistantEvent)
+  }
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    const lines = (rest + value).split('\n')
+    rest = lines.pop() ?? ''
+    lines.forEach(emit)
+  }
+  emit(rest)
 }

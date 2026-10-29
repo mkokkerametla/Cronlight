@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, currentScheduler, jobPath, selectScheduler } from '@/api'
+import { api, askAssistant, currentScheduler, jobPath, selectScheduler } from '@/api'
+import type { AssistantEvent } from '@/types'
 
 const fetchMock = vi.fn<typeof fetch>()
 const respond = (body: BodyInit | null, init: ResponseInit = {}) =>
@@ -104,5 +105,55 @@ describe('api', () => {
 describe('jobPath', () => {
   it('escapes the group and name', () => {
     expect(jobPath({ group: 'a/b', name: 'x y?' })).toBe('jobs/a%2Fb/x%20y%3F')
+  })
+})
+
+describe('askAssistant', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const stub = () => vi.stubGlobal('fetch', fetchMock)
+
+  it("reads the assistant's answer one event a line, also when a read ends mid-line", async () => {
+    stub()
+    const chunks = [
+      '{"type":"tool","id":1,"name":"list_jobs","argu',
+      'ments":{}}\n{"type":"text","text":"Hi"}\n',
+      '{"type":"done"}',
+    ]
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk))
+        controller.close()
+      },
+    })
+    respond(body, { headers: { 'Content-Type': 'application/x-ndjson' } })
+    const events: AssistantEvent[] = []
+
+    await askAssistant([{ role: 'user', text: 'Hello?' }], e => events.push(e))
+
+    expect(events).toEqual([
+      { type: 'tool', id: 1, name: 'list_jobs', arguments: {} },
+      { type: 'text', text: 'Hi' },
+      { type: 'done' },
+    ])
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('api/assistant/ask')
+    expect(init?.headers).toEqual({
+      'X-Cronlight-Request': '1',
+      'Content-Type': 'application/json',
+    })
+    expect(JSON.parse(String(init?.body))).toEqual({ messages: [{ role: 'user', text: 'Hello?' }] })
+  })
+
+  it('throws what the server says when it refuses a question', async () => {
+    stub()
+    respond(JSON.stringify({ title: 'The assistant is not set up.', detail: 'No IChatClient.' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/problem+json' },
+    })
+
+    await expect(askAssistant([{ role: 'user', text: 'Hello?' }], () => {})).rejects.toMatchObject({
+      message: 'No IChatClient.',
+      status: 503,
+    })
   })
 })

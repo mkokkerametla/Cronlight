@@ -2,8 +2,12 @@ import type { ExecutionStatus, HistoryFilter, JobQuery, JobStatus } from '@/type
 
 export type Tab = 'jobs' | 'running' | 'history'
 
+/** The dashboard's areas: the jobs, with their tabs, and the assistant when the app adds it */
+export type Area = 'dashboard' | 'assistant'
+
 /** What the dashboard shows. The page's address keeps it, so a link or the Back button opens the same view. */
 export interface View {
+  area: Area
   tab: Tab
   jobQuery: JobQuery
   historyFilter: HistoryFilter
@@ -12,12 +16,14 @@ export interface View {
 }
 
 export const defaultView: View = {
+  area: 'dashboard',
   tab: 'jobs',
   jobQuery: { search: '', type: null, status: null, page: 1 },
   historyFilter: { status: 'all', job: null },
   selection: null,
 }
 
+const areas: readonly Area[] = ['dashboard', 'assistant']
 const tabs: readonly Tab[] = ['jobs', 'running', 'history']
 const jobStatuses: readonly JobStatus[] = ['Active', 'Paused', 'Unloadable', 'Error']
 const outcomes: readonly ExecutionStatus[] = [
@@ -32,6 +38,7 @@ const outcomes: readonly ExecutionStatus[] = [
 
 // The parameters a view owns; the address's others, such as ?scheduler=, are left as they are
 const viewParams = [
+  'area',
   'tab',
   'q',
   'type',
@@ -54,6 +61,7 @@ export function readView(search: string): View {
   const [group, job] = [params.get('group'), params.get('job')]
   const [runsGroup, runsJob] = [params.get('runsGroup'), params.get('runsJob')]
   return {
+    area: pick(params.get('area'), areas) ?? defaultView.area,
     tab: pick(params.get('tab'), tabs) ?? defaultView.tab,
     jobQuery: {
       search: params.get('q') ?? '',
@@ -76,6 +84,7 @@ export function viewSearch(view: View, search: string): string {
   const set = (name: string, value: string | null) => {
     if (value) params.set(name, value)
   }
+  set('area', view.area === defaultView.area ? null : view.area)
   set('tab', view.tab === defaultView.tab ? null : view.tab)
   set('q', view.jobQuery.search)
   set('type', view.jobQuery.type)

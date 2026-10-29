@@ -42,11 +42,13 @@ function searchPath(query: JobQuery) {
 /**
  * Everything the dashboard shows, refreshed every RefreshSeconds (10 by default) while the page is visible. The job list is
  * searched, filtered and paged on the server by `query`; the selected job is loaded on its own when it is
- * not on the current page (e.g. opened from history).
+ * not on the current page (e.g. opened from history). While `away` (AI mode is shown), only the scheduler's state is
+ * refreshed, for the header, unless a job is open; coming back refreshes the rest at once.
  */
 export function useDashboard(
   query: JobQuery = emptyQuery,
-  selection: Pick<Job, 'group' | 'name'> | null = null
+  selection: Pick<Job, 'group' | 'name'> | null = null,
+  away = false
 ) {
   const [page, setPage] = useState<JobPage | null>(null)
   const [selectedJob, setSelectedJob] = useState<Job | null>(null)
@@ -101,10 +103,26 @@ export function useDashboard(
     }
   }, [queryKey, selectionKey])
 
+  // The first load always happens, as it says whether the app has AI mode at all, and so does a job opened from it
+  const loaded = useRef(false)
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- state is set only after the awaited fetch resolves
+    if (away && loaded.current && !selectionKey) return
+    loaded.current = true
     void refresh()
-  }, [refresh])
+  }, [refresh, away, selectionKey])
+
+  const refreshScheduler = useCallback(async () => {
+    const current = generation.current
+    try {
+      const schedulerData = await api<SchedulerInfo>('scheduler')
+      // A full refresh started meanwhile has newer data
+      if (current !== generation.current) return
+      setScheduler(schedulerData)
+      setError(null)
+    } catch (err) {
+      if (current === generation.current) setError((err as Error).message)
+    }
+  }, [])
 
   useEffect(() => {
     api<JobType[]>('job-types')
@@ -112,7 +130,9 @@ export function useDashboard(
       .catch((err: Error) => toast.error('Could not load job types', { description: err.message }))
   }, [])
 
-  usePolling(() => void refresh(), refreshMs(scheduler))
+  const all = !away || selection !== null
+  usePolling(() => void refresh(), refreshMs(scheduler), all)
+  usePolling(() => void refreshScheduler(), refreshMs(scheduler), !all)
 
   // Runs a call, reports the outcome as a toast (with Undo when the call can be undone) and refreshes. Resolves to true
   // on success.

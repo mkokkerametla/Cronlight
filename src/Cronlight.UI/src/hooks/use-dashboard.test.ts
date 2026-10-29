@@ -174,6 +174,33 @@ describe('useDashboard', () => {
     expect(jobLoads()).toBe(2)
   })
 
+  it('checks only the scheduler while away in AI mode, unless a job is open, and catches up on return', async () => {
+    vi.useFakeTimers()
+    const { rerender } = renderHook(
+      ({ away, selection }) => useDashboard(undefined, selection, away),
+      { initialProps: { away: true, selection: null as Pick<Job, 'group' | 'name'> | null } }
+    )
+    // The first load happens anyway: it says whether the app has AI mode
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    expect(jobLoads()).toBe(1)
+    const schedulerLoads = () => calls().filter(p => p === 'scheduler').length
+
+    await act(() => vi.advanceTimersByTimeAsync(20_000))
+    expect(jobLoads()).toBe(1)
+    expect(schedulerLoads()).toBe(3)
+
+    // A job opened from an answer loads at once, and keeps refreshing
+    rerender({ away: true, selection: { group: 'DEFAULT', name: 'job' } })
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    expect(jobLoads()).toBe(2)
+    await act(() => vi.advanceTimersByTimeAsync(10_000))
+    expect(jobLoads()).toBe(3)
+
+    rerender({ away: false, selection: null })
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    expect(jobLoads()).toBe(4)
+  })
+
   it('asks for the 24-hour summary at most once a minute', async () => {
     vi.useFakeTimers()
     renderHook(() => useDashboard())
