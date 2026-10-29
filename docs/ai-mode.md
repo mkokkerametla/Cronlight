@@ -36,9 +36,30 @@ it the dashboard looks as it always has. A link to `?area=assistant` opens AI mo
 | Option | Default | What it does |
 |---|---|---|
 | `Policy` | none | A policy users must also meet to ask, on top of the dashboard's `ViewPolicy`. Each question costs model calls. |
+| `RateLimitPolicy` | none | A [rate limiting](https://learn.microsoft.com/aspnet/core/performance/rate-limit) policy for questions. The app registers it with `AddRateLimiter` and calls `UseRateLimiter`, as below. |
 | `ChatClientKey` | none | The key of a keyed `IChatClient`, when the app has several models. |
 | `MaxToolCalls` | 12 | How many tool calls one answer may make before the model must answer with what it has. |
 | `MaxOutputTokens` | 4096 | The most tokens the model may write in one answer. `null` leaves it to the provider, but some stop at a few hundred (Workers AI's default is 256). An answer that reaches the limit says it was cut off. |
+
+To limit how many questions each user asks, and with them the model calls they cost:
+
+```csharp
+using System.Threading.RateLimiting;
+
+builder.Services.AddRateLimiter(o =>
+{
+    // ASP.NET Core answers 503 by default, which the dashboard reads as AI mode having no model
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.AddPolicy("questions", http => RateLimitPartition.GetFixedWindowLimiter(http.User.Identity?.Name ?? "",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1) }));
+});
+builder.Services.AddCronlightAssistant(o => o.RateLimitPolicy = "questions");
+
+var app = builder.Build();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseRateLimiter(); // after authentication, so each user has their own limit
+```
 
 ## Choosing a model
 
@@ -142,7 +163,8 @@ to find.
 | What you see | Why, and what to do |
 |---|---|
 | No **AI mode** switch in the header | `AddCronlightAssistant` was not called. In the sample host, `Assistant:Model` is not set. |
-| "AI mode has no model to answer with yet" | The assistant is added but no `IChatClient` is registered (or none under `ChatClientKey`). |
+| "AI mode has no model to answer with yet" | The assistant is added but no `IChatClient` is registered (or none under `ChatClientKey`). Or the app's rate limiter turned the question away with ASP.NET Core's default status, 503: set its `RejectionStatusCode` to 429. |
+| "429 Too Many Requests" | The user asked more questions than `RateLimitPolicy` allows. Wait, and ask again. |
 | "The AI model did not answer", with a trace id | The provider refused or failed. The app's log has its status and message under that trace id, logged as "The assistant's model call failed". |
 | …and the log says 401 Unauthorized | The key is missing or wrong. With the sample, check it is in user secrets (above) and the app runs in Development. |
 | …and the log says 403 Forbidden | On Workers AI: the model is not on your plan ("not available on the Workers Free plan"), or the token lacks Workers AI permission, or the account id in the endpoint is not the token's. |
@@ -160,4 +182,4 @@ if it was refused), `text` as the answer is written, then `done` (with `"cutOff"
 
 It answers about the dashboard's scheduler, or the one named by `?scheduler=`, and refuses one the user may not see
 with 403. A conversation that does not end in a question, or is longer than 40 messages of 8,000 characters, gets 400,
-and an app without an `IChatClient` gets 503.
+an app without an `IChatClient` gets 503, and a question over `RateLimitPolicy` gets the rate limiter's status.

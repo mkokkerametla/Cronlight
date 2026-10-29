@@ -8,7 +8,7 @@ namespace Cronlight;
 
 /// <summary>
 /// Secret references: a sensitive job data value such as <c>secret:Smtp:Password</c> stores only a name,
-/// and the value is read from configuration under <see cref="CronlightOptions.SecretsSection"/> when the job runs.
+/// and the value is read from configuration under the scheduler's section (see <see cref="Section"/>) when the job runs.
 /// </summary>
 internal static class SecretReferences
 {
@@ -19,15 +19,27 @@ internal static class SecretReferences
 
     public static bool IsReference(string? value) => value != null && value.StartsWith(Prefix, StringComparison.Ordinal);
 
-    public static bool Enabled(CronlightOptions options) => !string.IsNullOrWhiteSpace(options.SecretsSection);
+    /// <summary>
+    /// The configuration section a scheduler's references are read from: its own
+    /// <see cref="CronlightSchedulerOptions.SecretsSection"/>, else the dashboard's; null when references are off for it.
+    /// </summary>
+    public static string? Section(CronlightOptions options, string schedulerName) =>
+        // TryGetValue, since reading Schedulers by name would add the scheduler
+        options.Schedulers.TryGetValue(schedulerName, out var scheduler) && !string.IsNullOrWhiteSpace(scheduler.SecretsSection)
+            ? scheduler.SecretsSection
+            : string.IsNullOrWhiteSpace(options.SecretsSection) ? null : options.SecretsSection;
 
-    /// <summary>The value a reference names, or null with the reason it cannot be resolved.</summary>
-    public static string? Resolve(string reference, CronlightOptions options, IConfiguration configuration, out string? error)
+    public static bool Enabled(CronlightOptions options, string schedulerName) => Section(options, schedulerName) != null;
+
+    /// <summary>The value a reference in the scheduler's jobs names, or null with the reason it cannot be resolved.</summary>
+    public static string? Resolve(string reference, CronlightOptions options, string schedulerName, IConfiguration configuration,
+        out string? error)
     {
         var name = reference[Prefix.Length..];
-        if (!Enabled(options))
+        if (Section(options, schedulerName) is not { } section)
         {
-            error = $"Secret references are not enabled, so '{reference}' cannot be used. Set Cronlight's SecretsSection to turn them on.";
+            error = $"Secret references are not enabled, so '{reference}' cannot be used. Set Cronlight's SecretsSection, or the " +
+                    "scheduler's, to turn them on.";
             return null;
         }
         if (!Name.IsMatch(name))
@@ -35,10 +47,10 @@ internal static class SecretReferences
             error = $"'{reference}' is not a valid secret reference. Use secret:<name>, e.g. secret:Smtp:Password.";
             return null;
         }
-        var value = configuration[$"{options.SecretsSection}:{name}"];
+        var value = configuration[$"{section}:{name}"];
         if (string.IsNullOrEmpty(value))
         {
-            error = $"No secret named '{name}' is configured (configuration key {options.SecretsSection}:{name}).";
+            error = $"No secret named '{name}' is configured (configuration key {section}:{name}).";
             return null;
         }
         error = null;
@@ -47,11 +59,11 @@ internal static class SecretReferences
 
     /// <summary>The first reference among sensitive values that cannot be resolved, as an error; null when all can.</summary>
     public static string? Check(IEnumerable<KeyValuePair<string, string>> data, Func<string, bool> isSensitive,
-        CronlightOptions options, IConfiguration configuration)
+        CronlightOptions options, string schedulerName, IConfiguration configuration)
     {
         foreach (var (key, value) in data)
         {
-            if (isSensitive(key) && IsReference(value) && Resolve(value, options, configuration, out var error) == null)
+            if (isSensitive(key) && IsReference(value) && Resolve(value, options, schedulerName, configuration, out var error) == null)
                 return $"{key}: {error}";
         }
         return null;
@@ -82,7 +94,7 @@ internal sealed class SecretReferenceListener(
                 if (data[key] is not string value || !SecretReferences.IsReference(value)
                     || !DashboardApi.IsSensitive(key, secretKeys, options.Value))
                     continue;
-                var resolved = SecretReferences.Resolve(value, options.Value, configuration, out var error);
+                var resolved = SecretReferences.Resolve(value, options.Value, context.Scheduler.SchedulerName, configuration, out var error);
                 if (resolved == null)
                     return Task.FromResult(Veto(context, $"{key}: {error}"));
                 data[key] = resolved;
@@ -110,12 +122,12 @@ internal sealed class SecretReferenceListener(
         CancellationToken cancellationToken = default) => Task.CompletedTask;
 }
 
-/// <summary>Attaches <see cref="SecretReferenceListener"/>, when secret references are on.</summary>
+/// <summary>Attaches <see cref="SecretReferenceListener"/>, when secret references are on for the scheduler.</summary>
 internal sealed class SecretReferenceAttachment(SecretReferenceListener listener, IOptions<CronlightOptions> options) : ISchedulerAttachment
 {
     public Task Attach(IScheduler scheduler, CancellationToken cancellationToken)
     {
-        if (SecretReferences.Enabled(options.Value))
+        if (SecretReferences.Enabled(options.Value, scheduler.SchedulerName))
             scheduler.AddTriggerListenerOnce(listener);
         return Task.CompletedTask;
     }

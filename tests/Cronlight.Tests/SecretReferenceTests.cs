@@ -151,4 +151,88 @@ public class SecretReferenceTests
         var info = await client.GetFromJsonAsync<JsonElement>("api/scheduler");
         Assert.True(info.GetProperty("secretReferences").GetBoolean());
     }
+
+    /// <summary>
+    /// A host whose own scheduler reads JobSecrets, as in the tests above, and whose second scheduler, billing, has a section
+    /// of its own, BillingSecrets, as one a team that manages only billing's jobs would be given.
+    /// </summary>
+    private static Task<TestHost> StartWithBilling(string billing, bool dashboardSection = true) =>
+        TestHost.Start(configure: o =>
+        {
+            o.SecretsSection = dashboardSection ? "JobSecrets" : null;
+            o.Schedulers[billing].SecretsSection = "BillingSecrets";
+        }, settings: new(Settings) { ["BillingSecrets:Invoices:Password"] = "billing-hunter2" }, history: _ => { });
+
+    private static string BillingName() => $"billing-{Guid.NewGuid().ToString("N")[..8]}";
+
+    [Fact]
+    public async Task A_scheduler_with_its_own_secrets_section_cannot_use_the_dashboards()
+    {
+        var name = BillingName();
+        await using var host = await StartWithBilling(name);
+        var billing = await SchedulerTests.AddScheduler(host, name: name);
+        try
+        {
+            var client = host.Client();
+            var other = $"?scheduler={billing.SchedulerName}";
+            const string error = "No secret named 'Smtp:Password' is configured (configuration key BillingSecrets:Smtp:Password)";
+
+            var created = await client.PostJson($"api/jobs{other}", new { type = Echo, name = "mail", data = new { run = "x", smtpPassword = "secret:Smtp:Password" } });
+            Assert.Equal(HttpStatusCode.BadRequest, created.StatusCode);
+            Assert.Contains(error, await created.Content.ReadAsStringAsync());
+            Assert.Equal(HttpStatusCode.Created, (await client.PostJson($"api/jobs{other}",
+                new { type = Echo, name = "mail", data = new { run = "x", smtpPassword = "secret:Invoices:Password" } })).StatusCode);
+            var updated = await client.PutJson($"api/jobs/DEFAULT/mail{other}", new { data = new { smtpPassword = "secret:Smtp:Password" } });
+            Assert.Contains(error, await updated.Content.ReadAsStringAsync());
+            var run = await client.PostJson($"api/jobs/DEFAULT/mail/trigger{other}", new { data = new { smtpPassword = "secret:Smtp:Password" } });
+            Assert.Contains(error, await run.Content.ReadAsStringAsync());
+            // Nor the other way round
+            var own = await CreateEcho(client, "mail", new { run = "x", smtpPassword = "secret:Invoices:Password" });
+            Assert.Contains("configuration key JobSecrets:Invoices:Password", await own.Content.ReadAsStringAsync());
+
+            // A job saved by code is held to it when it runs
+            var coded = Guid.NewGuid().ToString("N");
+            await billing.AddJob(JobBuilder.Create<SecretEchoJob>().WithIdentity("coded").StoreDurably()
+                .UsingJobData("run", coded).UsingJobData("smtpPassword", "secret:Smtp:Password").Build(), replace: false);
+            await client.PostAsync($"api/jobs/DEFAULT/coded/trigger{other}", null);
+            var records = await HistoryScenarios.WaitForHistory(client, $"{other}&name=coded", r => r.Any(x => x.GetProperty("status").GetString() == "Vetoed"));
+            Assert.Equal($"smtpPassword: {error}.", records.Single().GetProperty("error").GetString());
+            Assert.False(SecretEchoJob.Seen.ContainsKey(coded));
+        }
+        finally
+        {
+            await billing.Shutdown(waitForJobsToComplete: true);
+        }
+    }
+
+    [Fact]
+    public async Task A_scheduler_with_its_own_secrets_section_has_references_when_the_dashboard_does_not()
+    {
+        var name = BillingName();
+        await using var host = await StartWithBilling(name, dashboardSection: false);
+        var billing = await SchedulerTests.AddScheduler(host, name: name);
+        try
+        {
+            var client = host.Client();
+            var other = $"?scheduler={billing.SchedulerName}";
+            var run = Guid.NewGuid().ToString("N");
+
+            Assert.Equal(HttpStatusCode.Created, (await client.PostJson($"api/jobs{other}",
+                new { type = Echo, name = "mail", data = new { run, smtpPassword = "secret:Invoices:Password" } })).StatusCode);
+            var job = await client.GetFromJsonAsync<JsonElement>($"api/jobs/DEFAULT/mail{other}");
+            Assert.Equal("secret:Invoices:Password", job.GetProperty("data").GetProperty("smtpPassword").GetString());
+            await client.PostAsync($"api/jobs/DEFAULT/mail/trigger{other}", null);
+            await HistoryScenarios.WaitForHistory(client, $"{other}&name=mail", r => r.Any(x => x.GetProperty("status").GetString() == "Succeeded"));
+            Assert.Equal("billing-hunter2", SecretEchoJob.Seen[run].Password);
+
+            Assert.True((await client.GetFromJsonAsync<JsonElement>($"api/scheduler{other}")).GetProperty("secretReferences").GetBoolean());
+            Assert.False((await client.GetFromJsonAsync<JsonElement>("api/scheduler")).GetProperty("secretReferences").GetBoolean());
+            Assert.Contains("Secret references are not enabled",
+                await (await CreateEcho(client, "mail", new { run = "x", smtpPassword = "secret:Smtp:Password" })).Content.ReadAsStringAsync());
+        }
+        finally
+        {
+            await billing.Shutdown(waitForJobsToComplete: true);
+        }
+    }
 }

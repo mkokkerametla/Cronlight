@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { RotateCw, WifiOff } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AreaNav } from '@/components/area-nav'
-import { Assistant } from '@/components/assistant/assistant'
 import { Header } from '@/components/header'
 import { HistoryTable } from '@/components/history/history-table'
 import { CreateJobSheet } from '@/components/jobs/create-job-sheet'
@@ -32,20 +31,45 @@ const tabTrigger =
   'data-active:[&_[data-slot=badge]]:bg-primary-foreground data-active:[&_[data-slot=badge]]:text-primary'
 const tabCount = 'h-4.5 min-w-4.5 px-1 tabular-nums'
 
+// AI mode and its Markdown renderer load when it is first opened, as most visits never open it
+const Assistant = lazy(() =>
+  import('@/components/assistant/assistant').then(m => ({ default: m.Assistant }))
+)
+
 export default function App() {
   const [scheduler, setScheduler] = useState(currentScheduler)
+  // The schedulers the app serves, as the last dashboard learned them: the host's own first
+  const [schedulers, setSchedulers] = useState<string[]>([])
   const changeScheduler = (name: string | null) => {
     selectScheduler(name)
     // Its view (tab, filters, open job) belonged to the last scheduler
     showView(defaultView, false)
     setScheduler(name)
   }
-  // Another scheduler starts afresh, so no job, filter or open sheet carries over from the last one
-  return <Dashboard key={scheduler ?? ''} onSchedulerChange={changeScheduler} />
+  // Another scheduler starts afresh, so no job, filter or open sheet carries over from the last one. Its header knows
+  // its name and the others' while it loads, so the title and the switch stay put.
+  return (
+    <Dashboard
+      key={scheduler ?? ''}
+      known={{ name: scheduler ?? schedulers[0], schedulers }}
+      onSchedulers={setSchedulers}
+      onSchedulerChange={changeScheduler}
+    />
+  )
 }
 
 /** The dashboard for one scheduler. Null names the host's own. */
-function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | null) => void }) {
+function Dashboard({
+  known,
+  onSchedulers,
+  onSchedulerChange,
+}: {
+  /** What is known of the scheduler before it answers */
+  known: { name?: string; schedulers: string[] }
+  /** Told the schedulers the app serves, once this one has said */
+  onSchedulers: (schedulers: string[]) => void
+  onSchedulerChange: (name: string | null) => void
+}) {
   // The view starts as the page's address names it, so links and reloads open where they were
   const [initial] = useState(() => readView(window.location.search))
   const [area, setArea] = useState<Area>(initial.area)
@@ -89,6 +113,11 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
   const dashboard = useDashboard(jobQuery, selection, area === 'assistant' && hasAssistant)
   const { jobs, page, jobTypes, scheduler, running, summary, error, loading, refresh, actions } =
     dashboard
+  // Passed on when the list changes, not on every refresh, for the next scheduler's header
+  const served = scheduler?.schedulers.join('\n')
+  useEffect(() => {
+    if (served !== undefined) onSchedulers(served.split('\n'))
+  }, [served, onSchedulers])
 
   // From the live page when it is there, so the sheet opens at once and refreshes with polling; otherwise
   // the dashboard loads it on its own (e.g. opened from history)
@@ -133,7 +162,8 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
     changeTab('history')
   }
 
-  // The stat card matching what is on screen, if any
+  // The stat card matching what is on screen, if any. The row stays on every tab, so switching tabs never moves the tab
+  // bar out from under the pointer.
   const activeStat: StatKey | null =
     tab === 'running'
       ? 'running'
@@ -158,11 +188,12 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
       >
         <Header
           scheduler={scheduler}
+          known={known}
           layout={layout}
           onLayoutChange={changeLayout}
           // The host's own scheduler, first in the list, needs no ?scheduler= in the URL
           onSchedulerChange={name =>
-            onSchedulerChange(name === scheduler?.schedulers[0] ? null : name)
+            onSchedulerChange(name === (scheduler?.schedulers ?? known.schedulers)[0] ? null : name)
           }
           nav={
             areas.length > 1 && <AreaNav areas={areas} area={shownArea} onAreaChange={setArea} />
@@ -202,17 +233,19 @@ function Dashboard({ onSchedulerChange }: { onSchedulerChange: (name: string | n
             <main className="space-y-5">
               {assistant && assistantOpened && (
                 <div hidden={shownArea !== 'assistant'}>
-                  <Assistant
-                    scheduler={scheduler.schedulerName}
-                    status={{
-                      failed: historyEnabled ? summary?.failed : null,
-                      running: running.jobs.length,
-                      paused: page?.counts.paused ?? 0,
-                    }}
-                    turns={turns}
-                    onTurnsChange={setTurns}
-                    onOpenJob={(group, name) => setSelection({ group, name })}
-                  />
+                  <Suspense fallback={<Skeleton className="mx-auto h-40 max-w-3xl" />}>
+                    <Assistant
+                      scheduler={scheduler.schedulerName}
+                      status={{
+                        failed: historyEnabled ? summary?.failed : null,
+                        running: running.jobs.length,
+                        paused: page?.counts.paused ?? 0,
+                      }}
+                      turns={turns}
+                      onTurnsChange={setTurns}
+                      onOpenJob={(group, name) => setSelection({ group, name })}
+                    />
+                  </Suspense>
                 </div>
               )}
               {shownArea === 'dashboard' && (

@@ -10,6 +10,7 @@ interface StatsProps {
   total: number
   running: number
   paused: number
+  /** Jobs whose type this app cannot load; their card shows only when there are some. */
   unloadable: number
   /** Jobs Quartz stopped, which do not run until resumed; their card shows only when there are some. */
   error: number
@@ -19,21 +20,22 @@ interface StatsProps {
   onSelect: (key: StatKey) => void
 }
 
+// On a phone the cards are a compact row of four, numbers and labels only, so the list starts near the top
 const rowClass = (cards: number) =>
   cn(
-    'grid grid-cols-2 gap-3',
+    'grid grid-cols-4 gap-2 sm:grid-cols-2 sm:gap-3',
     { 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' }[cards]
   )
 
 /**
- * The stat row while the dashboard loads. Whether history is on is not known yet, so it holds the five cards a
- * dashboard with history shows, the usual setup, and the row does not move when they arrive.
+ * The stat row while the dashboard loads. Whether history is on is not known yet, so it holds the four cards a
+ * dashboard with history shows when every job loads, the usual setup, and the row does not move when they arrive.
  */
 export function StatsSkeleton() {
   return (
-    <div className={rowClass(5)}>
-      {Array.from({ length: 5 }, (_, i) => (
-        <Skeleton key={i} className="h-[74px] rounded-xl" />
+    <div className={rowClass(4)}>
+      {Array.from({ length: 4 }, (_, i) => (
+        <Skeleton key={i} className="h-16 rounded-xl sm:h-20" />
       ))}
     </div>
   )
@@ -49,11 +51,20 @@ export function Stats({
   active,
   onSelect,
 }: StatsProps) {
-  const cards: { key: StatKey; label: string; value: number; icon: LucideIcon; tone?: string }[] = [
+  const cards: {
+    key: StatKey
+    label: string
+    /** The end of the label, which a phone's narrow card leaves out */
+    suffix?: string
+    value: number
+    icon: LucideIcon
+    tone?: string
+  }[] = [
     { key: 'all', label: 'Total jobs', value: total, icon: Layers },
     {
       key: 'running',
-      label: 'Running now',
+      label: 'Running',
+      suffix: 'now',
       value: running,
       icon: Activity,
       tone: running ? 'text-emerald-600 dark:text-emerald-400' : undefined,
@@ -76,13 +87,18 @@ export function Stats({
             tone: failed ? 'text-destructive' : undefined,
           },
         ]),
-    {
-      key: 'Unloadable',
-      label: 'Unloadable',
-      value: unloadable,
-      icon: Lock,
-      tone: unloadable ? 'text-destructive' : undefined,
-    },
+    // Only apps sharing their scheduler with another app have jobs they cannot load
+    ...(unloadable > 0
+      ? [
+          {
+            key: 'Unloadable' as const,
+            label: 'Unloadable',
+            value: unloadable,
+            icon: Lock,
+            tone: 'text-destructive',
+          },
+        ]
+      : []),
     ...(error > 0
       ? [
           {
@@ -98,7 +114,7 @@ export function Stats({
 
   return (
     <div className={rowClass(cards.length)}>
-      {cards.map(({ key, label, value, icon: Icon, tone }) => (
+      {cards.map(({ key, label, suffix, value, icon: Icon, tone }) => (
         <button
           key={key}
           type="button"
@@ -113,12 +129,12 @@ export function Stats({
               active === key && 'shadow-[inset_0_-2px_0_var(--primary)]'
             )}
           >
-            <CardContent className="flex items-center justify-between p-4">
-              <div>
+            <CardContent className="flex items-center justify-between px-2 py-2.5 sm:p-4">
+              <div className="min-w-0">
                 {/* A count of 0 steps back, so the one that needs attention stands out */}
                 <div
                   className={cn(
-                    'text-2xl font-semibold tabular-nums',
+                    'text-lg font-semibold tabular-nums sm:text-2xl',
                     tone ?? (value === 0 && 'text-muted-foreground')
                   )}
                 >
@@ -126,14 +142,21 @@ export function Stats({
                 </div>
                 <div
                   className={cn(
-                    'text-xs',
+                    'truncate text-[11px] sm:text-xs',
                     active === key ? 'text-foreground' : 'text-muted-foreground'
                   )}
+                  title={suffix ? `${label} ${suffix}` : label}
                 >
                   {label}
+                  {suffix && (
+                    <>
+                      {' '}
+                      <span className="max-sm:hidden">{suffix}</span>
+                    </>
+                  )}
                 </div>
               </div>
-              <Icon className={cn('size-5 text-muted-foreground', tone)} />
+              <Icon className={cn('hidden size-5 shrink-0 text-muted-foreground sm:block', tone)} />
             </CardContent>
           </Card>
         </button>

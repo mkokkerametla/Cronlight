@@ -31,7 +31,9 @@ test('the dashboard works under its Content-Security-Policy', async ({ page, req
   await choose(page, sheet.locator('#job-type'), /PlainJob/)
   await sheet.getByLabel('Cron expression').fill('0 0 9 * * ?')
   await expect(sheet.getByText('Next (your local time)')).toBeVisible()
+  // Something was entered, so closing asks first
   await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Discard' }).click()
   await jobRow(page, name).getByRole('button', { name: `Run ${name} now` }).hover()
   await expect(page.getByRole('tooltip')).toBeVisible()
   await jobRow(page, name).getByRole('button', { name: `Pause ${name}` }).click()

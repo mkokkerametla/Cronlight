@@ -158,17 +158,41 @@ public static class CronlightExtensions
             var file = string.IsNullOrEmpty(path) ? null : files.GetFileInfo(path);
             if (file is not { Exists: true })
             {
-                // SPA fallback
-                file = files.GetFileInfo("index.html");
+                // SPA fallback, checked again on each visit: Last-Modified makes that a 304 until the app is updated
+                path = "index.html";
+                file = files.GetFileInfo(path);
                 ctx.Response.Headers.CacheControl = "no-cache";
+            }
+            else if (path!.StartsWith("assets/", StringComparison.Ordinal))
+            {
+                // The build names these by their content, so a name always holds the same file
+                ctx.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
             }
 
             if (!contentTypes.TryGetContentType(file.Name, out var contentType))
                 contentType = "application/octet-stream";
 
-            return Results.Stream(file.CreateReadStream(), contentType);
+            // The build keeps brotli and gzip copies of scripts and styles, sent to browsers that accept them
+            var copies = Precompressed.Where(c => files.GetFileInfo(path + c.Extension).Exists).ToList();
+            if (copies.Count > 0)
+            {
+                ctx.Response.Headers.Vary = "Accept-Encoding";
+                var accepted = ctx.Request.GetTypedHeaders().AcceptEncoding;
+                var copy = copies.FirstOrDefault(c => accepted.Any(a =>
+                    a.Value.Equals(c.Encoding, StringComparison.OrdinalIgnoreCase) && a.Quality != 0));
+                if (copy.Encoding != null)
+                {
+                    ctx.Response.Headers.ContentEncoding = copy.Encoding;
+                    file = files.GetFileInfo(path + copy.Extension);
+                }
+            }
+
+            return Results.Stream(file.CreateReadStream(), contentType, lastModified: file.LastModified);
         }).ExcludeFromDescription();
     }
+
+    /// <summary>The compressed copies the UI build writes, in the order they are preferred.</summary>
+    private static readonly (string Encoding, string Extension)[] Precompressed = [("br", ".br"), ("gzip", ".gz")];
 }
 
 /// <summary>The security headers of the dashboard's responses, as metadata on its endpoints.</summary>

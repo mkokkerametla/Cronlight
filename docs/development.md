@@ -16,7 +16,7 @@ Building, running and testing Cronlight, its CI and how releases are published.
 | `tests/Cronlight.E2E` | End-to-end tests: Playwright drives the sample host in Chromium |
 | `tests/QuartzSample.Jobs` | Job types in an assembly whose name starts like Quartz's, for the job type discovery tests |
 | `docs` | Documentation for users, this page, and the [roadmap](ROADMAP.md) |
-| `assets` | Logo (`icon.svg`) and the 128px `icon.png` used as the NuGet package icon |
+| `assets` | Logo (`icon.svg`), the 128px `icon.png` used as the NuGet package icon, and the README's screenshot (`dashboard.png`) |
 | `build/verify-packages.sh` | Checks run on packed `.nupkg` files in CI |
 | `build/smoke-test.sh` | Installs the packed packages into a new .NET 10 app on Quartz 3.13.1 and runs it |
 | `build/test-all.sh` | Runs the UI and .NET test suites |
@@ -24,7 +24,8 @@ Building, running and testing Cronlight, its CI and how releases are published.
 
 ## Building and running
 
-Requires the .NET 10 SDK (see `global.json`) and Node.js 20+.
+Requires the .NET 10 SDK (see `global.json`) and Node.js 22.13 or later. The UI alone builds on Node.js 20; the
+end-to-end tests need 22.13 for its built-in SQLite module.
 
 ```bash
 dotnet build              # also runs `npm ci` when the UI's package files changed, and `npm run build` when its sources changed
@@ -118,7 +119,9 @@ history (paging, job filter, failing and succeeding HTTP jobs, run logs with sec
 far, run statistics on the History tab and a job's page), retries,
 running a job with different data, running a failed run again, exporting and importing jobs, read-only jobs from
 other apps sharing the scheduler, server errors, changes made elsewhere, a lost connection, viewer and anonymous
-access, the scheduler details and the theme switch. Each worker also runs a webhook receiver that its host posts
+access, the scheduler details and the theme switch. `accessibility.spec.ts` checks the main views against WCAG 2.2 A
+and AA with [axe](https://github.com/dequelabs/axe-core-npm/tree/develop/packages/playwright), and the job list in the
+dark theme too. Each worker also runs a webhook receiver that its host posts
 alerts to, as JSON, Slack and Teams webhooks, and an SMTP receiver it emails them to (`tests/webhooks.ts`,
 `tests/smtp.ts`), for the tests of failure, recovery and misfire alerts. A file that needs other host settings sets
 them with `test.use({ hostSettings })` and gets workers and hosts of its own: the misfire test's host counts a

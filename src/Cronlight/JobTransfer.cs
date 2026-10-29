@@ -124,7 +124,8 @@ internal static class JobTransfer
         var data = detail.JobDataMap
             .Where(kv => !Retries.IsReserved(kv.Key))
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
-            .ToDictionary(kv => kv.Key, kv => (JsonNode?)DashboardApi.Display(kv.Key, kv.Value?.ToString(), secretKeys, options));
+            .ToDictionary(kv => kv.Key, kv => (JsonNode?)DashboardApi.Display(kv.Key, DashboardApi.DataText(kv.Value), secretKeys, options,
+                scheduler.SchedulerName));
 
         var triggers = new List<JobFileTrigger>();
         var paused = 0;

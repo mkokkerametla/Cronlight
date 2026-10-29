@@ -16,8 +16,10 @@ Audit: alice@contoso.com update billing.invoices in Billing: succeeded (204) {"d
 ```
 
 The fields are structured (`User`, `AuditAction`, `JobGroup`, `JobName`, `Scheduler`, `AuditVia`, `AuditOutcome`, `StatusCode`),
-so log tools such as Seq, Application Insights or Elasticsearch can filter on them. To keep events in your
-own store as well, register one or more sinks:
+so log tools such as Seq, Application Insights or Elasticsearch can filter on them. Control characters in them and in
+the reason are escaped (a line break as `\n`), so a request for a scheduler or job named with a line break cannot
+forge a line of the log. The changes are written as JSON. To keep events in your own store as well, register one or
+more sinks:
 
 ```csharp
 // Resolved per request, so scoped services such as a DbContext can be used
@@ -29,4 +31,6 @@ class MyAuditSink(AuditDbContext db) : ICronlightAuditSink
 }
 ```
 
-A sink that throws is logged as an error; the change itself has already been made and is not undone.
+A sink that throws is logged as an error; the change itself has already been made and is not undone. Sinks get the
+same escaped text as the log, since a sink that writes lines of text needs it too. They get the changes as they are:
+line breaks are part of a description.

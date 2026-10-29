@@ -139,6 +139,34 @@ public class AuditTests
     }
 
     [Fact]
+    public async Task Control_characters_a_request_sends_are_escaped_so_they_cannot_forge_log_lines()
+    {
+        var logs = new CapturingLoggerProvider();
+        var sink = new RecordingSink();
+        await using var host = await TestHost.Start(services: s =>
+        {
+            s.Replace(ServiceDescriptor.Singleton<ILoggerFactory>(LoggerFactory.Create(b => b.AddProvider(logs))));
+            s.AddSingleton<ICronlightAuditSink>(sink);
+        });
+        var client = host.Client();
+
+        // A scheduler and a job that do not exist, named to start a line of their own; the errors quote them too
+        await client.PostAsync("api/jobs/DEFAULT/x/pause?scheduler=x%0AAudit:%20alice%20delete%20billing.invoices", null);
+        await client.PostAsync("api/jobs/DEFAULT/y%0D%0AAudit:%20alice%20delete%20billing.invoices%1B%5B2K/pause", null);
+
+        var audit = logs.Entries.Where(e => e.Category == "Cronlight.Audit").Select(e => e.Message).ToList();
+        Assert.Equal(2, audit.Count);
+        Assert.All(audit, line => Assert.False(line.Any(char.IsControl), line));
+        Assert.Contains(@"pause DEFAULT.x in x\nAudit: alice delete billing.invoices: refused (404)", audit[0]);
+        Assert.Contains(@"No scheduler named 'x\nAudit: alice delete billing.invoices'", audit[0]);
+        Assert.Contains(@"pause DEFAULT.y\r\nAudit: alice delete billing.invoices\u001b[2K in", audit[1]);
+        // Sinks get the same text as the log, as sinks that write lines of text need it too
+        Assert.Equal([@"x\nAudit: alice delete billing.invoices", host.SchedulerName], sink.Events.Select(e => e.Scheduler));
+        Assert.Equal(@"y\r\nAudit: alice delete billing.invoices\u001b[2K", sink.Events[1].JobName);
+        Assert.DoesNotContain(sink.Events, e => e.Error!.Any(char.IsControl));
+    }
+
+    [Fact]
     public async Task A_failing_sink_is_logged_and_does_not_fail_the_change()
     {
         var logs = new CapturingLoggerProvider();

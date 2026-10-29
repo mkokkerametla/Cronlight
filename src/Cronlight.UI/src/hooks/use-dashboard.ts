@@ -171,7 +171,7 @@ export function useDashboard(
         const body: RunJobRequest = { data }
         const ok = await perform(
           () => api(`${jobPath(job)}/trigger`, { method: 'POST', body }),
-          `${job.name}: triggered with different data`
+          `${job.name}: started with different data`
         )
         if (ok) setTimeout(refresh, 1000)
         return ok
@@ -186,7 +186,7 @@ export function useDashboard(
               method: 'POST',
               body,
             }),
-          `${record.jobName}: triggered again`
+          `${record.jobName}: started again`
         )
         if (ok) setTimeout(refresh, 1000)
         return ok
@@ -260,7 +260,7 @@ export function useDashboard(
 export type DashboardActions = ReturnType<typeof useDashboard>['actions']
 
 const pastTense: Record<JobAction, string> = {
-  trigger: 'triggered',
+  trigger: 'started',
   pause: 'paused',
   resume: 'resumed',
 }

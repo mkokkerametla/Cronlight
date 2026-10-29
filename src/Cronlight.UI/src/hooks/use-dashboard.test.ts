@@ -282,6 +282,8 @@ describe('useDashboard', () => {
     mockApi.mockClear()
 
     await act(() => result.current.actions.run(job(), 'trigger'))
+    // Said as the button says it: Run now
+    expect(toast.success).toHaveBeenCalledWith('nightly: started')
     expect(jobLoads()).toBe(1)
 
     await act(() => vi.advanceTimersByTimeAsync(1000))
@@ -369,7 +371,7 @@ describe('useDashboard', () => {
       method: 'POST',
       body: { data: { region: 'us' } },
     })
-    expect(toast.success).toHaveBeenCalledWith('nightly: triggered with different data')
+    expect(toast.success).toHaveBeenCalledWith('nightly: started with different data')
     expect(jobLoads()).toBe(1)
     await act(() => vi.advanceTimersByTimeAsync(1000))
     expect(jobLoads()).toBe(2)
@@ -394,7 +396,7 @@ describe('useDashboard', () => {
       { data: { id: '9' }, retryOf: 'f-7' },
       { data: {}, retryOf: 'f-8' },
     ])
-    expect(toast.success).toHaveBeenCalledWith('x: triggered again')
+    expect(toast.success).toHaveBeenCalledWith('x: started again')
     // A refresh after each, and another a second later once the scheduler has picked them up
     expect(jobLoads()).toBe(2)
     await act(() => vi.advanceTimersByTimeAsync(1000))

@@ -48,7 +48,7 @@ test('runs a job once with different data, leaving its saved data unchanged', as
   await expect(details.getByText('1 changed')).toBeVisible()
   await details.getByRole('button', { name: 'Run now' }).click()
 
-  await expect(page.getByText(`${name}: triggered with different data`)).toBeVisible()
+  await expect(page.getByText(`${name}: started with different data`)).toBeVisible()
   // The saved job always fails, so a success means the run used the changed value
   await expect(details.getByText('Succeeded')).toBeVisible({ timeout: 20_000 })
   const job = await (await request.get(`api/jobs/DEFAULT/${name}`)).json()
@@ -72,7 +72,7 @@ test('runs a failed run again from the History tab', async ({ page, request }) =
   const runs = page.getByRole('row').filter({ hasText: name })
   await runs.getByRole('button', { name: `Run ${name} again` }).click()
 
-  await expect(page.getByText(`${name}: triggered again`)).toBeVisible()
+  await expect(page.getByText(`${name}: started again`)).toBeVisible()
   await expect(runs).toHaveCount(2, { timeout: 20_000 })
 })
 

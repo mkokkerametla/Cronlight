@@ -49,7 +49,7 @@ const renderApp = () =>
 const tab = (name: string) => screen.getByRole('tab', { name: new RegExp(name) })
 const card = (label: string) => screen.getByRole('button', { name: new RegExp(label) })
 const jobRow = (name: string) =>
-  screen.getByText(name, { selector: 'div' }).closest('tr') as HTMLElement
+  screen.getByText(name, { selector: 'button' }).closest('tr') as HTMLElement
 
 describe('App', () => {
   beforeEach(() => {
@@ -132,7 +132,7 @@ describe('App', () => {
     window.history.replaceState(null, '', '/?tab=history')
     renderApp()
 
-    expect(await screen.findByText('invoices', { selector: 'div' })).toBeInTheDocument()
+    expect(await screen.findByText('invoices', { selector: 'button' })).toBeInTheDocument()
     expect(tab('Jobs')).toHaveAttribute('aria-selected', 'true')
   })
 
@@ -195,6 +195,34 @@ describe('App', () => {
     await waitFor(() => expect(jobTypesFor).toEqual([null, 'Reports', null]))
   })
 
+  it('keeps the name of the scheduler switched to, and the switch, in the header while it loads', async () => {
+    const schedulers = ['SampleHost', 'Reports']
+    responses.scheduler = scheduler({ schedulers })
+    const hostServer = vi.mocked(api).getMockImplementation()!
+    let answer!: () => void
+    const answered = new Promise<void>(resolve => (answer = resolve))
+    vi.mocked(api).mockImplementation(async (path, options) => {
+      if (currentScheduler() === 'Reports' && path === 'scheduler') {
+        await answered
+        return scheduler({ schedulerName: 'Reports', schedulers })
+      }
+      return hostServer(path, options)
+    })
+    renderApp()
+    await screen.findByRole('heading', { name: 'SampleHost' })
+
+    await userEvent.click(screen.getByRole('combobox', { name: 'Scheduler' }))
+    await userEvent.click(screen.getByRole('option', { name: 'Reports' }))
+
+    // Before Reports answers: its own name, never a stand-in, and the switch where it was
+    expect(screen.getByRole('heading', { name: 'Reports' })).toBeInTheDocument()
+    expect(screen.queryByText('Quartz')).toBeNull()
+    expect(screen.getByRole('combobox', { name: 'Scheduler' })).toHaveTextContent('Reports')
+    act(answer)
+    expect(await screen.findByRole('tabpanel')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Reports' })).toBeInTheDocument()
+  })
+
   it('shows the scheduler, its counts and its jobs once loaded', async () => {
     renderApp()
 
@@ -216,7 +244,10 @@ describe('App', () => {
       return respond(path, options)
     })
     const { container } = renderApp()
-    const placeholders = container.querySelector('[data-slot="skeleton"]')!.parentElement!
+    // The row of card placeholders, apart from the title's
+    const placeholders = [...container.querySelectorAll('[data-slot="skeleton"]')]
+      .map(skeleton => skeleton.parentElement!)
+      .find(row => [...row.children].every(c => c.getAttribute('data-slot') === 'skeleton'))!
     const loading = { columns: placeholders.className, cards: placeholders.childElementCount }
 
     act(answer)
@@ -230,7 +261,7 @@ describe('App', () => {
     await userEvent.click(await screen.findByRole('button', { name: /Paused/ }))
 
     expect(card('Paused')).toHaveAttribute('aria-pressed', 'true')
-    await waitFor(() => expect(screen.queryByText('invoices', { selector: 'div' })).toBeNull())
+    await waitFor(() => expect(screen.queryByText('invoices', { selector: 'button' })).toBeNull())
     expect(jobRow('cleanup')).toBeInTheDocument()
     expect(requested('jobs/search?').at(-1)).toContain('status=Paused')
     // The cards count every job, not just the filtered page
@@ -238,7 +269,7 @@ describe('App', () => {
 
     // Total jobs lists them all again
     await userEvent.click(card('Total jobs'))
-    expect(await screen.findByText('invoices', { selector: 'div' })).toBeInTheDocument()
+    expect(await screen.findByText('invoices', { selector: 'button' })).toBeInTheDocument()
     expect(requested('jobs/search?').at(-1)).not.toContain('status=')
     expect(card('Total jobs')).toHaveAttribute('aria-pressed', 'true')
   })
@@ -279,7 +310,15 @@ describe('App', () => {
 
     expect(tab('History')).toHaveAttribute('aria-selected', 'true')
     expect(card('Failed')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('combobox', { name: 'Filter by outcome' })).toHaveTextContent('Failed')
     await waitFor(() => expect(requested('history?').at(-1)).toContain('status=Failed'))
+  })
+
+  it('keeps the stat row on History, so the tabs stay where they were clicked', async () => {
+    renderApp()
+    await userEvent.click(await screen.findByRole('tab', { name: /History/ }))
+
+    expect(card('Total jobs')).toBeInTheDocument()
   })
 
   it('goes from a job to its runs, and from a run back to its job', async () => {
@@ -381,7 +420,8 @@ describe('App', () => {
     const nav = await screen.findByRole('navigation', { name: 'Areas' })
     await userEvent.click(within(nav).getByRole('button', { name: 'AI mode' }))
 
-    expect(screen.getByRole('textbox', { name: 'Your question' })).toBeInTheDocument()
+    // AI mode loads when first opened
+    expect(await screen.findByRole('textbox', { name: 'Your question' })).toBeInTheDocument()
     expect(screen.queryByRole('tablist')).toBeNull()
     expect(window.location.search).toBe('?area=assistant')
     expect(within(nav).getByRole('button', { name: 'AI mode' })).toHaveAttribute(

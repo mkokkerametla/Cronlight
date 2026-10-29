@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
@@ -373,7 +374,7 @@ internal static class DashboardApi
             .WithTags(Tags.Jobs).WithSummary("Searches, filters and pages the jobs")
             .WithDescription("search matches names and groups; type is a job type label; status is Active, Paused, Unloadable or Error. " +
                 "Pages hold 50 jobs unless pageSize says otherwise, at most 200. The counts are over every job, whatever the filters. " +
-                "With history on, each job carries its last 5 runs (recentRuns), newest first, each by its final outcome.")
+                "With history on, each job carries its last 10 runs (recentRuns), newest first, each by its final outcome.")
             .Produces<JobPageDto>().ProducesProblem(StatusCodes.Status400BadRequest);
 
         api.MapGet("/jobs/{group}/{name}", async (string group, string name, HttpContext http, JobTypeCatalog catalog, IOptions<CronlightOptions> options) =>
@@ -647,7 +648,7 @@ internal static class DashboardApi
         if (request.Retry?.Problem() is { } badRetry)
             return (null, Invalid(badRetry));
         var secretKeys = SecretKeys(type);
-        if (CheckSecretReferences(http, data, secretKeys, options) is { } unresolved)
+        if (CheckSecretReferences(http, data, secretKeys, options, scheduler.SchedulerName) is { } unresolved)
             return (null, Invalid(unresolved));
 
         var key = new JobKey(request.Name, string.IsNullOrWhiteSpace(request.Group) ? "DEFAULT" : request.Group);
@@ -671,7 +672,7 @@ internal static class DashboardApi
             .StoreDurably()
             .Build();
 
-        var changes = DataChanges(new Dictionary<string, object>(), job.JobDataMap, secretKeys, options);
+        var changes = DataChanges(new Dictionary<string, object>(), job.JobDataMap, secretKeys, options, scheduler.SchedulerName);
         AddChange(changes, "description", null, request.Description);
         AddChange(changes, "triggers", null, DescribeTriggers(triggers));
         AddChange(changes, "retry", null, DescribeRetry(Retries.For(job)));
@@ -723,7 +724,7 @@ internal static class DashboardApi
             return (null, Invalid(invalid));
         if (request.Retry?.Problem() is { } badRetry)
             return (null, Invalid(badRetry));
-        if (setValues != null && CheckSecretReferences(http, setValues, secretKeys, options) is { } unresolved)
+        if (setValues != null && CheckSecretReferences(http, setValues, secretKeys, options, scheduler.SchedulerName) is { } unresolved)
             return (null, Invalid(unresolved));
 
         var requested = new List<ITrigger>();
@@ -750,7 +751,7 @@ internal static class DashboardApi
             if (Retries.Store(request.Retry, existing.JobType) is { } policy)
                 data[Retries.PolicyKey] = policy;
         }
-        var changes = DataChanges(existing.JobDataMap, data, secretKeys, options);
+        var changes = DataChanges(existing.JobDataMap, data, secretKeys, options, scheduler.SchedulerName);
         if (request.Description != null)
             AddChange(changes, "description", existing.Description, request.Description);
         if (request.Triggers != null)
@@ -801,7 +802,7 @@ internal static class DashboardApi
             await cluster.Read(scheduler, cancellationToken),
             await CanManage(http, options, scheduler.SchedulerName),
             http.RequestServices.GetService<IJobHistoryStore>() != null,
-            SecretReferences.Enabled(options),
+            SecretReferences.Enabled(options, scheduler.SchedulerName),
             Math.Clamp(options.RefreshSeconds, 1, 300),
             visible,
             http.RequestServices.GetServices<DashboardExtension>().Select(e => e.Feature).Distinct().ToList());
@@ -982,14 +983,14 @@ internal static class DashboardApi
             var saved = existing.JobDataMap;
             // A masked or unchanged value is the saved one: nothing to replace
             var overrides = requested
-                .Where(kv => kv.Value != Mask && (!saved.TryGetValue(kv.Key, out var old) || old?.ToString() != kv.Value))
+                .Where(kv => kv.Value != Mask && (!saved.TryGetValue(kv.Key, out var old) || DataText(old) != kv.Value))
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
 
             var info = catalog.Describe(existing.JobType);
             var secretKeys = SecretKeys(existing.JobType);
             if (info != null && ValidateParameters(info, Merged(saved, overrides!)) is { } invalid)
                 return Invalid(invalid);
-            if (CheckSecretReferences(http, overrides, secretKeys, options) is { } unresolved)
+            if (CheckSecretReferences(http, overrides, secretKeys, options, scheduler.SchedulerName) is { } unresolved)
                 return Invalid(unresolved);
 
             foreach (var (k, v) in overrides)
@@ -997,7 +998,8 @@ internal static class DashboardApi
                 var old = saved.TryGetValue(k, out var o) ? o : null;
                 // Keeps the saved value's type, as editing the job does
                 data[k] = old is not (null or string) ? TryConvert(v, old.GetType()) ?? v : v;
-                changes[$"data.{k}"] = new(Display(k, old?.ToString(), secretKeys, options), Display(k, v, secretKeys, options));
+                changes[$"data.{k}"] = new(Display(k, DataText(old), secretKeys, options, scheduler.SchedulerName),
+                    Display(k, v, secretKeys, options, scheduler.SchedulerName));
             }
         }
         Audit.RecordChanges(http, changes);
@@ -1088,12 +1090,27 @@ internal static class DashboardApi
         {
             return (await scheduler.GetJobDetail(key), null);
         }
-        catch (JobPersistenceException ex)
+        catch (JobPersistenceException ex) when (UnloadableReason(ex) is { } reason)
         {
             if (options.AllowManagingUnloadableJobs)
                 return (null, null);
-            return (null, ReadOnlyJob(key, "changed", ex.InnerException?.Message ?? ex.Message));
+            return (null, ReadOnlyJob(key, "changed", reason));
         }
+    }
+
+    /// <summary>
+    /// Why Quartz could not read a job that cannot be loaded here: its type, or a type in its data, is another app's.
+    /// Null when the database failed instead, which is left to the API to answer as a failure.
+    /// </summary>
+    private static string? UnloadableReason(JobPersistenceException ex)
+    {
+        var causes = new List<Exception>();
+        for (Exception? cause = ex; cause != null; cause = cause.InnerException)
+            causes.Add(cause);
+        if (causes.Any(c => c is DbException))
+            return null;
+        // The type's name only: the other messages can quote the job's data, secrets and all
+        return causes.OfType<TypeLoadException>().FirstOrDefault()?.Message ?? "Could not read its job data";
     }
 
     // Every error is ProblemDetails: its title names the kind of error and its detail says what is wrong, so a client
@@ -1110,13 +1127,13 @@ internal static class DashboardApi
 
     private static IResult NoSuchJob(JobKey key) => Missing($"Job {key} does not exist.");
 
-    /// <summary>A job of another application sharing the scheduler, whose type cannot be loaded here.</summary>
+    /// <summary>A job of another application sharing the scheduler, whose type or data cannot be loaded here.</summary>
     /// <param name="cannotBe">What cannot be done to it, e.g. "edited".</param>
-    /// <param name="reason">Why its type cannot be loaded, when known.</param>
+    /// <param name="reason">Why it cannot be loaded, when known.</param>
     private static IResult ReadOnlyJob(JobKey key, string cannotBe, string? reason = null) =>
         Results.Problem(
             title: "Job is read-only in this dashboard.",
-            detail: $"The type of job {key} cannot be loaded in this application{(reason == null ? "" : $" ({reason})")}. It probably " +
+            detail: $"Job {key} cannot be loaded in this application{(reason == null ? "" : $" ({reason})")}. It probably " +
                     $"belongs to another application sharing this scheduler, so it cannot be {cannotBe} here.",
             statusCode: StatusCodes.Status409Conflict);
 
@@ -1219,7 +1236,7 @@ internal static class DashboardApi
 
     /// <summary>
     /// The saved job data with the requested changes: keys requested are set, or removed when requested as null, and the
-    /// rest are kept. Values come as the text the dashboard showed (ToString(), secrets masked): a masked value or one that
+    /// rest are kept. Values come as the text the dashboard showed (DataText, secrets masked): a masked value or one that
     /// comes back unchanged keeps its original object, and a changed value keeps the original primitive type when it
     /// converts to it, so non-string job data survives an edit.
     /// </summary>
@@ -1231,7 +1248,7 @@ internal static class DashboardApi
             var known = existing.TryGetValue(k, out var old);
             if (v == null)
                 data.Remove(k);
-            else if (known && (v == Mask || (old is not (null or string) && v == old.ToString())))
+            else if (known && (v == Mask || (old is not (null or string) && v == DataText(old))))
                 data[k] = old;
             else if (known && old is not (null or string))
                 data[k] = TryConvert(v, old.GetType()) ?? v;
@@ -1244,7 +1261,7 @@ internal static class DashboardApi
     /// <summary>The job data as text, as [JobParameter] rules check it, with the requested values set or (null) removed.</summary>
     private static Dictionary<string, string> Merged(JobDataMap saved, IReadOnlyDictionary<string, string?> changes)
     {
-        var merged = saved.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? "");
+        var merged = saved.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(kv => kv.Key, kv => DataText(kv.Value) ?? "");
         foreach (var (k, v) in changes)
         {
             if (v == null)
@@ -1255,16 +1272,33 @@ internal static class DashboardApi
         return merged;
     }
 
+    /// <summary>
+    /// A job data value as the API shows it and reads it back (<see cref="TryConvert"/>): in the invariant culture, and dates
+    /// in ISO 8601 with their kind or offset, so it is the same text on every server and in every exported file.
+    /// </summary>
+    internal static string? DataText(object? value) => value switch
+    {
+        null => null,
+        DateTime date => date.ToString("O", CultureInfo.InvariantCulture),
+        DateTimeOffset date => date.ToString("O", CultureInfo.InvariantCulture),
+        _ => Convert.ToString(value, CultureInfo.InvariantCulture),
+    };
+
     private static object? TryConvert(string value, Type type)
     {
         if (type.IsEnum)
             return Enum.TryParse(type, value, ignoreCase: true, out var parsed) ? parsed : null;
+        // Round-trip kind keeps a UTC date in UTC, where a plain parse would move it to the server's time zone
+        if (type == typeof(DateTime))
+            return DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var date) ? date : null;
+        if (type == typeof(DateTimeOffset))
+            return DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var offset) ? offset : null;
         if (!typeof(IConvertible).IsAssignableFrom(type))
             return null;
         try
         {
-            // Current culture, matching the ToString() the value was shown with
-            return Convert.ChangeType(value, type, CultureInfo.CurrentCulture);
+            // Invariant, as DataText shows it and files have it: in German "1.5" would read as 15
+            return Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
         }
         catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
         {
@@ -1421,7 +1455,7 @@ internal static class DashboardApi
     private static readonly string[] JobStatuses = ["Active", "Paused", "Unloadable", "Error"];
 
     /// <summary>How many of a job's last runs the job list shows.</summary>
-    internal const int RecentRunCount = 5;
+    internal const int RecentRunCount = 10;
 
     /// <summary>
     /// The jobs with their last runs, read in one call to the store. The list still loads when history cannot be read,
@@ -1456,11 +1490,11 @@ internal static class DashboardApi
         {
             detail = await scheduler.GetJobDetail(key);
         }
-        catch (JobPersistenceException ex)
+        catch (JobPersistenceException ex) when (UnloadableReason(ex) is { } reason)
         {
             // Job type not loadable in this process (e.g. another app sharing the scheduler name)
             return new JobDto(key.Name, key.Group, null, null, null, false, false,
-                ex.InnerException?.Message ?? ex.Message, new Dictionary<string, string?>(), await LoadTriggers(scheduler, key));
+                reason, new Dictionary<string, string?>(), await LoadTriggers(scheduler, key));
         }
 
         if (detail == null)
@@ -1470,7 +1504,7 @@ internal static class DashboardApi
 
         var data = detail.JobDataMap.Where(kv => !Retries.IsReserved(kv.Key)).ToDictionary(
             kv => kv.Key,
-            kv => Display(kv.Key, kv.Value?.ToString(), secretKeys, options)
+            kv => Display(kv.Key, DataText(kv.Value), secretKeys, options, scheduler.SchedulerName)
         );
 
         return new JobDto(key.Name, key.Group, detail.Description, detail.JobType.FullName, info?.DisplayName,
@@ -1617,18 +1651,18 @@ internal static class DashboardApi
         ?? new HashSet<string>();
 
     /// <summary>Job data that differs between two maps, by "data.&lt;key&gt;", for the audit log. Sensitive values are masked.</summary>
-    private static Dictionary<string, CronlightAuditChange> DataChanges(
-        IDictionary<string, object> before, IDictionary<string, object> after, HashSet<string> secretKeys, CronlightOptions options)
+    private static Dictionary<string, CronlightAuditChange> DataChanges(IDictionary<string, object> before, IDictionary<string, object> after,
+        HashSet<string> secretKeys, CronlightOptions options, string schedulerName)
     {
         var changes = new Dictionary<string, CronlightAuditChange>();
         // Cronlight's own keys are audited as what they mean, e.g. "retry"
         foreach (var key in before.Keys.Union(after.Keys).Where(k => !Retries.IsReserved(k)))
         {
-            var old = before.TryGetValue(key, out var o) ? o?.ToString() : null;
-            var @new = after.TryGetValue(key, out var n) ? n?.ToString() : null;
+            var old = before.TryGetValue(key, out var o) ? DataText(o) : null;
+            var @new = after.TryGetValue(key, out var n) ? DataText(n) : null;
             if (old == @new)
                 continue;
-            changes[$"data.{key}"] = new(Display(key, old, secretKeys, options), Display(key, @new, secretKeys, options));
+            changes[$"data.{key}"] = new(Display(key, old, secretKeys, options, schedulerName), Display(key, @new, secretKeys, options, schedulerName));
         }
         return changes;
     }
@@ -1677,17 +1711,18 @@ internal static class DashboardApi
         || options.SensitiveKeyPatterns.Any(p => key.Contains(p, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// A job data value as the API and audit log show it: sensitive values are masked, except secret
+    /// A job data value of the scheduler's as the API and audit log show it: sensitive values are masked, except secret
     /// references, which name a secret without revealing it and are shown so people can see which one is used.
     /// </summary>
-    internal static string? Display(string key, string? value, HashSet<string> secretKeys, CronlightOptions options) =>
+    internal static string? Display(string key, string? value, HashSet<string> secretKeys, CronlightOptions options, string schedulerName) =>
         value == null || !IsSensitive(key, secretKeys, options) ? value
-        : SecretReferences.Enabled(options) && SecretReferences.IsReference(value) ? value
+        : SecretReferences.Enabled(options, schedulerName) && SecretReferences.IsReference(value) ? value
         : Mask;
 
     /// <summary>Refuses secret references that would fail when the job runs, so the mistake shows when saving.</summary>
-    private static string? CheckSecretReferences(HttpContext http, Dictionary<string, string> data, HashSet<string> secretKeys, CronlightOptions options) =>
-        SecretReferences.Check(data, key => IsSensitive(key, secretKeys, options), options,
+    private static string? CheckSecretReferences(HttpContext http, Dictionary<string, string> data, HashSet<string> secretKeys,
+        CronlightOptions options, string schedulerName) =>
+        SecretReferences.Check(data, key => IsSensitive(key, secretKeys, options), options, schedulerName,
             http.RequestServices.GetRequiredService<IConfiguration>());
 
     private static bool TryResolveTimeZone(string? id, out TimeZoneInfo tz)

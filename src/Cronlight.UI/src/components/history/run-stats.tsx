@@ -1,7 +1,15 @@
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useRunStats } from '@/hooks/use-run-stats'
-import { formatDateTime, formatDuration, formatRate } from '@/lib/format'
+import { formatDateTime, formatDuration, formatRate, statsPeriods } from '@/lib/format'
+import { runFill } from '@/lib/run-tones'
 import { cn } from '@/lib/utils'
 import type { ExecutionRecord, ExecutionStatus, RunStatistics } from '@/types'
 
@@ -32,10 +40,13 @@ function extras(s: RunStatistics) {
 export function RunStatsRow({
   job,
   hours,
+  onHoursChange,
   filtered = false,
 }: {
   job: { group: string; name: string } | null
   hours: number
+  /** Changes the period, from a select beside the figures: it changes them alone, not the list of runs */
+  onHoursChange?: (hours: number) => void
   /** The list is filtered to one outcome, which the figures are not */
   filtered?: boolean
 }) {
@@ -60,6 +71,20 @@ export function RunStatsRow({
 
   return (
     <section aria-label="Run statistics" className="space-y-1.5">
+      {onHoursChange && (
+        <Select value={String(hours)} onValueChange={v => onHoursChange(Number(v))}>
+          <SelectTrigger size="sm" className="w-40" aria-label="Period of the figures">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {statsPeriods.map(p => (
+              <SelectItem key={p.hours} value={String(p.hours)}>
+                {p.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {figures.map(f => (
           <div key={f.label} className="rounded-lg border px-3 py-2">
@@ -147,20 +172,15 @@ export function JobRunStats({
   )
 }
 
-/** Outcomes of attempts that ran, which have a duration to show; they mean good or bad, so they wear status colors */
-const barTone: Partial<Record<ExecutionStatus, string>> = {
-  Succeeded: 'bg-emerald-500',
-  Retried: 'bg-orange-500',
-  Cancelled: 'bg-amber-500',
-  Failed: 'bg-destructive',
-}
-
-/** The recent runs' durations, oldest on the left, each bar coloured by its outcome and named on hover */
+/**
+ * The recent runs' durations, oldest on the left, each bar coloured by its outcome as in the job list's run strip and
+ * named on hover. Only runs with a duration: one going on has none yet, and a missed or blocked run never ran.
+ */
 export function DurationChart({ records }: { records: ExecutionRecord[] }) {
-  const runs = records.filter(r => r.durationMs !== null && barTone[r.status]).reverse()
+  const runs = records.filter(r => r.durationMs !== null && runFill[r.status]).reverse()
   if (runs.length < 2) return null
   const longest = Math.max(...runs.map(r => r.durationMs!), 1)
-  const outcomes = Object.keys(barTone).filter(o => runs.some(r => r.status === o))
+  const outcomes = Object.keys(runFill).filter(o => runs.some(r => r.status === o))
 
   return (
     <figure className="space-y-1.5">
@@ -181,7 +201,7 @@ export function DurationChart({ records }: { records: ExecutionRecord[] }) {
               {/* The whole column is the hover target, so a short bar is as easy to point at as a tall one */}
               <div className="flex h-full max-w-3 min-w-0 flex-1 items-end">
                 <div
-                  className={cn('w-full rounded-t-[4px]', barTone[r.status])}
+                  className={cn('w-full rounded-t-[4px]', runFill[r.status])}
                   style={{ height: `${Math.max(3, (r.durationMs! / longest) * 100)}%` }}
                 />
               </div>
@@ -196,7 +216,7 @@ export function DurationChart({ records }: { records: ExecutionRecord[] }) {
         <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
           {outcomes.map(o => (
             <li key={o} className="inline-flex items-center gap-1">
-              <span className={cn('size-2 rounded-[2px]', barTone[o as ExecutionStatus])} />
+              <span className={cn('size-2 rounded-[2px]', runFill[o as ExecutionStatus])} />
               {o}
             </li>
           ))}

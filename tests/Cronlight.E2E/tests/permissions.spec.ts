@@ -17,7 +17,9 @@ test.describe('viewer role', () => {
     await expect(page.getByRole('button', { name: 'New job' })).toHaveCount(0)
     const row = jobRow(page, name)
     await expect(row).toBeVisible()
-    await expect(row.getByRole('button')).toHaveCount(0)
+    // Its name alone, which opens its details
+    await expect(row.getByRole('button')).toHaveCount(1)
+    await expect(row.getByRole('button')).toHaveAccessibleName(name)
 
     await row.click()
     const details = page.getByRole('dialog', { name })

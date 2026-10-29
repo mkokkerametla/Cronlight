@@ -88,7 +88,9 @@ internal static partial class JobFileYaml
     public static string Write(JsonNode? node)
     {
         var writer = new StringWriter { NewLine = "\n" };
-        var emitter = new Emitter(writer);
+        // The emitter breaks lines its own way, Environment.NewLine unless told: a file exported on Windows would have
+        // CRLF, and differ in source control from the same jobs exported on Linux
+        var emitter = new Emitter(writer, EmitterSettings.Default.WithNewLine("\n"));
         emitter.Emit(new StreamStart());
         emitter.Emit(new DocumentStart());
         WriteNode(emitter, node);

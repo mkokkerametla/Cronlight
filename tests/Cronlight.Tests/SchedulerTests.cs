@@ -17,7 +17,7 @@ namespace Cronlight.Tests;
 public class SchedulerTests
 {
     /// <summary>An in-memory scheduler, added to the host's dashboard with UseCronlight unless told otherwise.</summary>
-    private static async Task<IScheduler> AddScheduler(TestHost host, bool useCronlight = true, string? name = null)
+    internal static async Task<IScheduler> AddScheduler(TestHost host, bool useCronlight = true, string? name = null)
     {
         var scheduler = await new StdSchedulerFactory(new NameValueCollection
         {

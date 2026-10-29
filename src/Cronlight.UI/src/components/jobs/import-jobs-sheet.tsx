@@ -14,6 +14,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
+import { useDirtyReport, useDiscardGuard } from '@/components/discard-changes'
 import { importJobs, type ImportOutcome } from '@/api'
 import type { ImportedJob } from '@/types'
 
@@ -25,9 +26,11 @@ interface Props {
 }
 
 export function ImportJobsSheet({ open, onOpenChange, onImported }: Props) {
+  const guard = useDiscardGuard(() => onOpenChange(false), 'The jobs in it are not imported.')
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={guard.onOpenChange}>
       <SheetContent className="w-full gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl">
+        {guard.dialog}
         <SheetHeader className="border-b">
           <SheetTitle>Import jobs</SheetTitle>
           <SheetDescription>
@@ -38,6 +41,7 @@ export function ImportJobsSheet({ open, onOpenChange, onImported }: Props) {
         {/* Remount on open so the form always starts empty */}
         {open && (
           <ImportForm
+            onDirtyChange={guard.setDirty}
             onDone={imported => {
               onOpenChange(false)
               if (imported) onImported()
@@ -55,11 +59,19 @@ export function ImportJobsSheet({ open, onOpenChange, onImported }: Props) {
  */
 const isYaml = (text: string) => !/^\s*[[{]/.test(text)
 
-function ImportForm({ onDone }: { onDone: (imported: boolean) => void }) {
+function ImportForm({
+  onDirtyChange,
+  onDone,
+}: {
+  /** Told whether a file was entered, so closing can ask first */
+  onDirtyChange: (dirty: boolean) => void
+  onDone: (imported: boolean) => void
+}) {
   const [text, setText] = useState('')
   // What checking the text answered; cleared when the text changes, so only a checked file is imported
   const [checked, setChecked] = useState<ImportOutcome | null>(null)
   const [busy, setBusy] = useState(false)
+  useDirtyReport(text.trim() !== '', onDirtyChange)
 
   const changeText = (value: string) => {
     setText(value)
