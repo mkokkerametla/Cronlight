@@ -92,7 +92,7 @@ builder.Services.AddCronlightHistory(o =>
     and optionally `group` and `name`, and `status`.
 - **Recent runs in the job list.** A column of each job's last 5 runs, oldest on the left: a check for a success, a
   cross for a failure (orange while its retry waits), and icons of their own for cancelled, blocked and missed runs, with
-  a pulsing dot for one going on. Empty slots stand for runs a job has not had yet. A run counts by its final outcome,
+  a dot for one going on. Empty slots stand for runs a job has not had yet. A run counts by its final outcome,
   so attempts that were retried are not runs of their own, and a run that needed retries has a small orange mark.
   Hover for its outcome, start and duration; click the row for the job's page. It refreshes with the list, and is left
   out on narrow screens.

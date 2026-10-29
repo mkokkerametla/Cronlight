@@ -116,8 +116,12 @@ to find.
   so the model reports figures rather than adding them up.
 - **Answers can still be wrong.** Models misread results now and then, and the dashboard says so under the question
   box. Check what matters in the dashboard itself; times in answers are UTC.
-- **Stop** ends an answer as it is written, keeping what it wrote. **Try again** asks a failed question again, and
-  **New conversation** starts afresh.
+- **Stop** ends an answer as it is written, keeping what it wrote. **Try again** asks a failed or stopped question
+  again. An answer cut off at `MaxOutputTokens` offers **Continue** instead, which asks the model to go on from where
+  it stopped, since asking again would stop at the same limit. **New conversation** starts afresh.
+- **The first questions come from what needs attention**: the welcome screen suggests a few, led by the dashboard's
+  own counts (failed runs in the last 24 hours, running and paused jobs), and leaves out those that need history
+  when history is off.
 
 ## Safety
 
@@ -142,7 +146,7 @@ to find.
 | "The AI model did not answer", with a trace id | The provider refused or failed. The app's log has its status and message under that trace id, logged as "The assistant's model call failed". |
 | …and the log says 401 Unauthorized | The key is missing or wrong. With the sample, check it is in user secrets (above) and the app runs in Development. |
 | …and the log says 403 Forbidden | On Workers AI: the model is not on your plan ("not available on the Workers Free plan"), or the token lacks Workers AI permission, or the account id in the endpoint is not the token's. |
-| "Cut off: the answer reached the model's length limit" | The answer used `MaxOutputTokens`. Raise it, or ask for a shorter answer. |
+| "Cut off: the answer reached the model's length limit" | The answer used `MaxOutputTokens`. Choose Continue for the rest, raise the limit, or ask for a shorter answer. |
 | Answers without using any tools, or makes up jobs | The model does not support tool calling, or is too small to use it well. Try a larger model with tool calling. |
 | Slow answers | Each tool call is a round trip to the model. Smaller hosted models, or fewer `MaxToolCalls`, answer faster. |
 
@@ -153,3 +157,7 @@ with the dashboard's request header. The answer is a stream of JSON objects, one
 `tool` when the model calls a tool (its `id`, `name` and `arguments`), `tool-done` when it has answered (with `error`
 if it was refused), `text` as the answer is written, then `done` (with `"cutOff": true` if the answer reached
 `MaxOutputTokens`), or `error` with a `traceId` if the model call failed.
+
+It answers about the dashboard's scheduler, or the one named by `?scheduler=`, and refuses one the user may not see
+with 403. A conversation that does not end in a question, or is longer than 40 messages of 8,000 characters, gets 400,
+and an app without an `IChatClient` gets 503.
