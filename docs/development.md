@@ -157,7 +157,7 @@ GitHub Actions, with every third-party action pinned to a commit SHA (Dependabot
    stuck for 5 minutes fails the run and names the test, and what the test hosts logged as warnings and errors
    is uploaded with the test results (`server-errors.log`).
 4. Pack the three packages as `0.1.0-ci.<run>` and verify them with `build/verify-packages.sh` (net10.0 assembly,
-   UI embedded, README, license, symbols, matching dependency versions).
+   UI embedded, README, license, symbols, and add-ons that depend on exactly the core's version).
    `build/smoke-test.sh` then installs them into a new .NET 10 web app on Quartz 3.13.1, runs it and checks
    the dashboard, API, OpenAPI document, MCP server and history respond.
 5. Upload the packages and test results as workflow artifacts.
