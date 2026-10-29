@@ -108,7 +108,8 @@ export function RunningTable({
                       <TableCell>{formatDateTime(job.firedTimeUtc)}</TableCell>
                       <TableCell className="text-right tabular-nums">
                         <span className="inline-flex items-center gap-2">
-                          <span className="size-2 animate-pulse rounded-full bg-emerald-500" />
+                          {/* Static: the duration beside it is what shows the run is live */}
+                          <span className="size-2 rounded-full bg-emerald-500" />
                           {formatDuration(job.runningForMs)}
                         </span>
                       </TableCell>

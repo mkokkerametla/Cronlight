@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -275,8 +275,10 @@ describe('TriggersEditor', () => {
     expect(
       await screen.findByText('Valid cron expression', {}, { timeout: 3000 })
     ).toBeInTheDocument()
-    expect(screen.getByText(/Next \(your local time\)/)).toHaveTextContent(
-      `Next (your local time): ${formatDateTime('2030-01-01T09:00:00Z')} · ${formatDateTime('2030-01-02T09:00:00Z')}`
-    )
+    expect(
+      within(screen.getByRole('list', { name: 'Next (your local time)' }))
+        .getAllByRole('listitem')
+        .map(li => li.textContent)
+    ).toEqual([formatDateTime('2030-01-01T09:00:00Z'), formatDateTime('2030-01-02T09:00:00Z')])
   })
 })

@@ -314,7 +314,7 @@ function JobDetails({
 
       <Separator />
       <section className="space-y-2">
-        <h3 className="text-sm font-medium">Triggers ({job.triggers.length})</h3>
+        <h3 className="text-base font-semibold">Triggers ({job.triggers.length})</h3>
         {job.triggers.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No triggers. This job only runs when triggered manually.
@@ -383,7 +383,7 @@ function JobDetails({
         <>
           <Separator />
           <section className="space-y-2">
-            <h3 className="text-sm font-medium">Job data</h3>
+            <h3 className="text-base font-semibold">Job data</h3>
             <dl className="divide-y rounded-lg border text-sm">
               {data.map(([key, value]) => (
                 <div key={key} className="flex gap-4 px-3 py-2">
@@ -463,12 +463,13 @@ function EditJobForm({
             id="edit-description"
             value={description}
             onChange={e => setDescription(e.target.value)}
+            placeholder="Optional: what it does, for whoever reads this next"
           />
         </div>
 
         <Separator />
         <section className="space-y-2">
-          <h3 className="text-sm font-medium">Triggers</h3>
+          <h3 className="text-base font-semibold">Triggers</h3>
           <TriggersEditor
             triggers={triggers}
             onChange={setTriggers}
@@ -483,13 +484,13 @@ function EditJobForm({
 
         <Separator />
         <section className="space-y-2">
-          <h3 className="text-sm font-medium">Retries</h3>
+          <h3 className="text-base font-semibold">When a run fails</h3>
           <RetryEditor value={retry} onChange={setRetry} />
         </section>
 
         <Separator />
         <section className="space-y-2">
-          <h3 className="text-sm font-medium">Job data</h3>
+          <h3 className="text-base font-semibold">Job data</h3>
           <DataEditor rows={data} onChange={setData} secretReferences={secretReferences} />
         </section>
       </div>
@@ -536,7 +537,7 @@ function RunWithDataForm({
   return (
     <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
       <div className="flex-1 space-y-3 overflow-y-auto p-4">
-        <h3 className="text-sm font-medium">Data for this run</h3>
+        <h3 className="text-base font-semibold">Data for this run</h3>
         <p className="text-sm text-muted-foreground">
           Changes apply to this run and its retries only. The saved job keeps its data, and the
           audit log records what was changed.
@@ -575,13 +576,13 @@ function RecentRuns({
     <>
       <Separator />
       <section className="space-y-2">
-        <h3 className="text-sm font-medium">Run statistics</h3>
+        <h3 className="text-base font-semibold">Run statistics</h3>
         <JobRunStats group={group} name={name} records={records} />
       </section>
       <Separator />
       <section className="space-y-2">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium">Recent runs</h3>
+          <h3 className="text-base font-semibold">Recent runs</h3>
           <Button variant="link" size="sm" className="h-auto p-0" onClick={onViewAll}>
             <History /> All runs
           </Button>
@@ -616,7 +617,7 @@ function RecentRuns({
                 </div>
                 {r.error && (
                   <p
-                    className={cn('line-clamp-2 text-xs break-words', errorTone(r))}
+                    className={cn('line-clamp-2 text-xs break-words text-pretty', errorTone(r))}
                     title={r.error}
                   >
                     {r.error}

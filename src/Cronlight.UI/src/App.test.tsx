@@ -1,15 +1,16 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, currentScheduler, selectScheduler } from '@/api'
+import { api, askAssistant, currentScheduler, selectScheduler } from '@/api'
 import App from '@/App'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { execution, job, jobPage, scheduler, trigger } from '@/test/fixtures'
-import type { HistorySummary, Job, JobType } from '@/types'
+import type { AssistantEvent, HistorySummary, Job, JobType } from '@/types'
 
 vi.mock('@/api', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api')>()),
   api: vi.fn(),
+  askAssistant: vi.fn(),
 }))
 
 const summary: HistorySummary = {
@@ -367,5 +368,66 @@ describe('App', () => {
 
     expect(await screen.findByText('Lost connection to the scheduler')).toBeInTheDocument()
     expect(tab('Jobs')).toHaveTextContent('2')
+  })
+
+  it('offers AI mode only when the app adds the assistant, and keeps it in the address', async () => {
+    const { unmount } = renderApp()
+    await screen.findByRole('tabpanel')
+    expect(screen.queryByRole('navigation', { name: 'Areas' })).toBeNull()
+    unmount()
+
+    responses.scheduler = scheduler({ features: ['assistant'] })
+    renderApp()
+    const nav = await screen.findByRole('navigation', { name: 'Areas' })
+    await userEvent.click(within(nav).getByRole('button', { name: 'AI mode' }))
+
+    expect(screen.getByRole('textbox', { name: 'Your question' })).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(window.location.search).toBe('?area=assistant')
+    expect(within(nav).getByRole('button', { name: 'AI mode' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    )
+
+    // Back returns to the jobs
+    await act(async () => {
+      window.history.back()
+      await new Promise(resolve => window.addEventListener('popstate', resolve, { once: true }))
+    })
+    expect(await screen.findByRole('tablist')).toBeInTheDocument()
+  })
+
+  it('keeps writing an answer while the jobs are looked at, and checks only the scheduler meanwhile', async () => {
+    let send!: (event: AssistantEvent) => void
+    vi.mocked(askAssistant).mockImplementation(
+      (_messages, onEvent) =>
+        new Promise<void>(() => {
+          send = onEvent
+        })
+    )
+    responses.scheduler = scheduler({ features: ['assistant'] })
+    window.history.replaceState(null, '', '/?area=assistant')
+    renderApp()
+    await userEvent.type(
+      await screen.findByRole('textbox', { name: 'Your question' }),
+      'What failed?{Enter}'
+    )
+    const nav = screen.getByRole('navigation', { name: 'Areas' })
+
+    await userEvent.click(within(nav).getByRole('button', { name: 'Dashboard' }))
+    act(() => send({ type: 'text', text: 'Two jobs failed.' }))
+    await userEvent.click(within(nav).getByRole('button', { name: 'AI mode' }))
+
+    expect(screen.getByText('Two jobs failed.')).toBeInTheDocument()
+    expect(screen.queryByText('Stopped.')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+  })
+
+  it('shows the dashboard for a link to AI mode when the app has no assistant', async () => {
+    window.history.replaceState(null, '', '/?area=assistant')
+    renderApp()
+
+    expect(await screen.findByRole('tablist')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Your question' })).toBeNull()
   })
 })

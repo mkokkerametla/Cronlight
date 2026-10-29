@@ -134,7 +134,27 @@ export interface SchedulerInfo {
   refreshSeconds: number
   /** Every scheduler the dashboard serves, the host's own first */
   schedulers: string[]
+  /** Areas the app's add-on packages turn on, such as assistant */
+  features: string[]
 }
+
+/** A message of a conversation with the assistant */
+export interface AssistantMessage {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+/**
+ * What the assistant's answer stream says, one event at a time: a tool starting and finishing, the answer's text as
+ * it is written, then done, or an error if the model call failed.
+ */
+export type AssistantEvent =
+  | { type: 'tool'; id: number; name: string; arguments: Record<string, unknown> }
+  | { type: 'tool-done'; id: number; name: string; error?: string }
+  | { type: 'text'; text: string }
+  | { type: 'error'; error: string; traceId?: string }
+  /** cutOff: the answer stopped at the model's output limit rather than its end */
+  | { type: 'done'; cutOff?: boolean }
 
 /** Counts over every job, whatever the search and filters */
 export interface JobCounts {

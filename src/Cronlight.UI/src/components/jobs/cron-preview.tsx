@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { CircleAlert, CircleCheck, Loader2 } from 'lucide-react'
 import { api } from '@/api'
 import { describeCron, formatDateTime, formatRelative } from '@/lib/format'
@@ -17,6 +17,7 @@ export function CronPreview({
   onInvalidChange?: (invalid: boolean) => void
 }) {
   const [preview, setPreview] = useState<Preview | null>(null)
+  const id = useId()
   const trimmed = expression.trim()
   const zone = timeZone.trim()
   const invalid =
@@ -80,15 +81,17 @@ export function CronPreview({
         <CircleCheck className="size-3.5" />{' '}
         {preview.description ?? describeCron(trimmed) ?? 'Valid cron expression'}
       </p>
-      <p className="text-muted-foreground">
-        Next (your local time):{' '}
-        {preview.nextFireTimes.map((t, i) => (
-          <span key={t} title={formatRelative(t)}>
-            {i > 0 && ' · '}
-            {formatDateTime(t)}
-          </span>
-        ))}
-      </p>
+      {/* One a line, so each date can be read on its own */}
+      <div className="text-muted-foreground">
+        <p id={`${id}-next`}>Next (your local time)</p>
+        <ol aria-labelledby={`${id}-next`} className="tabular-nums">
+          {preview.nextFireTimes.map(t => (
+            <li key={t} title={formatRelative(t)}>
+              {formatDateTime(t)}
+            </li>
+          ))}
+        </ol>
+      </div>
     </div>
   )
 }

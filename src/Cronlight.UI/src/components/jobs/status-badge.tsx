@@ -69,7 +69,7 @@ const executionTone: Record<ExecutionStatus, string> = {
 export function ExecutionStatusBadge({ status }: { status: ExecutionStatus }) {
   return (
     <Badge variant="outline" className={cn('gap-1.5', executionTone[status])}>
-      {status === 'Running' && <span className={cn(dot, 'animate-pulse bg-sky-500')} />}
+      {status === 'Running' && <span className={cn(dot, 'bg-sky-500')} />}
       {status}
     </Badge>
   )

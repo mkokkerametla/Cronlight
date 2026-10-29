@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Quartz;
 using Cronlight;
 using Cronlight.Mcp;
+using Microsoft.Extensions.AI;
 using Cronlight.SampleHost;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -77,6 +78,23 @@ builder.Services.AddCronlight(o =>
 // them. Clients send X-Demo-Role as the dashboard does, e.g.
 // claude mcp add --transport http cronlight http://localhost:5099/ops/jobs/mcp --header "X-Demo-Role: admin"
 builder.Services.AddCronlightMcp(o => o.AllowActions = true);
+
+// AI mode in the dashboard, when a model is configured: any OpenAI-compatible endpoint, with the key in user secrets
+// (Assistant:ApiKey; read in Development only). For example Cloudflare Workers AI with
+//   Assistant__Endpoint=https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/v1 Assistant__Model=@cf/openai/gpt-oss-120b
+// OpenAI with Assistant__Model=gpt-5-mini (no endpoint), or a local Ollama, which needs no key, with
+//   Assistant__Endpoint=http://localhost:11434/v1 Assistant__Model=qwen2.5:7b
+// See docs/ai-mode.md. Any IChatClient works.
+if (builder.Configuration["Assistant:Model"] is { Length: > 0 } model)
+{
+    var endpoint = builder.Configuration["Assistant:Endpoint"];
+    var client = new OpenAI.OpenAIClient(
+        // A local model needs no key, and the client needs one anyway
+        new System.ClientModel.ApiKeyCredential(builder.Configuration["Assistant:ApiKey"] is { Length: > 0 } key ? key : "none"),
+        new OpenAI.OpenAIClientOptions { Endpoint = endpoint is { Length: > 0 } ? new Uri(endpoint) : null });
+    builder.Services.AddChatClient(client.GetChatClient(model).AsIChatClient());
+    builder.Services.AddCronlightAssistant();
+}
 
 // Health of every scheduler served, for load balancers and Kubernetes probes: GET /healthz
 builder.Services.AddHealthChecks().AddCronlight();

@@ -150,6 +150,7 @@ internal sealed record JobChange(JobKey Key, Dictionary<string, CronlightAuditCh
 /// <param name="SecretReferences">Whether secret parameters may name a secret from configuration (secret:Name).</param>
 /// <param name="RefreshSeconds">How often the dashboard refreshes.</param>
 /// <param name="Schedulers">Every scheduler served that the user may see, the host's own first.</param>
+/// <param name="Features">Areas that add-on packages turn on, such as assistant: the dashboard shows only those.</param>
 internal record SchedulerDto(
     string SchedulerName,
     string SchedulerInstanceId,
@@ -167,7 +168,8 @@ internal record SchedulerDto(
     bool HistoryEnabled,
     bool SecretReferences,
     int RefreshSeconds,
-    IReadOnlyList<string> Schedulers
+    IReadOnlyList<string> Schedulers,
+    IReadOnlyList<string> Features
 );
 
 /// <summary>One page of history, newest first.</summary>
@@ -231,10 +233,16 @@ internal static class DashboardApi
         });
     }
 
-    /// <summary>Refuses requests that change jobs unless they come from the dashboard or another same-site client.</summary>
-    public static void RequireDashboardRequests(this RouteGroupBuilder api)
+    /// <summary>
+    /// Refuses requests that change jobs, or otherwise act for the user, unless they come from the dashboard or another
+    /// same-site client. <paramref name="refused"/> says what is refused when they do not: "Jobs cannot be changed", and
+    /// "Requests that change jobs".
+    /// </summary>
+    public static TBuilder RequireDashboardRequests<TBuilder>(this TBuilder api,
+        (string FromAnotherSite, string WithoutHeader)? refused = null) where TBuilder : IEndpointConventionBuilder
     {
-        api.AddEndpointFilter((context, next) =>
+        var (fromAnotherSite, withoutHeader) = refused ?? ("Jobs cannot be changed", "Requests that change jobs");
+        return api.AddEndpointFilter((context, next) =>
         {
             var request = context.HttpContext.Request;
             // Browsers set Sec-Fetch-Site themselves and scripts cannot change it; other clients do not send it
@@ -243,8 +251,8 @@ internal static class DashboardApi
                 return ValueTask.FromResult<object?>(Results.Problem(
                     title: "Request refused.",
                     detail: crossSite
-                        ? "Jobs cannot be changed from another site."
-                        : $"Requests that change jobs must send the {RequestHeader} header, as the dashboard does.",
+                        ? $"{fromAnotherSite} from another site."
+                        : $"{withoutHeader} must send the {RequestHeader} header, as the dashboard does.",
                     statusCode: StatusCodes.Status403Forbidden));
             return next(context);
         });
@@ -795,7 +803,8 @@ internal static class DashboardApi
             http.RequestServices.GetService<IJobHistoryStore>() != null,
             SecretReferences.Enabled(options),
             Math.Clamp(options.RefreshSeconds, 1, 300),
-            visible);
+            visible,
+            http.RequestServices.GetServices<DashboardExtension>().Select(e => e.Feature).Distinct().ToList());
     }
 
     /// <summary>Whether a cron expression is valid, and its next fire times in the time zone (UTC when null).</summary>

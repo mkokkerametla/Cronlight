@@ -95,14 +95,14 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
                   className="min-w-0 flex-[2_1_14rem] font-mono"
                   value={trigger.cronExpression}
                   onChange={e => update(index, { cronExpression: e.target.value })}
-                  placeholder="0 0/5 * * * ?"
+                  placeholder="e.g. 0 0/5 * * * ?"
                   aria-label="Cron expression"
                 />
                 <Input
                   className="min-w-0 flex-[1_1_9rem]"
                   value={trigger.timeZone}
                   onChange={e => update(index, { timeZone: e.target.value })}
-                  placeholder="UTC"
+                  placeholder="Empty: UTC"
                   aria-label="Time zone"
                 />
               </>
@@ -224,11 +224,14 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
       >
         <Plus /> Add trigger
       </Button>
-      <p className="text-xs text-muted-foreground">
-        Cron: Quartz cron, with seconds (<CronSyntaxLink />
-        ), and an IANA time zone such as America/Chicago. One time and interval: times in your local
-        time. Names are optional. No triggers means the job only runs when triggered manually.
-      </p>
+      <ul className="max-w-prose space-y-0.5 text-xs text-muted-foreground">
+        <li>
+          Cron: Quartz cron, with seconds (<CronSyntaxLink />
+          ), read in an IANA time zone such as America/Chicago.
+        </li>
+        <li>One time and interval: in your local time.</li>
+        <li>No triggers: the job runs only when triggered manually.</li>
+      </ul>
     </div>
   )
 }

@@ -140,7 +140,7 @@ function CreateJobForm({
               id="job-name"
               value={name}
               onChange={e => setName(e.target.value)}
-              placeholder="nightly-report"
+              placeholder="e.g. nightly-report"
               required
             />
           </div>
@@ -150,7 +150,7 @@ function CreateJobForm({
               id="job-group"
               value={group}
               onChange={e => setGroup(e.target.value)}
-              placeholder="DEFAULT"
+              placeholder="Empty: DEFAULT"
             />
           </div>
         </div>
@@ -161,12 +161,13 @@ function CreateJobForm({
             id="job-description"
             value={description}
             onChange={e => setDescription(e.target.value)}
+            placeholder="Optional: what it does, for whoever reads this next"
           />
         </div>
 
         <Separator />
         <section className="space-y-2">
-          <h3 className="text-sm font-medium">Triggers</h3>
+          <h3 className="text-base font-semibold">Triggers</h3>
           <TriggersEditor
             triggers={triggers}
             onChange={setTriggers}
@@ -176,13 +177,13 @@ function CreateJobForm({
 
         <Separator />
         <section className="space-y-2">
-          <h3 className="text-sm font-medium">Retries</h3>
+          <h3 className="text-base font-semibold">When a run fails</h3>
           <RetryEditor value={retry} onChange={setRetry} />
         </section>
 
         <Separator />
         <section className="space-y-2">
-          <h3 className="text-sm font-medium">Job data</h3>
+          <h3 className="text-base font-semibold">Job data</h3>
           <DataEditor rows={data} onChange={setData} secretReferences={secretReferences} />
         </section>
       </div>

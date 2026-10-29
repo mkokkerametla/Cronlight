@@ -25,7 +25,6 @@ import { ExecutionStatusBadge } from '@/components/jobs/status-badge'
 import { useHistory } from '@/hooks/use-history'
 import { useRefreshInterval } from '@/hooks/use-polling'
 import {
-  errorTone,
   everySeconds,
   formatDateTime,
   formatDuration,
@@ -200,7 +199,7 @@ export function HistoryTable({
               {records.map(r => (
                 <Fragment key={r.id}>
                   <TableRow
-                    className={cn('align-top', gone.has(r.id) && 'opacity-50')}
+                    className={cn('group align-top', gone.has(r.id) && 'opacity-50')}
                     title={
                       gone.has(r.id)
                         ? 'No longer listed: it goes when the pointer leaves the list'
@@ -254,7 +253,12 @@ export function HistoryTable({
                       </div>
                       {r.error && (
                         <p
-                          className={cn('mt-1 line-clamp-2 text-xs break-words', errorTone(r))}
+                          // The outcome badge is red already: in a list of hundreds of failures, red errors on every row
+                          // leave nothing standing out
+                          className={cn(
+                            'mt-1 line-clamp-2 text-xs break-words text-pretty',
+                            r.status === 'Misfired' ? 'text-muted-foreground' : 'text-foreground/80'
+                          )}
                           title={r.error}
                         >
                           {r.error}
@@ -279,9 +283,11 @@ export function HistoryTable({
                     {canManage && onRetry && (
                       <TableCell className="text-right">
                         {retryable.includes(r.status) && (
+                          // Shown on the row the pointer is over, or when focused; always where nothing hovers (touch)
                           <Button
                             size="sm"
                             variant="outline"
+                            className="transition-opacity focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                             aria-label={`Run ${r.jobName} again`}
                             onClick={async () => {
                               if (await onRetry(r)) showRunSoon()

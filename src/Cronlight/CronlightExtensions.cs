@@ -113,6 +113,8 @@ public static class CronlightExtensions
         api.RequireSchedulerAccess(manage: false);
         api.MapOpenApiDocument();
         api.MapReadEndpoints();
+        foreach (var extension in endpoints.ServiceProvider.GetServices<DashboardExtension>())
+            extension.Map(api, options);
 
         var manage = api.MapGroup("");
         if (options.ManagePolicy != null)

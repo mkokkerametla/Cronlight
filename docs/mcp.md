@@ -21,6 +21,8 @@ app.MapCronlight("/ops/jobs");
 app.MapCronlightMcp("/ops/jobs/mcp");
 ```
 
+To ask the same questions in the dashboard itself, with your app's own AI model, see [AI mode](ai-mode.md).
+
 It speaks MCP's streamable HTTP transport, statelessly: each request stands alone, so a dashboard on several nodes
 behind a load balancer needs no sticky sessions.
 
