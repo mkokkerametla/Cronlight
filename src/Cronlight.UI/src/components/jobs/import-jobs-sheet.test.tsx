@@ -126,4 +126,18 @@ describe('ImportJobsSheet', () => {
     expect(within(sheet).getByRole('status')).toHaveTextContent('nothing to import')
     expect(within(sheet).queryByRole('button', { name: /^Import/ })).toBeNull()
   })
+
+  it('asks before Escape closes it with text entered', async () => {
+    const { onOpenChange, sheet } = renderSheet()
+    await userEvent.type(within(sheet).getByLabelText('Exported JSON or YAML'), yaml)
+
+    await userEvent.keyboard('{Escape}')
+    expect(
+      screen.getByRole('alertdialog', { name: 'Discard unsaved changes?' })
+    ).toBeInTheDocument()
+    expect(onOpenChange).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
 })

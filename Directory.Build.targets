@@ -10,4 +10,15 @@
   <PropertyGroup Condition="'$(IsPackable)' == 'true' And '$(GITHUB_REPOSITORY)' != ''">
     <PackageReleaseNotes>What is new in $(Version): $(GITHUB_SERVER_URL)/$(GITHUB_REPOSITORY)/releases/tag/v$(Version)</PackageReleaseNotes>
   </PropertyGroup>
+
+  <!-- The add-ons use the core's internals, which any release may change: each depends on exactly the core version it
+       was packed with, [x.y.z], since NuGet reads a plain x.y.z as that version or later. Pack reads the versions of a
+       project's references in _GetProjectReferenceVersions; only the add-ons reference the core project. -->
+  <Target Name="DependOnExactCoreVersion" AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Condition="'%(Filename)%(Extension)' == 'Cronlight.csproj'">
+        <ProjectVersion>[%(ProjectVersion)]</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+    </ItemGroup>
+  </Target>
 </Project>

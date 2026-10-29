@@ -365,7 +365,15 @@ export function JobsTable({
                       </TableCell>
                     )}
                     <TableCell>
-                      <div className="font-medium text-foreground">{job.name}</div>
+                      {/* Rows cannot take focus, so the name is how a keyboard or screen reader opens the job. Its
+                          click, or Enter on it, reaches the row, which opens it. */}
+                      <button
+                        type="button"
+                        aria-haspopup="dialog"
+                        className="rounded-sm text-left font-medium text-foreground outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
+                      >
+                        {job.name}
+                      </button>
                       <div className="text-xs text-muted-foreground">{job.group}</div>
                     </TableCell>
                     <TableCell className={fromMd}>

@@ -48,7 +48,8 @@ public class CronlightOptions
     /// Any configuration source works: appsettings, user secrets, environment variables or Azure Key Vault
     /// (a vault secret named <c>JobSecrets--Smtp--Password</c> for section <c>JobSecrets</c>). Only keys in this
     /// section can be referenced, so people who can edit jobs cannot read the rest of the configuration.
-    /// Null (the default) turns references off, and the API refuses to save them.
+    /// Null (the default) turns references off, and the API refuses to save them. A scheduler given its own
+    /// <see cref="CronlightSchedulerOptions.SecretsSection"/> reads that instead.
     /// </summary>
     public string? SecretsSection { get; set; }
 
@@ -90,7 +91,10 @@ public class CronlightSchedulerOptionsByName() : Dictionary<string, CronlightSch
     }
 }
 
-/// <summary>Who may see and change one scheduler, in addition to the dashboard-wide policies, and the job types it offers.</summary>
+/// <summary>
+/// Who may see and change one scheduler, in addition to the dashboard-wide policies, the job types it offers, and where
+/// its secret references are read from.
+/// </summary>
 public class CronlightSchedulerOptions
 {
     /// <summary>Required to see the scheduler: it is left out of the scheduler picker, and its API refuses others.</summary>
@@ -98,6 +102,13 @@ public class CronlightSchedulerOptions
 
     /// <summary>Required to change its jobs. Falls back to <see cref="ViewPolicy"/>.</summary>
     public string? ManagePolicy { get; set; }
+
+    /// <summary>
+    /// The configuration section its jobs' secret references are read from, in place of
+    /// <see cref="CronlightOptions.SecretsSection"/>: people who may change only this scheduler's jobs can reference only
+    /// its secrets. Also turns references on for this scheduler alone. Null = the dashboard's section.
+    /// </summary>
+    public string? SecretsSection { get; set; }
 
     /// <summary>
     /// Assemblies whose job types this scheduler offers in New job, in place of <see cref="CronlightOptions.JobAssemblies"/>:

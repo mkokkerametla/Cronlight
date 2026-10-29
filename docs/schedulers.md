@@ -40,5 +40,8 @@ history and failure streaks, and audit events and alerts name the scheduler.
   those assemblies, and the API refuses to create others in it. Schedulers without their own keep offering those of
   `JobAssemblies`. Jobs of other types already in a scheduler are still shown and edited, with their data as plain
   values, as for hidden types.
+- **Secrets per scheduler.** `o.Schedulers["Billing"].SecretsSection = "BillingSecrets"` gives the scheduler's
+  [secret references](job-types.md#secret-references) a configuration section of their own, in place of
+  `SecretsSection`, so those who manage another scheduler's jobs cannot reference Billing's secrets.
 
 The sample host has a second, in-memory scheduler named Reports (`samples/Cronlight.SampleHost/ReportsScheduler.cs`).

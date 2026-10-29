@@ -14,6 +14,9 @@ second scheduler.
 **[Website](https://cronlight.pages.dev/) · [Live demo](https://cronlight.pages.dev/demo/) ·
 [Documentation](https://cronlight.pages.dev/docs/)**
 
+<!-- An absolute link, so the image shows on nuget.org too, which packs this README -->
+![The job list: each job's status, a strip of its last ten runs and its next fire time, under counts of jobs, running, paused and failed](https://raw.githubusercontent.com/mkokkerametla/Cronlight/main/assets/dashboard.png)
+
 ## Features
 
 - **Jobs:** search, filter and page through thousands of jobs; create and edit them with cron, one-time and interval
@@ -108,8 +111,8 @@ Open `/ops/jobs/`. The API is at `/ops/jobs/api/*`, described by an OpenAPI docu
 ## Limitations
 
 - Quartz.NET 3.x only: Quartz 4 is not supported yet.
-- The dashboard refreshes by polling (every 10 seconds by default) rather than live, and a run's log shows once the
-  run has finished.
+- The dashboard refreshes by polling (every 10 seconds by default) rather than live. A running job's log so far shows
+  on the node running it; in a cluster, the other nodes show the log once the run has finished.
 - Secret values are masked in the dashboard but stored in the Quartz tables as plain text, unless you use secret
   references.
 - A run can be cancelled only from the node running it, and only if the job observes its cancellation token.

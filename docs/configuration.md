@@ -54,8 +54,8 @@ serves Microsoft.AspNetCore.OpenApi's documents by name (`MapOpenApi()`) gets an
 | `AllowAnonymousOutsideDevelopment` | `false` | Without a `ViewPolicy` Cronlight returns 403 outside Development unless this is set |
 | `AllowManagingUnloadableJobs` | `false` | Allow pause/resume/delete on jobs whose type isn't in this app |
 | `JobAssemblies` | all loaded app assemblies | Where to look for `IJob` types offered in "New Job". Left empty, every loaded assembly but .NET's and Quartz.NET's (`System`, `Microsoft`, `Quartz`, `netstandard` and names under them, such as `Quartz.Jobs`). A scheduler can offer its own instead: `Schedulers[name].JobAssemblies` |
-| `Schedulers[name]` | none | Per scheduler: `ViewPolicy`, `ManagePolicy` and `JobAssemblies` ([several schedulers](schedulers.md)) |
+| `Schedulers[name]` | none | Per scheduler: `ViewPolicy`, `ManagePolicy`, `JobAssemblies` and `SecretsSection` ([several schedulers](schedulers.md)) |
 | `RefreshSeconds` | `10` | How often an open dashboard refreshes jobs, running jobs and history (1 to 300 seconds) |
 | `SensitiveKeyPatterns` | password, secret, token, apikey, connectionstring | JobDataMap keys masked in responses |
-| `SecretsSection` | none | Configuration section that [secret references](job-types.md#secret-references) are read from; none turns them off |
+| `SecretsSection` | none | Configuration section that [secret references](job-types.md#secret-references) are read from; none turns them off. A scheduler can read its own instead: `Schedulers[name].SecretsSection` |
 | `ContentSecurityPolicy` | own files only, no framing | Content-Security-Policy for the dashboard. Change `frame-ancestors` to show it inside your own portal; `null` sends none |

@@ -49,13 +49,14 @@ if [[ -f "$core" ]]; then
   done
 fi
 
-# The history package must depend on the exact same core version
+# The add-ons use the core's internals, so each must depend on exactly its own core version: [x.y.z], since NuGet
+# reads a plain x.y.z as that version or later
 for id in Cronlight.Quartz.Dashboard.History Cronlight.Quartz.Dashboard.Mcp; do
   package="$dir/$id.$version.nupkg"
   if [[ -f "$package" ]]; then
     unzip -p "$package" "$id.nuspec" \
-      | grep -c "id=\"Cronlight.Quartz.Dashboard\" version=\"$version\"" >/dev/null \
-      || fail "$id does not depend on Cronlight.Quartz.Dashboard $version"
+      | grep -c "id=\"Cronlight.Quartz.Dashboard\" version=\"\[$version\]\"" >/dev/null \
+      || fail "$id does not depend on exactly Cronlight.Quartz.Dashboard $version"
   fi
 done
 

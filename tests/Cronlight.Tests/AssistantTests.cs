@@ -2,6 +2,9 @@ using System.Collections.Specialized;
 using System.Net;
 using System.Text.Json;
 using Cronlight.Mcp;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
@@ -166,6 +169,27 @@ public class AssistantTests
             (await host.Client("admin").PostJson("api/assistant/ask", Question("Hello?"))).StatusCode);
     }
 
+    [Fact]
+    public async Task Follows_its_rate_limit_policy()
+    {
+        var chat = new ScriptedChatClient();
+        await using var host = await TestHost.Start(history: _ => { }, services: s =>
+        {
+            s.AddCronlightAssistant(a => a.RateLimitPolicy = "questions");
+            s.AddSingleton<IChatClient>(chat);
+            s.AddRateLimiter(o =>
+            {
+                o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+                o.AddFixedWindowLimiter("questions", w => (w.PermitLimit, w.Window) = (1, TimeSpan.FromHours(1)));
+            });
+        }, map: app => app.UseRateLimiter());
+
+        Assert.Equal(HttpStatusCode.OK, (await host.Client().PostJson("api/assistant/ask", Question("Hello?"))).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await host.Client().PostJson("api/assistant/ask", Question("Still there?"))).StatusCode);
+        // The model was asked once
+        Assert.Single(chat.SystemPrompts);
+    }
+
     [Theory]
     [InlineData("""{"messages":[]}""")]
     [InlineData("""{"messages":[{"role":"assistant","text":"Hi"}]}""")]
@@ -285,6 +309,21 @@ public class AssistantTests
         Assert.Equal("done", Type(events[^1]));
         Assert.False(events[^1].TryGetProperty("cutOff", out _));
     }
+
+    [Fact]
+    public async Task Leaves_the_apps_chat_client_open_for_the_next_question()
+    {
+        var chat = new ScriptedChatClient();
+        await using var host = await Start(chat);
+
+        await Events(await host.Client().PostJson("api/assistant/ask", Question("Hello?")));
+        var second = await Events(await host.Client().PostJson("api/assistant/ask", Question("Still there?")));
+
+        // The app registered it once for all its requests, so only the app disposes it
+        Assert.False(chat.Disposed);
+        Assert.Equal("Answer: none", Text(second));
+        Assert.Equal("done", Type(second[^1]));
+    }
 }
 
 /// <summary>
@@ -300,10 +339,13 @@ internal sealed class ScriptedChatClient(string? tool = null, Dictionary<string,
     /// <summary>Whether the answer stops at the output limit, as a model's does when it runs out of tokens.</summary>
     public bool CutOff { get; init; }
     public int? MaxOutputTokens { get; private set; }
+    public bool Disposed { get; private set; }
 
     public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        // As a provider's client does once disposed
+        ObjectDisposedException.ThrowIf(Disposed, this);
         if (Failure != null)
             throw Failure;
         var list = messages.ToList();
@@ -338,5 +380,5 @@ internal sealed class ScriptedChatClient(string? tool = null, Dictionary<string,
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
-    public void Dispose() { }
+    public void Dispose() => Disposed = true;
 }

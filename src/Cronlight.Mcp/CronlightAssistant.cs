@@ -28,6 +28,12 @@ public class CronlightAssistantOptions
     /// </summary>
     public string? Policy { get; set; }
 
+    /// <summary>
+    /// A rate limiting policy for questions, as each costs model calls; null for none. The app registers the policy with
+    /// <c>AddRateLimiter</c> and calls <c>UseRateLimiter</c>.
+    /// </summary>
+    public string? RateLimitPolicy { get; set; }
+
     /// <summary>How many tool calls one answer may make before the assistant has to answer with what it has.</summary>
     public int MaxToolCalls { get; set; } = 12;
 
@@ -120,6 +126,8 @@ internal sealed class AssistantExtension(IOptions<CronlightAssistantOptions> ass
         ask.RequireDashboardRequests(("Questions cannot be asked", "Questions"));
         if (assistantOptions.Value.Policy is { } policy)
             ask.RequireAuthorization(policy);
+        if (assistantOptions.Value.RateLimitPolicy is { } limit)
+            ask.RequireRateLimiting(limit);
     }
 
     internal async Task<IResult> Ask(AskRequest request, HttpContext http, CancellationToken cancellationToken)
@@ -161,7 +169,9 @@ internal sealed class AssistantExtension(IOptions<CronlightAssistantOptions> ass
             var tools = Functions.Select(f => (AITool)new ReportedTool(f, scheduler.SchedulerName,
                 events, () => Interlocked.Increment(ref calls), o.MaxToolCalls, logger)).ToList();
 
-            using var client = new ChatClientBuilder(chat)
+            // Not disposed: that would dispose the app's own client too, which serves every request. The function calling
+            // around it holds nothing to release.
+            var client = new ChatClientBuilder(chat)
                 .UseFunctionInvocation(configure: f => f.MaximumIterationsPerRequest = o.MaxToolCalls + 1)
                 .Build(http.RequestServices);
             var options = new ChatOptions { Tools = tools, MaxOutputTokens = o.MaxOutputTokens };

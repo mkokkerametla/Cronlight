@@ -63,6 +63,58 @@ describe('TriggersEditor', () => {
     })
   })
 
+  it('labels each field on screen, so a filled one still says what it is', async () => {
+    render(<Editor initial={[emptyTrigger()]} />)
+    const labels = () => screen.getAllByText(/./, { selector: 'label' }).map(l => l.textContent)
+
+    expect(labels()).toEqual(
+      expect.arrayContaining(['Trigger kind', 'Cron expression', 'Time zone', 'Trigger name'])
+    )
+    await chooseKind('Interval')
+    expect(labels()).toEqual(
+      expect.arrayContaining(['Interval', 'Interval unit', 'First run', 'Number of runs'])
+    )
+    await chooseKind('One time')
+    expect(labels()).toEqual(expect.arrayContaining(['Run at']))
+  })
+
+  it('marks an invalid cron expression on its field, with the reason as its description', async () => {
+    vi.mocked(api).mockImplementation(async path => ({
+      isValid: false,
+      expression: new URLSearchParams((path as string).split('?')[1]).get('expression'),
+      description: null,
+      nextFireTimes: [],
+      errorMessage: 'Hour values must be between 0 and 23',
+    }))
+    render(<Editor initial={[emptyTrigger()]} />)
+    const field = screen.getByLabelText('Cron expression')
+
+    await userEvent.type(field, '0 0 25 * * ?')
+
+    await waitFor(() => expect(field).toHaveAttribute('aria-invalid', 'true'))
+    expect(field).toHaveAccessibleDescription('Hour values must be between 0 and 23')
+  })
+
+  it('fills the cron field from a common schedule', async () => {
+    render(<Editor initial={[emptyTrigger()]} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Common schedules' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: /Weekdays at 09:00/ }))
+
+    expect(screen.getByLabelText('Cron expression')).toHaveValue('0 0 9 ? * MON-FRI')
+    expect(sent()).toEqual([expect.objectContaining({ cronExpression: '0 0 9 ? * MON-FRI' })])
+  })
+
+  it("suggests time zones as one is typed, the browser's own first", () => {
+    render(<Editor initial={[emptyTrigger()]} />)
+
+    const list = document.getElementById(screen.getByLabelText('Time zone').getAttribute('list')!)
+    const zones = [...list!.querySelectorAll('option')].map(o => o.value)
+    expect(zones[0]).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone)
+    expect(zones).toContain('Europe/Paris')
+    expect(new Set(zones).size).toBe(zones.length)
+  })
+
   it("links to Quartz.NET's cron documentation, in a new tab", () => {
     render(<Editor initial={[emptyTrigger()]} />)
 

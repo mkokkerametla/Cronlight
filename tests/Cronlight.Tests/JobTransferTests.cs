@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
 
@@ -114,6 +115,27 @@ public class JobTransferTests
         var file = $"version: 1\njobs:\n- name: manual\n  type: {Plain}\n  triggers:\n  - cronExpression: 0 15 10 * * ?\n";
         Assert.Equal("update", Actions(await Imported(client, file))["DEFAULT.manual"]);
         Assert.Equal("unchanged", Actions(await Imported(client, file))["DEFAULT.manual"]);
+    }
+
+    [Fact]
+    public async Task Typed_job_data_from_a_file_keeps_its_value_in_any_culture()
+    {
+        // An app whose requests run in German, where "1.5" reads as 15
+        await using var host = await TestHost.Start(ramJobStore: true, map: app => app.UseRequestLocalization("de-DE"));
+        var client = host.Client();
+        var scheduler = await host.Scheduler();
+        var key = new JobKey("rates");
+        await scheduler.AddJob(JobBuilder.Create<PlainJob>().WithIdentity(key).StoreDurably()
+            .SetJobData(new JobDataMap { ["rate"] = 1.25, ["due"] = new DateTime(2026, 10, 29, 16, 30, 15, DateTimeKind.Utc) })
+            .Build(), replace: false);
+
+        Assert.Equal("unchanged", Actions(await Imported(client, await client.GetStringAsync("api/jobs/export"), yaml: false))["DEFAULT.rates"]);
+
+        await Imported(client, $"version: 1\njobs:\n- name: rates\n  type: {Plain}\n  data:\n    rate: 1.5\n    due: 2026-11-01T08:00:00Z\n");
+        var data = (await scheduler.GetJobDetail(key))!.JobDataMap;
+        Assert.Equal(1.5, data["rate"]);
+        var due = Assert.IsType<DateTime>(data["due"]);
+        Assert.Equal((new DateTime(2026, 11, 1, 8, 0, 0), DateTimeKind.Utc), (due, due.Kind));
     }
 
     [Fact]

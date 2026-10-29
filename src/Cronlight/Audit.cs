@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
@@ -12,7 +14,8 @@ namespace Cronlight;
 
 /// <summary>
 /// A change made through the dashboard or its API, or an attempt that was refused. Secret values are
-/// never included: a changed secret shows as <c>********</c> on both sides.
+/// never included: a changed secret shows as <c>********</c> on both sides. Control characters are escaped (a line
+/// break as <c>\n</c>), as in the log, except in the changes, which a description's line breaks are part of.
 /// </summary>
 /// <param name="Action">
 /// create, update, pause, resume, trigger, cancel, cancel-retry or delete for one job; pause-group or resume-group for every
@@ -116,23 +119,26 @@ internal static class Audit
         if (string.IsNullOrEmpty(scheduler))
             scheduler = (await http.RequestServices.GetRequiredService<CronlightSchedulers>().Default()).SchedulerName;
 
+        // Escaped for sinks too, which often write lines of text as well. Changes are not: a description may have line
+        // breaks, and the log writes them as JSON.
         var auditEvent = new CronlightAuditEvent(
             DateTimeOffset.UtcNow,
-            UserName(http.User),
-            action,
-            group,
-            name,
+            Escape(UserName(http.User)),
+            Escape(action),
+            Escape(group),
+            Escape(name),
             succeeded,
             status,
-            succeeded ? null : failure?.Message ?? ErrorMessage(result) ?? ReasonPhrases.GetReasonPhrase(status),
+            Escape(succeeded ? null : failure?.Message ?? ErrorMessage(result) ?? ReasonPhrases.GetReasonPhrase(status)),
             changes,
-            scheduler,
+            Escape(scheduler),
             via);
 
         logger.Log(succeeded ? LogLevel.Information : LogLevel.Warning,
             "Audit: {User} {AuditAction} {JobGroup}.{JobName} in {Scheduler}{AuditVia}: {AuditOutcome} ({StatusCode}){AuditError} {AuditChanges}",
-            auditEvent.User, auditEvent.Action, group, name, scheduler, via is null ? "" : $" via {via}", succeeded ? "succeeded" : "refused",
-            status, auditEvent.Error is { } error ? $" {error}" : "", changes.Count > 0 ? JsonSerializer.Serialize(changes) : "");
+            auditEvent.User, auditEvent.Action, auditEvent.JobGroup, auditEvent.JobName, auditEvent.Scheduler, via is null ? "" : $" via {via}",
+            succeeded ? "succeeded" : "refused", status, auditEvent.Error is { } error ? $" {error}" : "",
+            changes.Count > 0 ? JsonSerializer.Serialize(changes) : "");
 
         foreach (var sink in http.RequestServices.GetServices<ICronlightAuditSink>())
         {
@@ -144,10 +150,30 @@ internal static class Audit
             catch (Exception ex)
             {
                 logger.LogError(ex, "Audit sink {Sink} failed for {AuditAction} {JobGroup}.{JobName}",
-                    sink.GetType().Name, auditEvent.Action, group, name);
+                    sink.GetType().Name, auditEvent.Action, auditEvent.JobGroup, auditEvent.JobName);
             }
         }
     }
+
+    /// <summary>
+    /// The text with control characters escaped, a line break as \n, so what a request names (a scheduler or a job that
+    /// does not exist, and the errors that quote them) cannot start a line of its own in a log of plain text.
+    /// </summary>
+    [return: NotNullIfNotNull(nameof(text))]
+    private static string? Escape(string? text) =>
+        text == null || !text.Any(Unsafe) ? text
+        : string.Concat(text.Select(c => c switch
+        {
+            '\n' => @"\n",
+            '\r' => @"\r",
+            '\t' => @"\t",
+            _ when Unsafe(c) => $@"\u{(int)c:x4}",
+            _ => c.ToString(),
+        }));
+
+    // Unicode's line and paragraph separators end lines in some log viewers too
+    private static bool Unsafe(char c) =>
+        char.IsControl(c) || char.GetUnicodeCategory(c) is UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
 
     private static (string Group, string Name) Target(EndpointFilterInvocationContext context)
     {

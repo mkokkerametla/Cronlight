@@ -3,6 +3,7 @@ import { Fragment, type ReactNode } from 'react'
 import logo from '@/assets/logo.svg'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,7 +27,7 @@ import type { SchedulerInfo } from '@/types'
 type Tone = 'running' | 'idle' | 'warning'
 
 const toneDot: Record<Tone, string> = {
-  running: 'bg-emerald-400',
+  running: 'bg-emerald-500 dark:bg-emerald-400',
   idle: 'bg-muted-foreground',
   warning: 'bg-amber-500',
 }
@@ -50,12 +51,18 @@ function schedulerState(scheduler: SchedulerInfo): { label: string; tone: Tone }
 
 export function Header({
   scheduler,
+  known,
   onSchedulerChange,
   layout,
   onLayoutChange,
   nav,
 }: {
   scheduler: SchedulerInfo | null
+  /**
+   * What is known before the scheduler answers: the name of the one asked for, and the schedulers the last one listed.
+   * The title and the switch keep their place with them while it loads.
+   */
+  known?: { name?: string; schedulers: string[] }
   /** Shows another scheduler; offered when the app serves more than one */
   onSchedulerChange?: (name: string) => void
   /** The page's width and row density, offered in a menu when given */
@@ -65,37 +72,48 @@ export function Header({
   nav?: ReactNode
 }) {
   const state = scheduler && schedulerState(scheduler)
+  const name = scheduler?.schedulerName ?? known?.name
+  const schedulers = scheduler?.schedulers ?? known?.schedulers ?? []
 
   return (
     <header className="flex flex-wrap items-center gap-3">
       <div className="flex min-w-0 items-center gap-2.5">
         <img src={logo} alt="Cronlight" className="size-9 shrink-0" />
-        <div className="min-w-0">
-          <h1 className="truncate text-xl leading-tight font-semibold tracking-tight">
-            {scheduler?.schedulerName ?? 'Quartz'}
-          </h1>
-          <p className="text-xs text-muted-foreground">Cronlight · Quartz.NET</p>
-        </div>
+        <h1 className="truncate text-xl leading-tight font-semibold tracking-tight">
+          {/* No stand-in name while the first answer is on its way: it would be wrong for every app */}
+          {name ?? (
+            <>
+              <span className="sr-only">Loading the scheduler</span>
+              <Skeleton aria-hidden className="h-6 w-36" />
+            </>
+          )}
+        </h1>
+        {/* The title names the scheduler, so the switch beside it shows only its arrow; screen readers still hear
+            which scheduler it is on */}
+        {name && schedulers.length > 1 && onSchedulerChange && (
+          <Select value={name} onValueChange={onSchedulerChange}>
+            <SelectTrigger size="sm" className="px-1.5" aria-label="Scheduler">
+              {/* Radix leaves the value's own className out */}
+              <span className="sr-only">
+                <SelectValue />
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              {schedulers.map(name => (
+                <SelectItem key={name} value={name}>
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
-      {scheduler && scheduler.schedulers.length > 1 && onSchedulerChange && (
-        <Select value={scheduler.schedulerName} onValueChange={onSchedulerChange}>
-          <SelectTrigger size="sm" className="max-w-56" aria-label="Scheduler">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {scheduler.schedulers.map(name => (
-              <SelectItem key={name} value={name}>
-                {name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
       {nav}
 
       <div className="ml-auto flex items-center gap-2">
         {state && (
-          <Badge variant={state.tone === 'running' ? 'default' : 'secondary'} className="gap-1.5">
+          // A status, so it keeps out of the blue that marks what can be clicked
+          <Badge variant={state.tone === 'running' ? 'outline' : 'secondary'} className="gap-1.5">
             <span className={`size-1.5 rounded-full ${toneDot[state.tone]}`} />
             {state.label}
           </Badge>

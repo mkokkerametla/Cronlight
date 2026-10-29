@@ -32,7 +32,6 @@ import {
   recordTime,
   shortType,
   startedLate,
-  statsPeriods,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { ExecutionRecord, ExecutionStatus, HistoryFilter, JobType } from '@/types'
@@ -93,12 +92,7 @@ export function HistoryTable({
   const columns = 4 + (showNode ? 1 : 0) + (canManage && onRetry ? 1 : 0)
 
   return (
-    // New runs wait while the pointer is over the list, so a click lands on the run aimed at
-    <div
-      className="space-y-3"
-      onPointerEnter={() => holdNewRuns(true)}
-      onPointerLeave={() => holdNewRuns(false)}
-    >
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <Select
           value={filter.status}
@@ -118,18 +112,6 @@ export function HistoryTable({
             <SelectItem value="Misfired">Misfired</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={String(hours)} onValueChange={v => setHours(Number(v))}>
-          <SelectTrigger className="w-40" aria-label="Period of the figures">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {statsPeriods.map(p => (
-              <SelectItem key={p.hours} value={String(p.hours)}>
-                {p.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         {filter.job && (
           <Badge variant="secondary" className="gap-1 py-1">
             {filter.job.group}.{filter.job.name}
@@ -143,18 +125,17 @@ export function HistoryTable({
             </button>
           </Badge>
         )}
-        {newRuns > 0 ? (
-          <Button variant="secondary" size="sm" className="ml-auto" onClick={showNewRuns}>
-            <ArrowUp /> Show {newRuns} new {newRuns === 1 ? 'run' : 'runs'}
-          </Button>
-        ) : (
-          <span className="ml-auto text-sm text-muted-foreground">
-            Newest first · refreshes {everySeconds(refreshMs / 1000)}
-          </span>
-        )}
+        <span className="ml-auto text-sm text-muted-foreground">
+          Newest first · refreshes {everySeconds(refreshMs / 1000)}
+        </span>
       </div>
 
-      <RunStatsRow job={filter.job} hours={hours} filtered={filter.status !== 'all'} />
+      <RunStatsRow
+        job={filter.job}
+        hours={hours}
+        onHoursChange={setHours}
+        filtered={filter.status !== 'all'}
+      />
 
       {error && (
         <Alert variant="destructive">
@@ -162,7 +143,22 @@ export function HistoryTable({
         </Alert>
       )}
 
-      <div className="rounded-lg border">
+      {/* New runs wait while the pointer is over the list, so a click lands on the run aimed at. Only the list: the
+          filters above it never move, and a filter just chosen leaves the pointer over the list without entering it */}
+      <div
+        className="overflow-hidden rounded-lg border"
+        onPointerEnter={() => holdNewRuns(true)}
+        onPointerLeave={() => holdNewRuns(false)}
+      >
+        {newRuns > 0 && (
+          <button
+            type="button"
+            onClick={showNewRuns}
+            className="flex w-full items-center justify-center gap-1.5 border-b bg-muted/50 py-1.5 text-sm font-medium text-link hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+          >
+            <ArrowUp className="size-4" /> Show {newRuns} new {newRuns === 1 ? 'run' : 'runs'}
+          </button>
+        )}
         {!loaded ? (
           <div className="space-y-2 p-3">
             {Array.from({ length: 5 }, (_, i) => (

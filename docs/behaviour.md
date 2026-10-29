@@ -16,6 +16,8 @@ importing, security headers and cross-site requests.
   parameters are checked on the data the job ends up with. The dashboard's edit form sends only the fields, values
   and triggers changed in it, so a value the job saved meanwhile (with `[PersistJobDataAfterExecution]`) or a change
   someone else made is not undone; **Run with different data** compares with the values as the form opened too.
+  Values the app saved as numbers or dates read the same on every server: `1.5` whatever the server's culture, and
+  dates in ISO 8601 (`2026-10-29T16:30:15.0000000Z`). An edited value keeps its type when the new text converts to it.
 - **Jobs in Error.** When Quartz cannot create a job to run it (its constructor or the job factory throws), it sets
   every trigger of the job to Error and does not run it again by itself. The job list shows such jobs as **Error**,
   with a card counting them and a status filter (`status=Error` in `api/jobs/search`, `counts.error` in its answer),
@@ -70,7 +72,8 @@ importing, security headers and cross-site requests.
 - **Errors** are ProblemDetails (`application/problem+json`): `detail` says what is wrong ("Job DEFAULT.nightly does
   not exist.") and `title` names the kind of error ("Not found."). A server error also has a `traceId` to find it in
   the app's log, and never a stack trace. A job of another app sharing the scheduler is refused as "Job is read-only
-  in this dashboard.", saying what cannot be done to it.
+  in this dashboard.", saying what cannot be done to it. A database failure while reading a job is a server error
+  instead.
 - **Security headers** are sent on every dashboard response: a Content-Security-Policy that allows only
   the dashboard's own files and API and no embedding in other sites (`frame-ancestors 'none'`, plus
   `X-Frame-Options: DENY`), `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. To

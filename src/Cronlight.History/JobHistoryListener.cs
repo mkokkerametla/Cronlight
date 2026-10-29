@@ -173,7 +173,8 @@ internal sealed class JobHistoryListener(
         if (data.Count == 0)
             return null;
         var secretKeys = DashboardApi.SecretKeys(context.JobDetail.JobType);
-        return data.ToDictionary(kv => kv.Key, kv => DashboardApi.Display(kv.Key, kv.Value?.ToString(), secretKeys, cronlight.Value) ?? "");
+        return data.ToDictionary(kv => kv.Key, kv => DashboardApi.Display(kv.Key, DashboardApi.DataText(kv.Value), secretKeys, cronlight.Value,
+            context.Scheduler.SchedulerName) ?? "");
     }
 
     private JobExecutionRecord Record(IJobExecutionContext context, JobExecutionStatus status) => new()

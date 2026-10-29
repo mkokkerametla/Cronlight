@@ -14,7 +14,9 @@ test('a job from another app sharing the scheduler is shown read-only', async ({
     const foreign = jobRow(page, 'report')
 
     await expect(foreign).toContainText('Unloadable')
-    await expect(foreign.getByRole('button')).toHaveCount(0)
+    // Its name alone, which opens its details
+    await expect(foreign.getByRole('button')).toHaveCount(1)
+    await expect(foreign.getByRole('button')).toHaveAccessibleName('report')
     await expect(foreign.getByRole('checkbox')).toBeDisabled()
     await expect(statCard(page, 'Unloadable')).not.toHaveText(/^0/)
 

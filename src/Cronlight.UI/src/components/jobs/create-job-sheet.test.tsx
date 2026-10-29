@@ -220,4 +220,27 @@ describe('CreateJobSheet', () => {
 
     expect(within(sheet()).getByLabelText('Name')).toHaveValue('')
   })
+
+  it('asks before Escape closes a form with something entered, and starts empty once discarded', async () => {
+    render(<Harness onCreate={vi.fn()} />)
+    await userEvent.type(within(sheet()).getByLabelText('Name'), 'half-typed')
+
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(within(sheet()).getByLabelText('Name')).toHaveValue('half-typed')
+
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+    expect(within(sheet()).getByLabelText('Name')).toHaveValue('')
+  })
+
+  it('closes at once when nothing was entered', async () => {
+    render(<Harness onCreate={vi.fn()} />)
+
+    await userEvent.keyboard('{Escape}')
+
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
 })

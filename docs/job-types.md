@@ -52,8 +52,16 @@ Azure Key Vault through its configuration provider (a vault secret named `JobSec
   configuration.
 - The value replaces the reference in the run's `context.MergedJobDataMap`, which is where jobs should
   read it. The stored job keeps the reference. `context.JobDetail.JobDataMap` holds the reference too.
-- Every app that runs these jobs (each cluster node) needs `AddCronlight` with the same `SecretsSection`
-  and the secrets in its configuration.
-- Every secret in the section is open to everyone who can manage jobs, in any scheduler: a manager of one
-  scheduler can reference a secret meant for another. Keep in the section only the secrets job authors may use,
-  and keep a scheduler's secrets in the app that runs it when its managers must not reach the others'.
+- Every app that runs these jobs (each cluster node) needs `AddCronlight` with the same sections and the secrets in
+  its configuration.
+- Every secret in the section is open to everyone who can manage jobs, in any scheduler. When the managers of one
+  scheduler must not reach another's secrets, give that scheduler a section of its own:
+
+  ```csharp
+  o.Schedulers["Billing"].SecretsSection = "BillingSecrets"; // or "Cronlight:Schedulers:Billing:SecretsSection"
+  ```
+
+  Billing's jobs then read only `BillingSecrets`, when they are saved and when they run, and the other schedulers'
+  jobs cannot reach it. Keep each scheduler's section outside `SecretsSection`: a section inside it is open to every
+  scheduler that reads `SecretsSection`. A scheduler with a section of its own has references even when
+  `SecretsSection` is not set.

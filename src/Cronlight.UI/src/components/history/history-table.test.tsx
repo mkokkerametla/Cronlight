@@ -253,7 +253,8 @@ describe('HistoryTable', () => {
       Object.fromEntries(new URLSearchParams(calls('history/stats')[n].split('?')[1]))
     expect(stats(0)).toEqual({ hours: '24', group: 'billing', name: 'invoices' })
 
-    await userEvent.click(screen.getByRole('combobox', { name: 'Period of the figures' }))
+    // The period sits with the figures, apart from the list's filters, as it changes only the figures
+    await userEvent.click(figures.getByRole('combobox', { name: 'Period of the figures' }))
     await userEvent.click(await screen.findByRole('option', { name: 'Last 7 days' }))
     expect(stats(calls('history/stats').length - 1)).toMatchObject({ hours: '168' })
 
@@ -529,6 +530,22 @@ describe('HistoryTable', () => {
 
       expect(screen.getByText('newer')).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /new run/ })).toBeNull()
+    })
+
+    it('lets new runs in while the pointer is on the filters, which nothing moves under', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      pages.all = { records: [execution(1, { jobName: 'older' })], nextBefore: null }
+      render(<Harness initial={all} />)
+      await screen.findByText('older')
+      await user.hover(screen.getByRole('combobox', { name: 'Filter by outcome' }))
+      pages.all = {
+        records: [execution(2, { jobName: 'newer' }), execution(1, { jobName: 'older' })],
+        nextBefore: null,
+      }
+      await act(() => vi.advanceTimersByTimeAsync(10_000))
+
+      expect(screen.getByText('newer')).toBeInTheDocument()
     })
 
     it('shows the new runs once the pointer leaves', async () => {

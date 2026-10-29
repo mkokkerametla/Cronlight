@@ -51,7 +51,7 @@ function renderTable(overrides: Partial<Parameters<typeof JobsTable>[0]> = {}) {
 }
 
 const row = (name: string) =>
-  screen.getByText(name, { selector: 'div' }).closest('tr') as HTMLElement
+  screen.getByText(name, { selector: 'button' }).closest('tr') as HTMLElement
 const names = () =>
   screen
     .queryAllByRole('row')
@@ -71,6 +71,16 @@ describe('JobsTable', () => {
       'title',
       'Type not found'
     )
+  })
+
+  it('opens a job from its name by keyboard, for viewers who have no row actions', async () => {
+    const { onSelect } = renderTable({ canManage: false })
+
+    screen.getByRole('button', { name: 'cleanup' }).focus()
+    await userEvent.keyboard('{Enter}')
+
+    expect(onSelect).toHaveBeenCalledOnce()
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ name: 'cleanup' }))
   })
 
   it('stops moving through the jobs with Esc, so Enter opens nothing', async () => {

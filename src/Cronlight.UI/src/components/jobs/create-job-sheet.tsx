@@ -18,6 +18,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { useDirtyReport, useDiscardGuard } from '@/components/discard-changes'
 import { DataEditor } from '@/components/jobs/data-editor'
 import { RetryEditor } from '@/components/jobs/retry-editor'
 import { TriggersEditor } from '@/components/jobs/triggers-editor'
@@ -46,9 +47,11 @@ export function CreateJobSheet({
   secretReferences,
   onCreate,
 }: Props) {
+  const guard = useDiscardGuard(() => onOpenChange(false), 'The job is not created.')
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={guard.onOpenChange}>
       <SheetContent className="w-full gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl">
+        {guard.dialog}
         <SheetHeader className="border-b">
           <SheetTitle>New job</SheetTitle>
           <SheetDescription>
@@ -61,6 +64,7 @@ export function CreateJobSheet({
             jobTypes={jobTypes}
             secretReferences={secretReferences}
             onCreate={onCreate}
+            onDirtyChange={guard.setDirty}
             onDone={() => onOpenChange(false)}
           />
         )}
@@ -73,8 +77,13 @@ function CreateJobForm({
   jobTypes,
   secretReferences,
   onCreate,
+  onDirtyChange,
   onDone,
-}: Omit<Props, 'open' | 'onOpenChange'> & { onDone: () => void }) {
+}: Omit<Props, 'open' | 'onOpenChange'> & {
+  /** Told whether anything was entered, so closing can ask first */
+  onDirtyChange: (dirty: boolean) => void
+  onDone: () => void
+}) {
   const [typeName, setTypeName] = useState(jobTypes[0]?.typeName ?? '')
   const [name, setName] = useState('')
   const [group, setGroup] = useState('')
@@ -85,6 +94,19 @@ function CreateJobForm({
   const [submitting, setSubmitting] = useState(false)
   const [cronInvalid, setCronInvalid] = useState(false)
   const jobType = jobTypes.find(t => t.typeName === typeName)
+
+  // The form as entered, against the form as it opened
+  const entered = JSON.stringify([
+    typeName,
+    name,
+    group,
+    description,
+    rowsToData(data),
+    draftsToRequest(triggers),
+    draftToRetry(retry),
+  ])
+  const [opened] = useState(entered)
+  useDirtyReport(entered !== opened, onDirtyChange)
 
   const changeType = (value: string) => {
     const type = jobTypes.find(t => t.typeName === value)

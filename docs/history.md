@@ -90,10 +90,12 @@ builder.Services.AddCronlightHistory(o =>
     dashboard counts them again every 30 seconds (or every `RefreshSeconds`, if longer), not on every refresh.
   - `GET api/history/stats` answers with them, for `hours` (24 by default) or `from` and `to`, at most 90 days,
     and optionally `group` and `name`, and `status`.
-- **Recent runs in the job list.** A column of each job's last 5 runs, oldest on the left: a check for a success, a
-  cross for a failure (orange while its retry waits), and icons of their own for cancelled, blocked and missed runs, with
-  a dot for one going on. Empty slots stand for runs a job has not had yet. A run counts by its final outcome,
-  so attempts that were retried are not runs of their own, and a run that needed retries has a small orange mark.
+- **Recent runs in the job list.** A strip of each job's last 10 runs, oldest on the left, one bar a run, coloured by
+  its outcome as in the job's duration chart. A successful or cancelled run is as tall as it took, against the longest
+  shown; failures, waiting retries (orange) and runs that did not run reach the top whatever they took, so a problem
+  stands out by its height as well as its colour. Missed and blocked runs are hollow, and a run going on is blue.
+  Short ticks stand for runs a job has not had yet. A run counts by its final outcome, so attempts that were retried
+  are not runs of their own, and a run that needed retries has an orange cap.
   Hover for its outcome, start and duration; click the row for the job's page. It refreshes with the list, and is left
   out on narrow screens.
   - `GET api/jobs/search` answers each job's runs as `recentRuns` (`id`, `status`, `firedTimeUtc`, `durationMs`,

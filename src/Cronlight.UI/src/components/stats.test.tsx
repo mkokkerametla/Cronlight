@@ -59,6 +59,13 @@ describe('Stats', () => {
     expect(onSelect).toHaveBeenCalledWith('Error')
   })
 
+  it("shows other apps' jobs only when there are some, as it does jobs Quartz stopped", () => {
+    renderStats({ unloadable: 0 })
+
+    expect(screen.queryByRole('button', { name: /Unloadable/ })).toBeNull()
+    expect(screen.getAllByRole('button')).toHaveLength(4)
+  })
+
   it('leaves out failed runs when history is off', () => {
     renderStats({ failed: null })
 
@@ -74,10 +81,9 @@ describe('Stats', () => {
     expect(count('Unloadable')).toHaveClass('text-destructive')
     cleanup()
 
-    renderStats({ failed: 0, paused: 0, unloadable: 0 })
+    renderStats({ failed: 0, paused: 0 })
 
     expect(count('Failed')).not.toHaveClass('text-destructive')
     expect(count('Paused')).not.toHaveClass('text-amber-600')
-    expect(count('Unloadable')).not.toHaveClass('text-destructive')
   })
 })

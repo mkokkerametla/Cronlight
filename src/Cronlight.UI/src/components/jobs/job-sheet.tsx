@@ -38,6 +38,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { useDirtyReport, useDiscardGuard } from '@/components/discard-changes'
 import { JobRunStats } from '@/components/history/run-stats'
 import { DataEditor } from '@/components/jobs/data-editor'
 import {
@@ -101,18 +102,20 @@ export function JobSheet({
 }: Props) {
   // Editing the job, or choosing the data for one run
   const [mode, setMode] = useState<'view' | 'edit' | 'run'>('view')
+  const guard = useDiscardGuard(
+    () => {
+      setMode('view')
+      onClose()
+    },
+    mode === 'run'
+      ? 'The data you changed is not used, and the job does not run.'
+      : 'Your changes to this job are not saved.'
+  )
 
   return (
-    <Sheet
-      open={job !== null}
-      onOpenChange={open => {
-        if (!open) {
-          setMode('view')
-          onClose()
-        }
-      }}
-    >
+    <Sheet open={job !== null} onOpenChange={guard.onOpenChange}>
       <SheetContent className="w-full gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-xl">
+        {guard.dialog}
         {job && (
           <>
             <SheetHeader className="border-b">
@@ -140,6 +143,7 @@ export function JobSheet({
                 job={job}
                 secretReferences={secretReferences}
                 jobType={jobType}
+                onDirtyChange={guard.setDirty}
                 onCancel={() => setMode('view')}
                 onSave={async request => {
                   if (await actions.update(job, request)) setMode('view')
@@ -151,6 +155,7 @@ export function JobSheet({
                 job={job}
                 jobType={jobType}
                 secretReferences={secretReferences}
+                onDirtyChange={guard.setDirty}
                 onCancel={() => setMode('view')}
                 onRun={async data => {
                   if (await actions.runWithData(job, data)) setMode('view')
@@ -299,14 +304,14 @@ function JobDetails({
         </Field>
         <Field label="Durable">{job.durable ? 'Yes' : 'No'}</Field>
         {job.loadable && (
-          <div className="col-span-2">
-            <Field label="Retries">{describeRetry(job.retry)}</Field>
-          </div>
+          <Field label="Retries" className="col-span-2">
+            {describeRetry(job.retry)}
+          </Field>
         )}
         {job.description && (
-          <div className="col-span-2">
-            <Field label="Description">{job.description}</Field>
-          </div>
+          <Field label="Description" className="col-span-2">
+            {job.description}
+          </Field>
         )}
       </dl>
 
@@ -408,12 +413,15 @@ function EditJobForm({
   job,
   jobType,
   secretReferences,
+  onDirtyChange,
   onSave,
   onCancel,
 }: {
   job: Job
   jobType: JobType | undefined
   secretReferences: boolean
+  /** Told whether saving would change anything, so closing can ask first */
+  onDirtyChange: (dirty: boolean) => void
   onSave: (request: UpdateJobRequest) => Promise<void>
   onCancel: () => void
 }) {
@@ -435,20 +443,23 @@ function EditJobForm({
   // Waiting retries, and kinds the editor does not handle, are kept as they are
   const otherTriggers = job.triggers.filter(t => !isEditable(t)).length
 
+  // What saving sends: only what differs from the job as the form opened
+  const request: UpdateJobRequest = {}
+  if (description !== opened.description) request.description = description
+  const changes = dataChanges(data, opened.data, opened.saved)
+  if (Object.keys(changes).length > 0) request.data = changes
+  const triggerRequest = draftsToRequest(triggers)
+  if (JSON.stringify(triggerRequest) !== opened.triggers) {
+    request.triggers = triggerRequest
+    // Every kind the editor shows, so a trigger removed here is removed from the job
+    request.triggerKinds = editableKinds
+  }
+  const retryPolicy = draftToRetry(retry)
+  if (JSON.stringify(retryPolicy) !== opened.retry) request.retry = retryPolicy
+  useDirtyReport(Object.keys(request).length > 0, onDirtyChange)
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    const request: UpdateJobRequest = {}
-    if (description !== opened.description) request.description = description
-    const changes = dataChanges(data, opened.data, opened.saved)
-    if (Object.keys(changes).length > 0) request.data = changes
-    const triggerRequest = draftsToRequest(triggers)
-    if (JSON.stringify(triggerRequest) !== opened.triggers) {
-      request.triggers = triggerRequest
-      // Every kind the editor shows, so a trigger removed here is removed from the job
-      request.triggerKinds = editableKinds
-    }
-    const retryPolicy = draftToRetry(retry)
-    if (JSON.stringify(retryPolicy) !== opened.retry) request.retry = retryPolicy
     setSaving(true)
     await onSave(request)
     setSaving(false)
@@ -512,12 +523,15 @@ function RunWithDataForm({
   job,
   jobType,
   secretReferences,
+  onDirtyChange,
   onRun,
   onCancel,
 }: {
   job: Job
   jobType: JobType | undefined
   secretReferences: boolean
+  /** Told whether any data was changed, so closing can ask first */
+  onDirtyChange: (dirty: boolean) => void
   onRun: (data: Record<string, string>) => Promise<void>
   onCancel: () => void
 }) {
@@ -526,6 +540,7 @@ function RunWithDataForm({
   const [data, setData] = useState(() => dataRows(jobType, saved))
   const [running, setRunning] = useState(false)
   const changed = Object.keys(changedData(data, saved)).length
+  useDirtyReport(changed > 0, onDirtyChange)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -635,9 +650,18 @@ function RecentRuns({
 const kindLabels: Record<string, string> = { Once: 'One time', RunNow: 'Run now (waiting)' }
 const kindLabel = (kind: string) => kindLabels[kind] ?? kind
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+/** A term and its value: a div straight inside a dl, as definition lists allow, so it can span the grid itself */
+function Field({
+  label,
+  className,
+  children,
+}: {
+  label: string
+  className?: string
+  children: ReactNode
+}) {
   return (
-    <div className="min-w-0 space-y-0.5">
+    <div className={cn('min-w-0 space-y-0.5', className)}>
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="truncate">{children}</dd>
     </div>

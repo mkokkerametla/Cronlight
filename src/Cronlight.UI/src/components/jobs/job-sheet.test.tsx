@@ -519,6 +519,46 @@ describe('JobSheet', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('asks before Escape closes unsaved edits, and keeps them when told to', async () => {
+    const { onClose } = renderSheet(job({ description: 'old' }))
+    await userEvent.click(sheet().getByRole('button', { name: /Edit/ }))
+    await userEvent.type(sheet().getByLabelText('Description'), ' and new')
+
+    await userEvent.keyboard('{Escape}')
+    const confirm = within(screen.getByRole('alertdialog', { name: 'Discard unsaved changes?' }))
+    await userEvent.click(confirm.getByRole('button', { name: 'Keep editing' }))
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(sheet().getByLabelText('Description')).toHaveValue('old and new')
+  })
+
+  it('closes without saving once told to discard the edits', async () => {
+    const { actions, onClose } = renderSheet(job({ description: 'old' }))
+    await userEvent.click(sheet().getByRole('button', { name: /Edit/ }))
+    await userEvent.type(sheet().getByLabelText('Description'), ' and new')
+
+    await userEvent.click(sheet().getByRole('button', { name: 'Close' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }))
+
+    expect(onClose).toHaveBeenCalled()
+    expect(actions.update).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('asks before Escape closes a run whose data was changed', async () => {
+    const { onClose } = renderSheet(job({ data: { region: 'eu' } }))
+    await userEvent.click(sheet().getByRole('button', { name: /Run with different data/ }))
+    await userEvent.clear(sheet().getByLabelText('Value for region'))
+    await userEvent.type(sheet().getByLabelText('Value for region'), 'us')
+
+    await userEvent.keyboard('{Escape}')
+
+    expect(
+      screen.getByRole('alertdialog', { name: 'Discard unsaved changes?' })
+    ).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('shows the last five runs of this job, with errors, and links to the full history', async () => {
     history = {
       records: [

@@ -29,10 +29,11 @@ describe('Header', () => {
     document.documentElement.className = ''
   })
 
-  it('shows a placeholder name and no state until the scheduler answers', () => {
+  it('names no scheduler and shows no state until the scheduler answers, rather than a stand-in', () => {
     renderHeader(null)
 
-    expect(screen.getByRole('heading', { name: 'Quartz' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Loading the scheduler' })).toBeInTheDocument()
+    expect(screen.queryByText('Quartz')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Scheduler details' })).toBeNull()
   })
 
@@ -48,8 +49,8 @@ describe('Header', () => {
   })
 
   it.each([
-    [[node('a'), node('b')], 'Running · 2 nodes', 'default', 'bg-emerald-400'],
-    [[node('a'), node('b', { alive: false })], 'Running · 1 node', 'default', 'bg-emerald-400'],
+    [[node('a'), node('b')], 'Running · 2 nodes', 'outline', 'bg-emerald-500'],
+    [[node('a'), node('b', { alive: false })], 'Running · 1 node', 'outline', 'bg-emerald-500'],
     [[node('a', { alive: false })], 'No nodes running', 'secondary', 'bg-amber-500'],
   ])(
     'describes a cluster by its running nodes, whatever this process does: %#',
@@ -91,6 +92,23 @@ describe('Header', () => {
     await userEvent.click(screen.getByRole('option', { name: 'Reports' }))
 
     expect(onSchedulerChange).toHaveBeenCalledWith('Reports')
+  })
+
+  it('names the scheduler once, in the title, with the switch beside it', () => {
+    renderHeader(scheduler({ schedulers: ['SampleHost', 'Reports'] }), vi.fn())
+
+    expect(screen.getByRole('heading', { name: 'SampleHost' })).toBeInTheDocument()
+    // The switch says which scheduler it is on to screen readers only
+    const shown = screen.getAllByText('SampleHost').filter(e => !e.closest('.sr-only'))
+    expect(shown).toHaveLength(1)
+    expect(screen.getByRole('combobox', { name: 'Scheduler' })).toHaveTextContent('SampleHost')
+    expect(screen.queryByText(/Cronlight ·/)).toBeNull()
+  })
+
+  it('shows the state as a status, apart from the blue of actions', () => {
+    renderHeader(scheduler())
+
+    expect(screen.getByText('Running')).toHaveAttribute('data-variant', 'outline')
   })
 
   it('shows no scheduler picker for a single scheduler', () => {

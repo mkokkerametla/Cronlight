@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
 using Quartz;
 
 namespace Cronlight.Tests;
@@ -109,6 +110,63 @@ public class ApiTests
                 problem.GetProperty("detail").GetString());
         }
         Assert.Equal(1, await host.CountJobRows("other", "report"));
+    }
+
+    [Fact]
+    public async Task A_job_whose_data_holds_another_apps_types_is_read_only_without_its_data_in_the_reason()
+    {
+        // Job data kept as objects, as another app sharing the scheduler may keep its own types
+        await using var host = await TestHost.Start(useProperties: false);
+        var key = new JobKey("settings");
+        await (await host.Scheduler()).AddJob(JobBuilder.Create<PlainJob>().WithIdentity(key).StoreDurably()
+            .SetJobData(new JobDataMap { ["apiToken"] = "hunter2-token", ["region"] = new RegionSettings() }).Build(), replace: false);
+        var where = $"WHERE SCHED_NAME = '{host.SchedulerName}' AND JOB_NAME = 'settings'";
+        var json = System.Text.Encoding.UTF8.GetString((byte[])(await host.Database.Scalar($"SELECT JOB_DATA FROM QRTZ_JOB_DETAILS {where}"))!);
+        // Stored with its type's name, which this app then does not have
+        var foreign = json.Replace($"{typeof(RegionSettings).FullName}, {typeof(RegionSettings).Assembly.GetName().Name}", "OtherApp.Region, OtherApp");
+        Assert.NotEqual(json, foreign);
+        await host.Database.Execute($"UPDATE QRTZ_JOB_DETAILS SET JOB_DATA = X'{Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(foreign))}' {where}");
+        var client = host.Client();
+
+        var job = await client.GetAsync("api/jobs/DEFAULT/settings");
+        var shown = await job.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(shown.GetProperty("loadable").GetBoolean());
+        Assert.Equal("Could not read its job data", shown.GetProperty("loadError").GetString());
+        var pause = await client.PostAsync("api/jobs/DEFAULT/settings/pause", null);
+        Assert.Equal(HttpStatusCode.Conflict, pause.StatusCode);
+        // What Quartz says quotes the data, secrets and all
+        Assert.DoesNotContain("hunter2", await job.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("hunter2", await pause.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task A_database_failure_reading_a_job_is_a_server_error_not_a_job_of_another_app()
+    {
+        await using var host = await TestHost.Start();
+        var client = host.Client();
+        Assert.Equal(HttpStatusCode.Created, (await client.PostJson("api/jobs", new { type = typeof(PlainJob).FullName, name = "nightly" })).StatusCode);
+        // The job's row can be counted but not read: its description fails in the database, as a dropped connection or a
+        // timeout would
+        await host.Database.Execute("ALTER TABLE QRTZ_JOB_DETAILS RENAME TO QRTZ_JOB_DETAILS_SAVED");
+        await host.Database.Execute(
+            "CREATE VIEW QRTZ_JOB_DETAILS AS SELECT SCHED_NAME, JOB_NAME, JOB_GROUP, abs(-9223372036854775808) AS DESCRIPTION, JOB_CLASS_NAME, " +
+            "IS_DURABLE, IS_NONCONCURRENT, IS_UPDATE_DATA, REQUESTS_RECOVERY, JOB_DATA FROM QRTZ_JOB_DETAILS_SAVED");
+        try
+        {
+            Assert.True(await (await host.Scheduler()).CheckExists(new JobKey("nightly")));
+            foreach (var response in new[] { await client.GetAsync("api/jobs/DEFAULT/nightly"), await client.PostAsync("api/jobs/DEFAULT/nightly/pause", null) })
+            {
+                Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+                var body = await response.Content.ReadAsStringAsync();
+                Assert.Contains("The job store failed", body);
+                Assert.DoesNotContain("SQLite", body);
+            }
+        }
+        finally
+        {
+            await host.Database.Execute("DROP VIEW QRTZ_JOB_DETAILS");
+            await host.Database.Execute("ALTER TABLE QRTZ_JOB_DETAILS_SAVED RENAME TO QRTZ_JOB_DETAILS");
+        }
     }
 
     [Fact]
@@ -361,6 +419,44 @@ public class ApiTests
         Assert.Equal("eu, us", after["tags"]);
     }
 
+    [Fact]
+    public async Task Typed_job_data_is_shown_and_read_the_same_in_any_culture()
+    {
+        // An app whose requests run in German, where 1.5 is written "1,5" and "1.5" reads as 15
+        await using var host = await TestHost.Start(ramJobStore: true, map: app => app.UseRequestLocalization("de-DE"));
+        var client = host.Client();
+        var scheduler = await host.Scheduler();
+        var key = new JobKey("typed");
+        await scheduler.AddJob(JobBuilder.Create<PlainJob>().WithIdentity(key).StoreDurably()
+            .SetJobData(new JobDataMap
+            {
+                ["rate"] = 1.5, ["amount"] = 1234.5m,
+                ["due"] = new DateTime(2026, 10, 29, 16, 30, 15, 123, DateTimeKind.Utc),
+                ["at"] = new DateTimeOffset(2026, 10, 29, 16, 30, 15, TimeSpan.FromHours(2)),
+            })
+            .Build(), replace: false);
+
+        // Numbers in the invariant culture, and dates in ISO 8601 with their kind or offset
+        var shown = (await client.GetFromJsonAsync<JsonElement>("api/jobs/DEFAULT/typed")).GetProperty("data");
+        Assert.Equal("1.5", shown.GetProperty("rate").GetString());
+        Assert.Equal("1234.5", shown.GetProperty("amount").GetString());
+        Assert.Equal("2026-10-29T16:30:15.1230000Z", shown.GetProperty("due").GetString());
+        Assert.Equal("2026-10-29T16:30:15.0000000+02:00", shown.GetProperty("at").GetString());
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.PutJson("api/jobs/DEFAULT/typed", new
+        {
+            data = new { rate = "2.5", amount = "99.95", due = "2026-11-01T08:00:00.0000000Z", at = "2026-11-01T08:00:00.0000000+01:00" }
+        })).StatusCode);
+
+        var data = (await scheduler.GetJobDetail(key))!.JobDataMap;
+        Assert.Equal(2.5, data["rate"]);
+        Assert.Equal(99.95m, data["amount"]);
+        var due = Assert.IsType<DateTime>(data["due"]);
+        Assert.Equal((new DateTime(2026, 11, 1, 8, 0, 0), DateTimeKind.Utc), (due, due.Kind));
+        var at = Assert.IsType<DateTimeOffset>(data["at"]);
+        Assert.Equal((new DateTime(2026, 11, 1, 8, 0, 0), TimeSpan.FromHours(1)), (at.DateTime, at.Offset));
+    }
+
     // The database stores' serializer keeps an enum as its number; Quartz's in-memory store keeps the value itself
     [Fact]
     public async Task Editing_keeps_an_enum_value_an_enum_where_the_store_keeps_it()
@@ -597,6 +693,12 @@ public class ApiTests
 
         var invalid = await client.GetFromJsonAsync<JsonElement>("api/cron/preview?expression=nope");
         Assert.False(invalid.GetProperty("isValid").GetBoolean());
+    }
+
+    /// <summary>A value of a type of the app's own in job data.</summary>
+    public sealed class RegionSettings
+    {
+        public string Code { get; set; } = "DE";
     }
 }
 
