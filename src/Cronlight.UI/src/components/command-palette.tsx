@@ -26,21 +26,33 @@ const JOBS_SHOWN = 5
  * keyboard. Jobs are searched on the server, as the job list's search box does.
  */
 export function CommandPalette({
+  open,
+  onOpenChange,
   commands,
   canManage,
   onOpenJob,
   onRun,
 }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
   commands: PaletteCommand[]
   canManage: boolean
   onOpenJob: (job: Job) => void
   onRun: (job: Job, action: JobAction) => void
 }) {
-  const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [found, setFound] = useState<{ search: string; jobs: Job[] } | null>(null)
   const [active, setActive] = useState(0)
   const id = useId()
+
+  // Every close goes through here, so each opening starts with an empty search
+  const change = (next: boolean) => {
+    if (!next) {
+      setQuery('')
+      setActive(0)
+    }
+    onOpenChange(next)
+  }
 
   useEffect(() => {
     const onKeyDown = (e: globalThis.KeyboardEvent) => {
@@ -48,16 +60,11 @@ export function CommandPalette({
       // Not over a panel or dialog that has the keyboard
       if (!open && document.querySelector('[role="dialog"], [role="alertdialog"]')) return
       e.preventDefault()
-      // Each opening starts with an empty search
-      if (!open) {
-        setQuery('')
-        setActive(0)
-      }
-      setOpen(!open)
+      change(!open)
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [open])
+  })
 
   const search = query.trim()
   useEffect(() => {
@@ -122,7 +129,7 @@ export function CommandPalette({
   }, [id, current])
 
   const choose = (item: Item) => {
-    setOpen(false)
+    change(false)
     item.run()
   }
   const onKeyDown = (e: KeyboardEvent) => {
@@ -137,7 +144,7 @@ export function CommandPalette({
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
+    <Dialog.Root open={open} onOpenChange={change}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/10 supports-backdrop-filter:backdrop-blur-xs" />
         <Dialog.Content

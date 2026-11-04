@@ -46,8 +46,8 @@ importing, security headers and cross-site requests.
   job are in the page's URL (`?tab=history&outcome=Failed`, `?group=billing&job=nightly`), so a link opens the same
   view and Back returns to the one before. Choosing another scheduler starts its dashboard afresh.
 - **Keyboard:** `/` moves to the search box, `j` and `k` move through the jobs on the page, Enter opens the one
-  marked, and Esc closes a panel. Keys typed into a field are text, not shortcuts. Ctrl+K (⌘K on a Mac) finds a job
-  by name and opens, runs, pauses or resumes it, or goes to a tab, AI mode, New job or Import.
+  marked, and Esc closes a panel. Keys typed into a field are text, not shortcuts. Ctrl+K (⌘K on a Mac), or Search in the
+  header, finds a job by name and opens, runs, pauses or resumes it, or goes to a tab, AI mode, New job or Import.
 - **Schedules in words.** Cron schedules read as text ("At 09:00, Monday through Friday") in the job list, the job
   panel and the editor's preview. Quartz numbers the days of the week from Sunday as 1.
 - **Next fire times.** **Next 5** on a cron or interval trigger's card in the job panel lists when it fires next, as

@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { CommandPalette } from '@/components/command-palette'
@@ -26,14 +27,20 @@ const setup = (canManage = true) => {
   const onOpenJob = vi.fn()
   const onRun = vi.fn()
   const goToHistory = vi.fn()
-  render(
-    <CommandPalette
-      commands={[{ label: 'History', icon: null, run: goToHistory }]}
-      canManage={canManage}
-      onOpenJob={onOpenJob}
-      onRun={onRun}
-    />
-  )
+  render(<Harness />)
+  function Harness() {
+    const [open, setOpen] = useState(false)
+    return (
+      <CommandPalette
+        open={open}
+        onOpenChange={setOpen}
+        commands={[{ label: 'History', icon: null, run: goToHistory }]}
+        canManage={canManage}
+        onOpenJob={onOpenJob}
+        onRun={onRun}
+      />
+    )
+  }
   return { onOpenJob, onRun, goToHistory }
 }
 

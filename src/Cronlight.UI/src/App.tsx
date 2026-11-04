@@ -80,6 +80,7 @@ function Dashboard({
   const [selection, setSelection] = useState<Pick<Job, 'group' | 'name'> | null>(initial.selection)
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [searching, setSearching] = useState(false)
   const [layout, changeLayout] = useLayout()
   // Kept here, so it is still there after a look at the jobs; each scheduler has its own
   const [turns, setTurns] = useConversation(currentScheduler() ?? '')
@@ -216,6 +217,7 @@ function Dashboard({
           nav={
             areas.length > 1 && <AreaNav areas={areas} area={shownArea} onAreaChange={setArea} />
           }
+          onSearch={scheduler ? () => setSearching(true) : undefined}
         />
 
         {error && (
@@ -352,12 +354,15 @@ function Dashboard({
           canManage={canManage}
           historyEnabled={historyEnabled}
           secretReferences={secretReferences}
+          timeZone={scheduler?.timeZone ?? ''}
           actions={actions}
           onClose={() => setSelection(null)}
           onViewHistory={showJobHistory}
         />
         {scheduler && (
           <CommandPalette
+            open={searching}
+            onOpenChange={setSearching}
             commands={commands}
             canManage={canManage}
             onOpenJob={job => setSelection({ group: job.group, name: job.name })}
