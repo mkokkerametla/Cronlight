@@ -127,13 +127,12 @@ export function Header({
           <Button
             variant="outline"
             className="text-muted-foreground max-sm:size-9 max-sm:px-0"
-            aria-label="Find a job or command"
             aria-keyshortcuts="Control+K Meta+K"
             onClick={onSearch}
           >
             <Search />
-            <span className="max-sm:hidden">Search</span>
-            <Kbd className="max-sm:hidden" aria-hidden>
+            <span className="max-sm:sr-only">Search</span>
+            <Kbd className="border bg-transparent max-sm:hidden" aria-hidden>
               {mac ? '⌘K' : 'Ctrl K'}
             </Kbd>
           </Button>
