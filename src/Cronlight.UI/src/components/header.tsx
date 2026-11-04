@@ -1,8 +1,9 @@
-import { Info } from 'lucide-react'
+import { Info, Search } from 'lucide-react'
 import { Fragment, type ReactNode } from 'react'
 import logo from '@/assets/logo.svg'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Kbd } from '@/components/ui/kbd'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   DropdownMenu,
@@ -56,6 +57,7 @@ export function Header({
   layout,
   onLayoutChange,
   nav,
+  onSearch,
 }: {
   scheduler: SchedulerInfo | null
   /**
@@ -70,6 +72,8 @@ export function Header({
   onLayoutChange?: (change: Partial<Layout>) => void
   /** Switches between the dashboard's areas, beside the scheduler */
   nav?: ReactNode
+  /** Opens the command palette, which Ctrl+K (⌘K) also opens */
+  onSearch?: () => void
 }) {
   const state = scheduler && schedulerState(scheduler)
   const name = scheduler?.schedulerName ?? known?.name
@@ -119,6 +123,20 @@ export function Header({
           </Badge>
         )}
         {scheduler && !scheduler.canManage && <Badge variant="outline">Read-only</Badge>}
+        {onSearch && (
+          <Button
+            variant="outline"
+            className="text-muted-foreground max-sm:size-9 max-sm:px-0"
+            aria-keyshortcuts="Control+K Meta+K"
+            onClick={onSearch}
+          >
+            <Search />
+            <span className="max-sm:sr-only">Search</span>
+            <Kbd className="border bg-transparent max-sm:hidden" aria-hidden>
+              {mac ? '⌘K' : 'Ctrl K'}
+            </Kbd>
+          </Button>
+        )}
         {scheduler && <SystemInfo scheduler={scheduler} />}
         {layout && onLayoutChange && <LayoutMenu layout={layout} onChange={onLayoutChange} />}
         <ThemeToggle />
@@ -126,6 +144,8 @@ export function Header({
     </header>
   )
 }
+
+const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent)
 
 type Rows = [string, string][]
 

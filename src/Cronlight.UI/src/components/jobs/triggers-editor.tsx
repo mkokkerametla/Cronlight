@@ -34,6 +34,8 @@ interface Props {
   onChange: (triggers: TriggerDraft[]) => void
   /** Told whether a cron expression is shown as invalid, so the form can refuse to save */
   onInvalidChange?: (invalid: boolean) => void
+  /** The time zone an added trigger starts in; empty for UTC */
+  timeZone?: string
 }
 
 // Quartz.NET's own reference, for the version Cronlight runs on
@@ -73,7 +75,7 @@ const skipLabels: Record<EditableTriggerKind, string> = {
     'Skip missed runs (when the scheduler was down or busy) instead of running once when it can',
 }
 
-export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
+export function TriggersEditor({ triggers, onChange, onInvalidChange, timeZone }: Props) {
   const id = useId()
   const update = (index: number, patch: Partial<TriggerDraft>) =>
     onChange(triggers.map((t, i) => (i === index ? { ...t, ...patch } : t)))
@@ -276,7 +278,7 @@ export function TriggersEditor({ triggers, onChange, onInvalidChange }: Props) {
         type="button"
         variant="outline"
         size="sm"
-        onClick={() => onChange([...triggers, emptyTrigger()])}
+        onClick={() => onChange([...triggers, emptyTrigger('Cron', timeZone)])}
       >
         <Plus /> Add trigger
       </Button>

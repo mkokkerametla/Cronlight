@@ -80,6 +80,8 @@ These are listed so the roadmap below is read against them:
   in the list open the job from the keyboard, and every trigger field has a visible label.
 - Unsaved changes: closing a job's editor, Run with different data, New job or an import asks before discarding
   what was entered.
+- A command palette (Ctrl+K or ⌘K) that finds a job and opens, runs, pauses or resumes it, or goes to a tab, AI mode,
+  New job or Import, and New job's triggers starting in the server's time zone instead of UTC (#49).
 
 ## How Cronlight compares
 

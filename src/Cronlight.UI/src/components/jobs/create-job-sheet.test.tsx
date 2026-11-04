@@ -43,7 +43,13 @@ const jobTypes: JobType[] = [
 ]
 
 /** The sheet with real open state, as App uses it. */
-function Harness({ onCreate }: { onCreate: (request: CreateJobRequest) => Promise<boolean> }) {
+function Harness({
+  onCreate,
+  timeZone,
+}: {
+  onCreate: (request: CreateJobRequest) => Promise<boolean>
+  timeZone?: string
+}) {
   const [open, setOpen] = useState(true)
   return (
     <>
@@ -53,6 +59,7 @@ function Harness({ onCreate }: { onCreate: (request: CreateJobRequest) => Promis
         onOpenChange={setOpen}
         jobTypes={jobTypes}
         secretReferences={false}
+        timeZone={timeZone}
         onCreate={onCreate}
       />
     </>
@@ -104,6 +111,26 @@ describe('CreateJobSheet', () => {
       retry: { maxRetries: 3, delaySeconds: 30, exponential: true },
     })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it("starts its triggers in the server's time zone, and sends it", async () => {
+    const onCreate = vi.fn(async () => true)
+    render(<Harness onCreate={onCreate} timeZone="America/Chicago" />)
+    const form = within(sheet())
+
+    expect(form.getByLabelText('Time zone')).toHaveValue('America/Chicago')
+    await userEvent.type(form.getByLabelText('Name'), 'invoices')
+    await userEvent.type(form.getByLabelText(/customerId/), '42')
+    await userEvent.type(form.getByLabelText('Cron expression'), '0 0 9 ? * MON-FRI')
+    await userEvent.click(form.getByRole('button', { name: 'Create job' }))
+
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggers: [
+          { name: null, cronExpression: '0 0 9 ? * MON-FRI', timeZone: 'America/Chicago' },
+        ],
+      })
+    )
   })
 
   it('cannot be created while a cron expression is shown as invalid', async () => {

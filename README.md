@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/mkokkerametla/Cronlight/actions/workflows/ci.yml/badge.svg)](https://github.com/mkokkerametla/Cronlight/actions/workflows/ci.yml)
 
-**A spotlight on your Quartz.NET jobs.** Cronlight is a dashboard and API for
+**Bring your Quartz.NET jobs to light.** Cronlight is a dashboard and API for
 [Quartz.NET](https://www.quartz-scheduler.net/) that you add to the ASP.NET Core app already running your
 scheduler: list, create, edit, pause, resume, run and delete jobs, and see what is running and what failed.
 

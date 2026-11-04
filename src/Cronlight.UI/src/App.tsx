@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { RotateCw, WifiOff } from 'lucide-react'
+import { Activity, History, List, Plus, RotateCw, Sparkles, Upload, WifiOff } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AreaNav } from '@/components/area-nav'
 import { Header } from '@/components/header'
 import { HistoryTable } from '@/components/history/history-table'
+import { CommandPalette, type PaletteCommand } from '@/components/command-palette'
 import { CreateJobSheet } from '@/components/jobs/create-job-sheet'
 import { ImportJobsSheet } from '@/components/jobs/import-jobs-sheet'
 import { JobSheet } from '@/components/jobs/job-sheet'
@@ -79,6 +80,7 @@ function Dashboard({
   const [selection, setSelection] = useState<Pick<Job, 'group' | 'name'> | null>(initial.selection)
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [searching, setSearching] = useState(false)
   const [layout, changeLayout] = useLayout()
   // Kept here, so it is still there after a look at the jobs; each scheduler has its own
   const [turns, setTurns] = useConversation(currentScheduler() ?? '')
@@ -162,6 +164,23 @@ function Dashboard({
     changeTab('history')
   }
 
+  const commands: PaletteCommand[] = [
+    { label: 'Jobs', icon: <List />, run: () => changeTab('jobs') },
+    { label: 'Running', icon: <Activity />, run: () => changeTab('running') },
+    ...(historyEnabled
+      ? [{ label: 'History', icon: <History />, run: () => changeTab('history') }]
+      : []),
+    ...(assistant
+      ? [{ label: 'AI mode', icon: <Sparkles />, run: () => setArea('assistant') }]
+      : []),
+    ...(canManage && jobTypes.length > 0
+      ? [{ label: 'New job', icon: <Plus />, run: () => setCreating(true) }]
+      : []),
+    ...(canManage
+      ? [{ label: 'Import jobs', icon: <Upload />, run: () => setImporting(true) }]
+      : []),
+  ]
+
   // The stat card matching what is on screen, if any. The row stays on every tab, so switching tabs never moves the tab
   // bar out from under the pointer.
   const activeStat: StatKey | null =
@@ -198,6 +217,7 @@ function Dashboard({
           nav={
             areas.length > 1 && <AreaNav areas={areas} area={shownArea} onAreaChange={setArea} />
           }
+          onSearch={scheduler ? () => setSearching(true) : undefined}
         />
 
         {error && (
@@ -334,15 +354,27 @@ function Dashboard({
           canManage={canManage}
           historyEnabled={historyEnabled}
           secretReferences={secretReferences}
+          timeZone={scheduler?.timeZone ?? ''}
           actions={actions}
           onClose={() => setSelection(null)}
           onViewHistory={showJobHistory}
         />
+        {scheduler && (
+          <CommandPalette
+            open={searching}
+            onOpenChange={setSearching}
+            commands={commands}
+            canManage={canManage}
+            onOpenJob={job => setSelection({ group: job.group, name: job.name })}
+            onRun={(job, action) => void actions.run(job, action)}
+          />
+        )}
         <CreateJobSheet
           open={creating}
           onOpenChange={setCreating}
           jobTypes={jobTypes}
           secretReferences={secretReferences}
+          timeZone={scheduler?.timeZone ?? ''}
           onCreate={actions.create}
         />
         <ImportJobsSheet

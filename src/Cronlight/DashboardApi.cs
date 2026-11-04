@@ -152,6 +152,7 @@ internal sealed record JobChange(JobKey Key, Dictionary<string, CronlightAuditCh
 /// <param name="RefreshSeconds">How often the dashboard refreshes.</param>
 /// <param name="Schedulers">Every scheduler served that the user may see, the host's own first.</param>
 /// <param name="Features">Areas that add-on packages turn on, such as assistant: the dashboard shows only those.</param>
+/// <param name="TimeZone">The server's time zone, which new cron triggers start in; null when it is UTC.</param>
 internal record SchedulerDto(
     string SchedulerName,
     string SchedulerInstanceId,
@@ -170,7 +171,8 @@ internal record SchedulerDto(
     bool SecretReferences,
     int RefreshSeconds,
     IReadOnlyList<string> Schedulers,
-    IReadOnlyList<string> Features
+    IReadOnlyList<string> Features,
+    string? TimeZone
 );
 
 /// <summary>One page of history, newest first.</summary>
@@ -805,7 +807,8 @@ internal static class DashboardApi
             SecretReferences.Enabled(options, scheduler.SchedulerName),
             Math.Clamp(options.RefreshSeconds, 1, 300),
             visible,
-            http.RequestServices.GetServices<DashboardExtension>().Select(e => e.Feature).Distinct().ToList());
+            http.RequestServices.GetServices<DashboardExtension>().Select(e => e.Feature).Distinct().ToList(),
+            ServerTimeZone());
     }
 
     /// <summary>Whether a cron expression is valid, and its next fire times in the time zone (UTC when null).</summary>
@@ -1724,6 +1727,13 @@ internal static class DashboardApi
         CronlightOptions options, string schedulerName) =>
         SecretReferences.Check(data, key => IsSensitive(key, secretKeys, options), options, schedulerName,
             http.RequestServices.GetRequiredService<IConfiguration>());
+
+    // Null for UTC, and for a zone that cannot be named back (a container's copied /etc/localtime is "Local"), which
+    // a trigger could not be saved in
+    private static string? ServerTimeZone() =>
+        TimeZoneInfo.Local.HasSameRules(TimeZoneInfo.Utc) || !TryResolveTimeZone(TimeZoneInfo.Local.Id, out _)
+            ? null
+            : TimeZoneInfo.Local.Id;
 
     private static bool TryResolveTimeZone(string? id, out TimeZoneInfo tz)
     {

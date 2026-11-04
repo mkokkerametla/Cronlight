@@ -85,6 +85,8 @@ interface Props {
   canManage: boolean
   historyEnabled: boolean
   secretReferences: boolean
+  /** The server's time zone, which added triggers start in; empty for UTC */
+  timeZone?: string
   actions: DashboardActions
   onClose: () => void
   onViewHistory: (group: string, name: string) => void
@@ -96,6 +98,7 @@ export function JobSheet({
   canManage,
   historyEnabled,
   secretReferences,
+  timeZone,
   actions,
   onClose,
   onViewHistory,
@@ -142,6 +145,7 @@ export function JobSheet({
                 key={`${job.group}.${job.name}`}
                 job={job}
                 secretReferences={secretReferences}
+                timeZone={timeZone}
                 jobType={jobType}
                 onDirtyChange={guard.setDirty}
                 onCancel={() => setMode('view')}
@@ -413,6 +417,7 @@ function EditJobForm({
   job,
   jobType,
   secretReferences,
+  timeZone,
   onDirtyChange,
   onSave,
   onCancel,
@@ -420,6 +425,7 @@ function EditJobForm({
   job: Job
   jobType: JobType | undefined
   secretReferences: boolean
+  timeZone?: string
   /** Told whether saving would change anything, so closing can ask first */
   onDirtyChange: (dirty: boolean) => void
   onSave: (request: UpdateJobRequest) => Promise<void>
@@ -485,6 +491,7 @@ function EditJobForm({
             triggers={triggers}
             onChange={setTriggers}
             onInvalidChange={setCronInvalid}
+            timeZone={timeZone}
           />
           {otherTriggers > 0 && (
             <p className="text-xs text-muted-foreground">

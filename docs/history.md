@@ -83,6 +83,7 @@ builder.Services.AddCronlightHistory(o =>
   last hour, 24 hours, 7 days or 30 days, for the job the list is filtered to or for every job. They count every
   outcome whatever the list's outcome filter is, since a success rate over failures alone says nothing. A job's page
   shows the same for the last 24 hours and 7 days, and a chart of its recent runs' durations coloured by outcome.
+  A success rate below 99% shows amber, and below 90% red.
   - They are counted as [the MCP server's analytics](mcp.md#how-the-analytics-count) are: a run by its outcome, a
     retried attempt as a retry and not a run, the success rate over succeeded, failed and blocked runs, and durations
     over the attempts that ran, the median and P95 by nearest rank.

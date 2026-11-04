@@ -85,12 +85,12 @@ export interface TriggerDraft {
 let lastDraftId = 0
 const nextDraftId = () => ++lastDraftId
 
-export const emptyTrigger = (kind: EditableTriggerKind = 'Cron'): TriggerDraft => ({
+export const emptyTrigger = (kind: EditableTriggerKind = 'Cron', timeZone = ''): TriggerDraft => ({
   id: nextDraftId(),
   kind,
   name: '',
   cronExpression: '',
-  timeZone: '',
+  timeZone,
   startAt: '',
   storedStart: null,
   every: '',
