@@ -136,6 +136,8 @@ export interface SchedulerInfo {
   schedulers: string[]
   /** Areas the app's add-on packages turn on, such as assistant */
   features: string[]
+  /** The server's time zone, which new cron triggers start in; null (or missing, before 0.6) when it is UTC */
+  timeZone?: string | null
 }
 
 /** A message of a conversation with the assistant */

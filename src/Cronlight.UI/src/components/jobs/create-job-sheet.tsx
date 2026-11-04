@@ -37,6 +37,8 @@ interface Props {
   onOpenChange: (open: boolean) => void
   jobTypes: JobType[]
   secretReferences: boolean
+  /** The server's time zone, which the job's triggers start in; empty for UTC */
+  timeZone?: string
   onCreate: (request: CreateJobRequest) => Promise<boolean>
 }
 
@@ -45,6 +47,7 @@ export function CreateJobSheet({
   onOpenChange,
   jobTypes,
   secretReferences,
+  timeZone,
   onCreate,
 }: Props) {
   const guard = useDiscardGuard(() => onOpenChange(false), 'The job is not created.')
@@ -63,6 +66,7 @@ export function CreateJobSheet({
           <CreateJobForm
             jobTypes={jobTypes}
             secretReferences={secretReferences}
+            timeZone={timeZone}
             onCreate={onCreate}
             onDirtyChange={guard.setDirty}
             onDone={() => onOpenChange(false)}
@@ -76,6 +80,7 @@ export function CreateJobSheet({
 function CreateJobForm({
   jobTypes,
   secretReferences,
+  timeZone,
   onCreate,
   onDirtyChange,
   onDone,
@@ -89,7 +94,7 @@ function CreateJobForm({
   const [group, setGroup] = useState('')
   const [description, setDescription] = useState('')
   const [data, setData] = useState(() => dataRows(jobTypes[0], {}))
-  const [triggers, setTriggers] = useState([emptyTrigger()])
+  const [triggers, setTriggers] = useState([emptyTrigger('Cron', timeZone)])
   const [retry, setRetry] = useState(() => retryDraft(jobTypes[0]?.retry))
   const [submitting, setSubmitting] = useState(false)
   const [cronInvalid, setCronInvalid] = useState(false)
@@ -194,6 +199,7 @@ function CreateJobForm({
             triggers={triggers}
             onChange={setTriggers}
             onInvalidChange={setCronInvalid}
+            timeZone={timeZone}
           />
         </section>
 
