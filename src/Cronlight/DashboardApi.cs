@@ -808,7 +808,7 @@ internal static class DashboardApi
             Math.Clamp(options.RefreshSeconds, 1, 300),
             visible,
             http.RequestServices.GetServices<DashboardExtension>().Select(e => e.Feature).Distinct().ToList(),
-            TimeZoneInfo.Local.HasSameRules(TimeZoneInfo.Utc) ? null : TimeZoneInfo.Local.Id);
+            ServerTimeZone());
     }
 
     /// <summary>Whether a cron expression is valid, and its next fire times in the time zone (UTC when null).</summary>
@@ -1727,6 +1727,13 @@ internal static class DashboardApi
         CronlightOptions options, string schedulerName) =>
         SecretReferences.Check(data, key => IsSensitive(key, secretKeys, options), options, schedulerName,
             http.RequestServices.GetRequiredService<IConfiguration>());
+
+    // Null for UTC, and for a zone that cannot be named back (a container's copied /etc/localtime is "Local"), which
+    // a trigger could not be saved in
+    private static string? ServerTimeZone() =>
+        TimeZoneInfo.Local.HasSameRules(TimeZoneInfo.Utc) || !TryResolveTimeZone(TimeZoneInfo.Local.Id, out _)
+            ? null
+            : TimeZoneInfo.Local.Id;
 
     private static bool TryResolveTimeZone(string? id, out TimeZoneInfo tz)
     {

@@ -3,7 +3,7 @@ import { Dialog } from 'radix-ui'
 import { Pause, Play, PlayCircle, Search, SquareArrowOutUpRight } from 'lucide-react'
 import { api } from '@/api'
 import { Kbd } from '@/components/ui/kbd'
-import { canResume } from '@/lib/format'
+import { canResume, jobKey } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { Job, JobAction, JobPage } from '@/types'
 
@@ -48,7 +48,12 @@ export function CommandPalette({
       // Not over a panel or dialog that has the keyboard
       if (!open && document.querySelector('[role="dialog"], [role="alertdialog"]')) return
       e.preventDefault()
-      setOpen(o => !o)
+      // Each opening starts with an empty search
+      if (!open) {
+        setQuery('')
+        setActive(0)
+      }
+      setOpen(!open)
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
@@ -75,7 +80,7 @@ export function CommandPalette({
   const jobs = search && found?.search === search ? found.jobs : []
   const items: Item[] = [
     ...jobs.flatMap(job => {
-      const key = `${job.group}.${job.name}`
+      const key = jobKey(job)
       const actions: Item[] = [
         {
           id: `open:${key}`,
@@ -111,15 +116,13 @@ export function CommandPalette({
   ]
   const current = Math.min(active, items.length - 1)
 
-  const close = (next: boolean) => {
-    setOpen(next)
-    if (!next) {
-      setQuery('')
-      setActive(0)
-    }
-  }
+  // Arrow keys can move past the list's height
+  useEffect(() => {
+    document.getElementById(`${id}-${current}`)?.scrollIntoView?.({ block: 'nearest' })
+  }, [id, current])
+
   const choose = (item: Item) => {
-    close(false)
+    setOpen(false)
     item.run()
   }
   const onKeyDown = (e: KeyboardEvent) => {
@@ -134,7 +137,7 @@ export function CommandPalette({
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={close}>
+    <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/10 supports-backdrop-filter:backdrop-blur-xs" />
         <Dialog.Content
