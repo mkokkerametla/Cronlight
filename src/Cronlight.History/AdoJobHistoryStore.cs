@@ -212,28 +212,6 @@ internal sealed class AdoJobHistoryStore(
         return runs;
     }
 
-    public async Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken)
-    {
-        if (NotReadyYet)
-            return new JobHistorySummary(sinceUtc, 0, 0, 0, 0);
-
-        await using var connection = await dataSource.OpenConnection(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            $"SELECT STATUS, COUNT(*) FROM {tableName} WHERE SCHED_NAME = {P("sched")} AND FIRED_TIME >= {P("since")} GROUP BY STATUS";
-        Add(command, "sched", schedulerName);
-        Add(command, "since", sinceUtc.UtcTicks);
-
-        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-            counts[reader.GetString(0)] = Convert.ToInt32(reader.GetValue(1));
-
-        int Count(JobExecutionStatus status) => counts.GetValueOrDefault(status.ToString());
-        return new JobHistorySummary(sinceUtc, Count(JobExecutionStatus.Succeeded), Count(JobExecutionStatus.Failed),
-            Count(JobExecutionStatus.Vetoed), Count(JobExecutionStatus.Running));
-    }
-
     /// <summary>The WHERE clause for the query's scheduler, job, group, outcome and fired time, its parameters added.</summary>
     private string Where(DbCommand command, string schedulerName, JobHistoryQuery query)
     {

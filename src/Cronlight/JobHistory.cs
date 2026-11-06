@@ -91,24 +91,53 @@ public record JobHistoryQuery
     public int Limit { get; init; } = 50;
 }
 
-public record JobHistorySummary(DateTimeOffset SinceUtc, int Succeeded, int Failed, int Vetoed, int Running);
-
-/// <summary>Runs counted by outcome, with durations and late starts.</summary>
-/// <param name="Runs">Runs that came to an end: succeeded, failed, blocked or cancelled. Retried attempts are not runs of their own.</param>
-/// <param name="Vetoed">Blocked before they ran, e.g. by a secret that could not be found.</param>
-/// <param name="Retries">Attempts that failed and were retried; the run's outcome is its last attempt's.</param>
-/// <param name="Misfires">Fire times the scheduler missed.</param>
-/// <param name="Running">Attempts still running.</param>
-/// <param name="SuccessRate">Succeeded out of succeeded, failed and blocked, from 0 to 1; null without any.</param>
-/// <param name="AverageDurationMs">Over attempts that ran: succeeded, failed, retried and cancelled.</param>
-/// <param name="MedianDurationMs">Half of those attempts took this long or less (nearest rank).</param>
-/// <param name="P95DurationMs">95% of those attempts took this long or less (nearest rank).</param>
-/// <param name="LateStarts">Attempts that started 5 seconds or more after their scheduled time.</param>
-/// <param name="MaxLateMs">How late the latest of them started.</param>
-public record JobRunStatistics(int Runs, int Succeeded, int Failed, int Vetoed, int Cancelled, int Retries, int Misfires, int Running,
-    double? SuccessRate, long? AverageDurationMs, long? MedianDurationMs, long? P95DurationMs, long? MaxDurationMs, int LateStarts,
-    long? MaxLateMs)
+/// <summary>
+/// Runs counted by outcome, with durations and late starts. A store of its own that implements
+/// <see cref="IJobHistoryStore.Statistics"/> sets the figures it has; figures added in later versions are left at their default.
+/// </summary>
+public record JobRunStatistics
 {
+    /// <summary>Runs that came to an end: succeeded, failed, blocked or cancelled. Retried attempts are not runs of their own.</summary>
+    public int Runs { get; init; }
+
+    public int Succeeded { get; init; }
+
+    public int Failed { get; init; }
+
+    /// <summary>Blocked before they ran, e.g. by a secret that could not be found.</summary>
+    public int Vetoed { get; init; }
+
+    public int Cancelled { get; init; }
+
+    /// <summary>Attempts that failed and were retried; the run's outcome is its last attempt's.</summary>
+    public int Retries { get; init; }
+
+    /// <summary>Fire times the scheduler missed.</summary>
+    public int Misfires { get; init; }
+
+    /// <summary>Attempts still running.</summary>
+    public int Running { get; init; }
+
+    /// <summary>Succeeded out of succeeded, failed and blocked, from 0 to 1; null without any.</summary>
+    public double? SuccessRate { get; init; }
+
+    /// <summary>Over attempts that ran: succeeded, failed, retried and cancelled.</summary>
+    public long? AverageDurationMs { get; init; }
+
+    /// <summary>Half of those attempts took this long or less (nearest rank).</summary>
+    public long? MedianDurationMs { get; init; }
+
+    /// <summary>95% of those attempts took this long or less (nearest rank).</summary>
+    public long? P95DurationMs { get; init; }
+
+    public long? MaxDurationMs { get; init; }
+
+    /// <summary>Attempts that started 5 seconds or more after their scheduled time.</summary>
+    public int LateStarts { get; init; }
+
+    /// <summary>How late the latest of them started.</summary>
+    public long? MaxLateMs { get; init; }
+
     /// <summary>
     /// The store read the newest 20,000 records only, as one that does not count in its database does, so the figures
     /// cover those.
@@ -121,6 +150,10 @@ public record JobRunStatistics(int Runs, int Succeeded, int Failed, int Vetoed, 
 /// Storage for execution history. Implemented by the Cronlight.History package; the dashboard
 /// shows history whenever an implementation is registered.
 /// </summary>
+/// <remarks>
+/// Members added in a 1.x version come with a default body, so a store of its own keeps compiling; only a major version
+/// adds one it must implement.
+/// </remarks>
 public interface IJobHistoryStore
 {
     /// <summary>Called once at startup; creates the storage if needed.</summary>
@@ -137,8 +170,6 @@ public interface IJobHistoryStore
 
     /// <summary>Newest first.</summary>
     Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken);
-
-    Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken);
 
     /// <summary>
     /// Figures over the records the query picks (job, group, outcome and fired time; its paging is ignored). A store that

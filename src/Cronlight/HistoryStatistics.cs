@@ -51,12 +51,23 @@ internal static class HistoryStatistics
         // Nearest rank
         long? Percentile(double p) => timed == 0 ? null : durationAt(Math.Max(0, (int)Math.Ceiling(p * timed) - 1));
 
-        return new JobRunStatistics(decided + cancelled, succeeded, failed, vetoed, cancelled, count(JobExecutionStatus.Retried),
-            count(JobExecutionStatus.Misfired), count(JobExecutionStatus.Running),
-            decided == 0 ? null : Math.Round((double)succeeded / decided, 4),
-            timed == 0 ? null : totalDurationMs / timed, Percentile(0.5), Percentile(0.95), maxDurationMs, lateStarts,
-            maxLateTicks / TimeSpan.TicksPerMillisecond)
+        return new JobRunStatistics
         {
+            Runs = decided + cancelled,
+            Succeeded = succeeded,
+            Failed = failed,
+            Vetoed = vetoed,
+            Cancelled = cancelled,
+            Retries = count(JobExecutionStatus.Retried),
+            Misfires = count(JobExecutionStatus.Misfired),
+            Running = count(JobExecutionStatus.Running),
+            SuccessRate = decided == 0 ? null : Math.Round((double)succeeded / decided, 4),
+            AverageDurationMs = timed == 0 ? null : totalDurationMs / timed,
+            MedianDurationMs = Percentile(0.5),
+            P95DurationMs = Percentile(0.95),
+            MaxDurationMs = maxDurationMs,
+            LateStarts = lateStarts,
+            MaxLateMs = maxLateTicks / TimeSpan.TicksPerMillisecond,
             Truncated = truncated
         };
     }

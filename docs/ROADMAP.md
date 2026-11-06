@@ -130,6 +130,10 @@ switch, which differ in style today ([#51](https://github.com/mkokkerametla/Cron
 
 ### Quartz 4 support
 
+**Decision (2026-11-06): 1.x stays on Quartz 3.x, and Quartz 4 support is 2.0.** 1.0 does not wait for 4.x to settle. Once 2.0
+is out, 1.x gets fixes from a `release/1.x` branch, tagged there (`v1.4.1`); the release workflow keeps such a release from
+being marked the latest. The rest of this section is about when 2.0 starts.
+
 **Decision (2026-10-25): wait, and stay on Quartz 3.13.1.** 4.x is released (4.6.0 on 2026-10-19), but it is
 seven weeks old with 12 releases, and recent ones fixed serious bugs: 4.6.0 fixed `UseClustering()` leaving
 every node as `NON_CLUSTERED`, so nodes could take each other's fired triggers, and 4.2.4 fixed a database

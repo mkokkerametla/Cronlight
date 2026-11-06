@@ -112,7 +112,8 @@ builder.Services.AddCronlightHistory(o =>
   a window long past can come back truncated. Run statistics come from `Statistics`, which by default counts the
   newest 20,000 runs `Query` returns (and says so, `truncated`); a store that can count in its database implements
   it. The job list's recent runs come from `RecentRuns`, which by default asks `Query` once per job on the page; a
-  store that can read them all at once implements it.
+  store that can read them all at once implements it. Members added to `IJobHistoryStore` in a 1.x version come with a default body, so a store of
+  your own keeps compiling until 2.0.
 
 | Option | Default | |
 |---|---|---|

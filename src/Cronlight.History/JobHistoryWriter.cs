@@ -278,14 +278,15 @@ internal sealed class JobHistoryWriter(
     }
 
     /// <summary>
-    /// Whether the store answers at all. A summary of no runs (since the end of time) reads no record back, so a record it
-    /// cannot read, such as one a newer version wrote, does not make it look unavailable.
+    /// Whether the store answers at all. Deleting the records fired before the start of time touches none and reads none back,
+    /// so a record it cannot read, such as one a newer version wrote, does not make it look unavailable. Every store
+    /// implements it, where Statistics may fall back to reading records.
     /// </summary>
     private async Task<bool> Readable(string schedulerName)
     {
         try
         {
-            await store.Summarize(schedulerName, DateTimeOffset.MaxValue, CancellationToken.None);
+            await store.DeleteFiredBefore(schedulerName, DateTimeOffset.MinValue, CancellationToken.None);
             return true;
         }
         catch (Exception)

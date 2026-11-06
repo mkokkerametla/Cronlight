@@ -5,7 +5,7 @@ import { api, askAssistant, currentScheduler, selectScheduler } from '@/api'
 import App from '@/App'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { execution, job, jobPage, scheduler, trigger } from '@/test/fixtures'
-import type { AssistantEvent, HistorySummary, Job, JobType } from '@/types'
+import type { AssistantEvent, Job, JobType, RunStatistics } from '@/types'
 
 vi.mock('@/api', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api')>()),
@@ -13,12 +13,22 @@ vi.mock('@/api', async importOriginal => ({
   askAssistant: vi.fn(),
 }))
 
-const summary: HistorySummary = {
-  sinceUtc: '2030-01-01T00:00:00Z',
+const summary: RunStatistics = {
+  runs: 7,
   succeeded: 5,
   failed: 2,
   vetoed: 0,
+  cancelled: 0,
+  retries: 0,
+  misfires: 0,
   running: 0,
+  successRate: 0.7143,
+  averageDurationMs: 100,
+  medianDurationMs: 100,
+  p95DurationMs: 100,
+  maxDurationMs: 100,
+  lateStarts: 0,
+  maxLateMs: null,
 }
 const jobTypes: JobType[] = [
   {
@@ -60,7 +70,7 @@ describe('App', () => {
       ],
       scheduler: scheduler(),
       running: { source: 'local', jobs: [] },
-      'history/summary?hours=24': summary,
+      'history/stats?hours=24': { stats: summary },
       'job-types': jobTypes,
     }
     vi.mocked(api).mockImplementation(async (path, options) => {

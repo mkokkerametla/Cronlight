@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api'
 import { useDashboard } from '@/hooks/use-dashboard'
 import { execution, job, jobPage, scheduler, trigger } from '@/test/fixtures'
-import type { HistorySummary, Job } from '@/types'
+import type { Job, RunStatistics } from '@/types'
 
 vi.mock('@/api', async importOriginal => ({
   ...(await importOriginal<typeof import('@/api')>()),
@@ -13,13 +13,8 @@ vi.mock('@/api', async importOriginal => ({
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 const mockApi = vi.mocked(api)
 
-const summary: HistorySummary = {
-  sinceUtc: '2030-01-01T00:00:00Z',
-  succeeded: 3,
-  failed: 1,
-  vetoed: 0,
-  running: 0,
-}
+// Only what the dashboard reads from it
+const summary = { failed: 1 } as RunStatistics
 
 /** Answers the dashboard's GETs; a test overrides single paths through `responses`. */
 let responses: Record<string, unknown>
@@ -42,7 +37,7 @@ describe('useDashboard', () => {
       jobs: [job()],
       scheduler: scheduler(),
       running: { source: 'local', jobs: [] },
-      'history/summary?hours=24': summary,
+      'history/stats?hours=24': { stats: summary },
       'job-types': [],
     }
     mockApi.mockImplementation(async (path, options) => {
@@ -97,7 +92,7 @@ describe('useDashboard', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.summary).toBeNull()
-    expect(calls()).not.toContain('history/summary?hours=24')
+    expect(calls()).not.toContain('history/stats?hours=24')
   })
 
   it('shows a load error and clears it once the server answers again', async () => {
@@ -205,7 +200,7 @@ describe('useDashboard', () => {
     vi.useFakeTimers()
     renderHook(() => useDashboard())
     await act(() => vi.advanceTimersByTimeAsync(0))
-    const summaries = () => calls().filter(p => p.startsWith('history/summary')).length
+    const summaries = () => calls().filter(p => p.startsWith('history/stats')).length
     expect(summaries()).toBe(1)
 
     await act(() => vi.advanceTimersByTimeAsync(50_000))

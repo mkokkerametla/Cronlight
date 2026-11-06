@@ -69,17 +69,6 @@ internal sealed class InMemoryJobHistoryStore(int capacity) : IJobHistoryStore, 
         }
     }
 
-    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken)
-    {
-        lock (gate)
-        {
-            var recent = records.Where(r => r.SchedulerName == schedulerName && r.FiredTimeUtc >= sinceUtc).ToList();
-            int Count(JobExecutionStatus status) => recent.Count(r => r.Status == status);
-            return Task.FromResult(new JobHistorySummary(sinceUtc, Count(JobExecutionStatus.Succeeded),
-                Count(JobExecutionStatus.Failed), Count(JobExecutionStatus.Vetoed), Count(JobExecutionStatus.Running)));
-        }
-    }
-
     public Task<JobRunStatistics> Statistics(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken)
     {
         lock (gate)

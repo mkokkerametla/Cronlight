@@ -339,14 +339,6 @@ export interface HistoryPage {
   nextBefore: number | null
 }
 
-export interface HistorySummary {
-  sinceUtc: string
-  succeeded: number
-  failed: number
-  vetoed: number
-  running: number
-}
-
 /** Runs counted by outcome, with durations and late starts (api/history/stats) */
 export interface RunStatistics {
   /** Runs that came to an end: succeeded, failed, blocked or cancelled; retried attempts are not runs of their own */

@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
@@ -101,4 +103,29 @@ public class OpenApiTests
         Assert.Equal(HttpStatusCode.OK, (await host.Client("viewer").GetAsync("api/openapi.json")).StatusCode);
         Assert.NotEqual(HttpStatusCode.OK, (await host.Client().GetAsync("api/openapi.json")).StatusCode);
     }
+
+    /// <summary>
+    /// The API is part of what 1.x promises not to break, so a change to any endpoint, parameter or answer shows up here
+    /// as a change to openapi.baseline.json. Check that it only adds, then accept it with CRONLIGHT_UPDATE_OPENAPI=1.
+    /// </summary>
+    [Fact]
+    public async Task The_API_matches_its_baseline()
+    {
+        await using var host = await TestHost.Start();
+        var document = JsonNode.Parse(await host.Client().GetStringAsync("api/openapi.json"))!;
+        // Differs from build to build
+        document["info"]!.AsObject().Remove("version");
+        var actual = document.ToJsonString(new JsonSerializerOptions { WriteIndented = true }).ReplaceLineEndings("\n") + "\n";
+
+        var baseline = Baseline();
+        if (Environment.GetEnvironmentVariable("CRONLIGHT_UPDATE_OPENAPI") == "1")
+            await File.WriteAllTextAsync(baseline, actual);
+        var expected = File.Exists(baseline) ? (await File.ReadAllTextAsync(baseline)).ReplaceLineEndings("\n") : "";
+        Assert.True(expected == actual,
+            "The API differs from tests/Cronlight.Tests/openapi.baseline.json. If the change only adds, accept it with " +
+            "CRONLIGHT_UPDATE_OPENAPI=1 dotnet test --filter The_API_matches_its_baseline, and review the baseline's diff.");
+    }
+
+    private static string Baseline([CallerFilePath] string source = "") =>
+        Path.Combine(Path.GetDirectoryName(source)!, "openapi.baseline.json");
 }

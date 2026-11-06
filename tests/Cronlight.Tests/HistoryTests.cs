@@ -38,7 +38,7 @@ internal static class HistoryScenarios
         var okOnly = await History(client, "?group=DEFAULT&name=ok");
         Assert.All(okOnly, r => Assert.Equal("ok", r.GetProperty("jobName").GetString()));
 
-        var summary = await client.GetFromJsonAsync<JsonElement>("api/history/summary?hours=1");
+        var summary = (await client.GetFromJsonAsync<JsonElement>("api/history/stats?hours=1")).GetProperty("stats");
         Assert.Equal(1, summary.GetProperty("succeeded").GetInt32());
         Assert.Equal(1, summary.GetProperty("failed").GetInt32());
 
@@ -116,7 +116,7 @@ internal static class HistoryScenarios
         Assert.Equal(new[] { "Cronlight.Retries", "Cronlight.Retries" }, records.Take(2).Select(r => r.GetProperty("triggerGroup").GetString()));
         Assert.StartsWith("InvalidOperationException:", records[1].GetProperty("error").GetString());
         // Retried attempts are not failures: the job ended up succeeding
-        var summary = await client.GetFromJsonAsync<JsonElement>("api/history/summary?hours=1");
+        var summary = (await client.GetFromJsonAsync<JsonElement>("api/history/stats?hours=1")).GetProperty("stats");
         Assert.Equal((1, 0), (summary.GetProperty("succeeded").GetInt32(), summary.GetProperty("failed").GetInt32()));
     }
 
@@ -150,7 +150,7 @@ internal static class HistoryScenarios
         var vetoed = Assert.Single(records);
         Assert.Equal(0, vetoed.GetProperty("durationMs").GetInt64());
         Assert.Single(await History(client, "?status=vetoed"));
-        var summary = await client.GetFromJsonAsync<JsonElement>("api/history/summary?hours=1");
+        var summary = (await client.GetFromJsonAsync<JsonElement>("api/history/stats?hours=1")).GetProperty("stats");
         Assert.Equal(1, summary.GetProperty("vetoed").GetInt32());
     }
 
@@ -345,9 +345,11 @@ internal static class HistoryScenarios
         var window = new JobHistoryQuery { JobGroup = "stats", FiredFromUtc = now.AddHours(-24), FiredBeforeUtc = now };
         var stats = await store.Statistics(host.SchedulerName, window, CancellationToken.None);
         // Durations 50 100 200 300 400 700 1000: the median the 4th, the P95 the 7th
-        Assert.Equal(new JobRunStatistics(Runs: 7, Succeeded: 4, Failed: 1, Vetoed: 1, Cancelled: 1, Retries: 1, Misfires: 1, Running: 1,
-            SuccessRate: 0.6667, AverageDurationMs: 392, MedianDurationMs: 300, P95DurationMs: 1000, MaxDurationMs: 1000, LateStarts: 1,
-            MaxLateMs: 10_000), stats);
+        Assert.Equal(new JobRunStatistics
+        {
+            Runs = 7, Succeeded = 4, Failed = 1, Vetoed = 1, Cancelled = 1, Retries = 1, Misfires = 1, Running = 1, SuccessRate = 0.6667,
+            AverageDurationMs = 392, MedianDurationMs = 300, P95DurationMs = 1000, MaxDurationMs = 1000, LateStarts = 1, MaxLateMs = 10_000,
+        }, stats);
         // As counted from the records themselves
         Assert.Equal(stats, await HistoryStatistics.Scan(store, host.SchedulerName, window, CancellationToken.None));
 
@@ -356,7 +358,7 @@ internal static class HistoryScenarios
         var failed = await store.Statistics(host.SchedulerName, window with { Status = JobExecutionStatus.Failed }, CancellationToken.None);
         Assert.Equal((1, 0.0, 1000L), (failed.Runs, failed.SuccessRate!.Value, failed.MedianDurationMs!.Value));
         var none = await store.Statistics(host.SchedulerName, window with { JobName = "nothing" }, CancellationToken.None);
-        Assert.Equal(new JobRunStatistics(0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null, null, 0, null), none);
+        Assert.Equal(new JobRunStatistics(), none);
 
         var api = await host.Client().GetFromJsonAsync<JsonElement>("api/history/stats?group=stats&hours=24");
         Assert.Equal(7, api.GetProperty("stats").GetProperty("runs").GetInt32());
@@ -955,7 +957,7 @@ public class HistoryTests
         var client = host.Client();
 
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/history")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/history/summary")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/history/stats")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("api/history/1/log")).StatusCode);
         var scheduler = await client.GetFromJsonAsync<JsonElement>("api/scheduler");
         Assert.False(scheduler.GetProperty("historyEnabled").GetBoolean());
@@ -1640,8 +1642,6 @@ internal sealed class SlowStartingStore : IJobHistoryStore
     public Task<IReadOnlyList<JobExecutionRecord>> Query(string schedulerName, JobHistoryQuery query, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<JobExecutionRecord>>([]);
 
-    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
-        Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
 }
 
 /// <summary>
@@ -1693,10 +1693,8 @@ internal sealed class OutageStore : IJobHistoryStore
     }
 
     // Down means down: every call fails
-    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
-        down ? throw new IOException("Connection refused") : Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
-
-    public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
+    public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) =>
+        down ? throw new IOException("Connection refused") : Task.FromResult(0);
 }
 
 /// <summary>Signals when the host stops it, which it does just before the services registered ahead of it.</summary>
@@ -1764,9 +1762,6 @@ internal sealed class GatedStore(string heldJob) : IJobHistoryStore
                 .OrderByDescending(r => r.Id).Take(query.Limit).ToList());
     }
 
-    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
-        Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
-
     public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
 }
 
@@ -1819,9 +1814,6 @@ internal sealed class RefusingStore(string refusedJob, bool readable = true) : I
                 .OrderByDescending(r => r.Id).Take(query.Limit).ToList());
     }
 
-    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
-        Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
-
     public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
 }
 
@@ -1865,9 +1857,6 @@ internal sealed class FailsFirstStartStore : IJobHistoryStore
         lock (records)
             return Task.FromResult<IReadOnlyList<JobExecutionRecord>>(records.Where(r => r.SchedulerName == schedulerName).OrderByDescending(r => r.Id).ToList());
     }
-
-    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
-        Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
 
     public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) => Task.FromResult(0);
 }
@@ -1934,9 +1923,7 @@ internal sealed class ListStore : IJobHistoryStore
                 .OrderByDescending(r => r.Id).Take(query.Limit).ToList());
     }
 
-    public Task<JobHistorySummary> Summarize(string schedulerName, DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
-        Down ? throw new IOException("Connection refused") : Task.FromResult(new JobHistorySummary(sinceUtc, 0, 0, 0, 0));
-
     public Task<int> DeleteFiredBefore(string schedulerName, DateTimeOffset cutoffUtc, CancellationToken cancellationToken) =>
-        FailDelete?.Invoke(Interlocked.Increment(ref deletes)) is { } error ? Task.FromException<int>(error) : Task.FromResult(0);
+        Down ? throw new IOException("Connection refused")
+        : FailDelete?.Invoke(Interlocked.Increment(ref deletes)) is { } error ? Task.FromException<int>(error) : Task.FromResult(0);
 }
