@@ -47,7 +47,7 @@ internal record UpcomingRuns(TimeWindow Window, bool Truncated, IReadOnlyList<Up
 internal record RunLog(long RunId, int TotalEntries, bool Truncated, IReadOnlyList<JobRunLogEntry> Entries);
 
 /// <param name="Runs">Outcomes of the runs since SinceUtc; null when execution history is not enabled.</param>
-internal record StatusSummary(DateTimeOffset SinceUtc, JobCountsDto Jobs, int RunningNow, bool HistoryEnabled, JobHistorySummary? Runs);
+internal record StatusSummary(DateTimeOffset SinceUtc, JobCountsDto Jobs, int RunningNow, bool HistoryEnabled, JobRunStatistics? Runs);
 
 /// <param name="Truncated">More failures happened than were read (the newest 20,000), so the counts are lower bounds.</param>
 internal record FailureSummary(TimeWindow Window, int Failures, bool Truncated, IReadOnlyList<JobFailures> Jobs);
@@ -255,7 +255,7 @@ internal sealed class CronlightMcpTools(McpAccess access, JobIndexReader index, 
         var since = DateTimeOffset.UtcNow.AddHours(-Math.Clamp(hours, 1, 24 * 90));
         var store = services.GetService<IJobHistoryStore>();
         return new StatusSummary(since, DashboardApi.JobCounts(await index.Read(s, cancellationToken)), (await running.Read(s, cancellationToken)).Jobs.Count,
-            store != null, store == null ? null : await store.Summarize(s.SchedulerName, since, cancellationToken));
+            store != null, store == null ? null : await store.Statistics(s.SchedulerName, new JobHistoryQuery { FiredFromUtc = since }, cancellationToken));
     }
 
     [McpServerTool(Name = "failure_summary", Title = "Failure summary", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]

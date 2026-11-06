@@ -479,18 +479,6 @@ internal static class DashboardApi
             .WithTags(Tags.History).WithSummary("What a run logged while it ran")
             .Produces<IReadOnlyList<JobRunLogEntry>>().ProducesProblem(StatusCodes.Status404NotFound);
 
-        api.MapGet("/history/summary", async (HttpContext http, int? hours, CancellationToken ct) =>
-        {
-            if (http.RequestServices.GetService<IJobHistoryStore>() is not { } store)
-                return Missing("Execution history is not enabled.");
-
-            var scheduler = await Scheduler(http, ct);
-            var since = DateTimeOffset.UtcNow.AddHours(-Math.Clamp(hours ?? 24, 1, 24 * 90));
-            return Results.Ok(await store.Summarize(scheduler.SchedulerName, since, ct));
-        })
-            .WithTags(Tags.History).WithSummary("How many runs succeeded and failed in the last hours (24 unless hours says otherwise)")
-            .Produces<JobHistorySummary>().ProducesProblem(StatusCodes.Status404NotFound);
-
         api.MapGet("/history/stats", async (HttpContext http, string? group, string? name, string? status, int? hours, DateTimeOffset? from,
             DateTimeOffset? to, CancellationToken ct) =>
         {

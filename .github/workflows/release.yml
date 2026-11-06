@@ -74,6 +74,14 @@ jobs:
         run: |
           flags=()
           if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
+          # A fix to an older major (1.4.1 after 2.0.0) is not the latest release, and its notes start from that major's
+          # release before it rather than from the newest release
+          major="${VERSION%%.*}"
+          released=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --exclude-pre-releases --json tagName -q '.[].tagName' | sed 's/^v//')
+          highest=$(sort -V <<< "$released" | tail -1)
+          if [[ -n "$highest" && "${highest%%.*}" -gt "$major" ]]; then flags+=(--latest=false); fi
+          previous=$( { grep "^$major\." <<< "$released"; echo "$VERSION"; } | sort -uV | grep -B1 -x "$VERSION" | grep -vx "$VERSION" || true)
+          if [[ -n "$previous" ]]; then flags+=(--notes-start-tag "v$previous"); fi
           gh release create "$GITHUB_REF_NAME" artifacts/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "Cronlight $VERSION" \

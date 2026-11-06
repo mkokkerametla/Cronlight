@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
@@ -101,4 +103,53 @@ public class OpenApiTests
         Assert.Equal(HttpStatusCode.OK, (await host.Client("viewer").GetAsync("api/openapi.json")).StatusCode);
         Assert.NotEqual(HttpStatusCode.OK, (await host.Client().GetAsync("api/openapi.json")).StatusCode);
     }
+
+    /// <summary>
+    /// The API is part of what 1.x promises not to break, so a change to any endpoint, parameter or answer shows up here
+    /// as a change to openapi.baseline.json. Check that it only adds, then accept it with CRONLIGHT_UPDATE_OPENAPI=1.
+    /// </summary>
+    [Fact]
+    public async Task The_API_matches_its_baseline()
+    {
+        await using var host = await TestHost.Start();
+        var document = JsonNode.Parse(await host.Client().GetStringAsync("api/openapi.json"))!;
+        // Differs from build to build
+        document["info"]!.AsObject().Remove("version");
+        var actual = document.ToJsonString(new JsonSerializerOptions { WriteIndented = true }).ReplaceLineEndings("\n") + "\n";
+
+        if (Environment.GetEnvironmentVariable("CRONLIGHT_UPDATE_OPENAPI") == "1")
+        {
+            await File.WriteAllTextAsync(SourceBaseline(), actual);
+            return;
+        }
+        // The copy built next to the tests: a CI build maps source paths, so the source file cannot be found from here
+        var expected = (await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "openapi.baseline.json"))).ReplaceLineEndings("\n");
+        if (expected == actual)
+            return;
+        var (want, got) = (expected.Split('\n'), actual.Split('\n'));
+        var line = Enumerable.Range(0, Math.Min(want.Length, got.Length)).FirstOrDefault(i => want[i] != got[i], Math.Min(want.Length, got.Length));
+        Assert.Fail($"The API differs from tests/Cronlight.Tests/openapi.baseline.json at line {line + 1}: expected " +
+            $"'{want.ElementAtOrDefault(line)?.Trim()}', got '{got.ElementAtOrDefault(line)?.Trim()}' (under {string.Join(" > ", Holders(got, line))}). " +
+            "If the change only adds, accept it with CRONLIGHT_UPDATE_OPENAPI=1 dotnet test --filter The_API_matches_its_baseline, " +
+            "and review the baseline's diff.");
+    }
+
+    /// <summary>The properties that hold a line of the indented document, outermost first.</summary>
+    private static IEnumerable<string> Holders(string[] lines, int line)
+    {
+        var path = new List<string>();
+        for (int i = line - 1, indent = int.MaxValue; i >= 0 && indent > 0; i--)
+        {
+            var depth = lines[i].Length - lines[i].TrimStart().Length;
+            if (depth < indent && lines[i].TrimStart().StartsWith('"') && lines[i].TrimEnd() is var open && (open.EndsWith('{') || open.EndsWith('[')))
+            {
+                path.Insert(0, lines[i].Trim().Split(':')[0].Trim('"'));
+                indent = depth;
+            }
+        }
+        return path;
+    }
+
+    private static string SourceBaseline([CallerFilePath] string source = "") =>
+        Path.Combine(Path.GetDirectoryName(source)!, "openapi.baseline.json");
 }

@@ -7,7 +7,8 @@ import type {
   BulkAction,
   CreateJobRequest,
   ExecutionRecord,
-  HistorySummary,
+  HistoryStats,
+  RunStatistics,
   Job,
   JobAction,
   JobPage,
@@ -55,7 +56,7 @@ export function useDashboard(
   const [jobTypes, setJobTypes] = useState<JobType[]>([])
   const [scheduler, setScheduler] = useState<SchedulerInfo | null>(null)
   const [running, setRunning] = useState<RunningJobs>({ source: 'local', jobs: [] })
-  const [summary, setSummary] = useState<HistorySummary | null>(null)
+  const [summary, setSummary] = useState<RunStatistics | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -81,10 +82,10 @@ export function useDashboard(
         ? (pageData.jobs.find(j => j.group === selected[0] && j.name === selected[1]) ??
           (await api<Job>(jobPath({ group: selected[0], name: selected[1] })).catch(() => null)))
         : null
-      let summaryData: HistorySummary | null | undefined
+      let summaryData: RunStatistics | null | undefined
       if (!schedulerData.historyEnabled) summaryData = null
       else if (Date.now() - summaryAt.current >= SUMMARY_MS)
-        summaryData = await api<HistorySummary>('history/summary?hours=24')
+        summaryData = (await api<HistoryStats>('history/stats?hours=24')).stats
       if (current !== generation.current) return
       setPage(pageData)
       setSelectedJob(selectedData)

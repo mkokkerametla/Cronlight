@@ -1,0 +1,3325 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Cronlight",
+    "description": "The API of the Cronlight dashboard for Quartz.NET. Requests are authorized as the dashboard is, by the host\u0027s ViewPolicy and ManagePolicy. Requests that change jobs must send an X-Cronlight-Request header (any value), which keeps other sites from using a viewer\u0027s cookies. Every request may name a scheduler with ?scheduler=, and goes to the host\u0027s own scheduler without it. Errors are problem details, whose detail says what is wrong."
+  },
+  "paths": {
+    "/cronlight/api/scheduler": {
+      "get": {
+        "tags": [
+          "Scheduler"
+        ],
+        "summary": "The scheduler, and what the user may do in it",
+        "parameters": [
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Scheduler"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/job-types": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "The job types new jobs can be created with, and their parameters",
+        "parameters": [
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobTypeInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Every job, with its triggers",
+        "description": "Loads every job one by one, which suits small schedulers. The dashboard uses jobs/search.",
+        "parameters": [
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Creates a job",
+        "parameters": [
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobKey"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/search": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Searches, filters and pages the jobs",
+        "description": "search matches names and groups; type is a job type label; status is Active, Paused, Unloadable or Error. Pages hold 50 jobs unless pageSize says otherwise, at most 200. The counts are over every job, whatever the filters. With history on, each job carries its last 10 runs (recentRuns), newest first, each by its final outcome.",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/{group}/{name}": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "A job, with its triggers",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Changes a job",
+        "description": "Properties left out are left as they are. Job data keys sent are set, or removed when null, and others kept; a masked secret (********) keeps its value. Triggers replaces the job\u0027s triggers of the kinds triggerKinds names.",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Deletes a job and its triggers",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/{group}/{name}/fire-times": {
+      "get": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Each trigger\u0027s next five fire times, skipping those its calendar excludes",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TriggerFireTimes"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/running": {
+      "get": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "The runs going on now",
+        "description": "Read from the job store, which covers every node of a cluster (source: cluster), or else this node\u0027s runs (source: local).",
+        "parameters": [
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunningJobs"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/running/{fireInstanceId}/log": {
+      "get": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "What a run going on now has logged so far",
+        "description": "Only the node running it has its log: 404 on another node, and once it has finished, when its log is in history.",
+        "parameters": [
+          {
+            "name": "fireInstanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobRunLogEntry"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/history": {
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "summary": "Recorded runs, newest first",
+        "description": "group and name pick one job\u0027s runs, and status one outcome. Pages hold 50 runs unless limit says otherwise, at most 500; before= takes the last page\u0027s nextBefore. 404 when execution history is not enabled.",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/history/{id}/log": {
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "summary": "What a run logged while it ran",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobRunLogEntry"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/history/stats": {
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "summary": "Runs by outcome, success rate and durations over a period",
+        "description": "The period is the last 24 hours unless hours, or from and to, say otherwise, at most 90 days. group and name pick one job\u0027s runs, and status one outcome. A run is counted by its outcome, a retried attempt as a retry; durations are over attempts that ran, and the median and P95 by nearest rank. 404 when execution history is not enabled.",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hours",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryStats"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/export": {
+      "get": {
+        "tags": [
+          "Export and import"
+        ],
+        "summary": "Exports the jobs to a JSON or YAML file",
+        "description": "format is json (the default) or yaml, and group picks one group. Secrets are masked, except secret references.",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobFile"
+                }
+              },
+              "application/yaml": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobFile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/cron/preview": {
+      "get": {
+        "tags": [
+          "Cron"
+        ],
+        "summary": "Checks a cron expression and lists its next fire times",
+        "description": "timeZone is the zone it is read in, UTC when left out; count is how many fire times, 5 unless it says otherwise, at most 10.",
+        "parameters": [
+          {
+            "name": "expression",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "timeZone",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronPreview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/import": {
+      "post": {
+        "tags": [
+          "Export and import"
+        ],
+        "summary": "Imports jobs from a JSON or YAML file",
+        "description": "Creates the file\u0027s jobs the scheduler does not have and updates the others to match it; never deletes a job. Every job is checked before any is changed: if one cannot be imported, none is, and the 400 answer lists each job\u0027s problem under jobs. dryRun=true answers with what importing would do, and changes nothing. Send YAML as application/yaml.",
+        "parameters": [
+          {
+            "name": "dryRun",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobFile"
+              }
+            },
+            "application/yaml": {
+              "schema": {
+                "$ref": "#/components/schemas/JobFile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/{group}/{name}/pause": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Pauses a job\u0027s triggers",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/{group}/{name}/resume": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Resumes a job\u0027s triggers, and those Quartz stopped (Error)",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/{group}/{name}/trigger": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Runs a job now, optionally with some of its data replaced for this run only",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RunJobRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/{group}/{name}/runs/{fireInstanceId}/cancel": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Asks a running job to stop",
+        "description": "Cancels the run\u0027s cancellation token; the job stops when it next checks it. Only the node running it can, so a run on another node is refused with 409.",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fireInstanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/jobs/{group}/{name}/retries/{trigger}/cancel-retry": {
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Cancels a waiting retry",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/groups/{group}/pause": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Pauses every job in a group",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/groups/{group}/resume": {
+      "post": {
+        "tags": [
+          "Jobs"
+        ],
+        "summary": "Resumes every job in a group",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/scheduler/pause": {
+      "post": {
+        "tags": [
+          "Scheduler"
+        ],
+        "summary": "Pauses every job in the scheduler",
+        "parameters": [
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cronlight/api/scheduler/resume": {
+      "post": {
+        "tags": [
+          "Scheduler"
+        ],
+        "summary": "Resumes every job in the scheduler",
+        "parameters": [
+          {
+            "name": "scheduler",
+            "in": "query",
+            "description": "The scheduler, by name; the host\u0027s own when left out.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Cronlight-Request",
+            "in": "header",
+            "description": "Any value. Without it, a request that changes jobs is refused with 403.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem\u002Bjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ClusterNode": {
+        "required": [
+          "instanceId",
+          "lastCheckinUtc",
+          "checkinIntervalMs",
+          "secondsSinceCheckin",
+          "alive",
+          "thisNode"
+        ],
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string"
+          },
+          "lastCheckinUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checkinIntervalMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "secondsSinceCheckin": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "alive": {
+            "type": "boolean"
+          },
+          "thisNode": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateJobRequest": {
+        "required": [
+          "type",
+          "name",
+          "group",
+          "description",
+          "data",
+          "triggers"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "group": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "data": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "triggers": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TriggerRequest"
+            }
+          },
+          "retry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JobRetryPolicy"
+              }
+            ]
+          },
+          "jobType": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "CronlightAuditChange": {
+        "required": [
+          "before",
+          "after"
+        ],
+        "type": "object",
+        "properties": {
+          "before": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "after": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "CronPreview": {
+        "required": [
+          "isValid",
+          "expression",
+          "description",
+          "nextFireTimes",
+          "errorMessage"
+        ],
+        "type": "object",
+        "properties": {
+          "isValid": {
+            "type": "boolean"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "nextFireTimes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "errorMessage": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "HistoryPage": {
+        "required": [
+          "records",
+          "nextBefore"
+        ],
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobExecutionRecord"
+            }
+          },
+          "nextBefore": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "HistoryStats": {
+        "required": [
+          "fromUtc",
+          "toUtc",
+          "stats"
+        ],
+        "type": "object",
+        "properties": {
+          "fromUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "toUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/JobRunStatistics"
+          }
+        }
+      },
+      "ImportedJob": {
+        "required": [
+          "group",
+          "name",
+          "action",
+          "error",
+          "changes"
+        ],
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "changes": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CronlightAuditChange"
+            }
+          }
+        }
+      },
+      "ImportResult": {
+        "required": [
+          "dryRun",
+          "created",
+          "updated",
+          "unchanged",
+          "jobs"
+        ],
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "created": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "updated": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "unchanged": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportedJob"
+            }
+          }
+        }
+      },
+      "Job": {
+        "required": [
+          "name",
+          "group",
+          "description",
+          "jobType",
+          "displayName",
+          "durable",
+          "loadable",
+          "loadError",
+          "data",
+          "triggers"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "jobType": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "displayName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "durable": {
+            "type": "boolean"
+          },
+          "loadable": {
+            "type": "boolean"
+          },
+          "loadError": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Trigger"
+            }
+          },
+          "retry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JobRetryPolicy"
+              }
+            ]
+          },
+          "typeDescription": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "recentRuns": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/RecentRun"
+            }
+          }
+        }
+      },
+      "JobCounts": {
+        "required": [
+          "all",
+          "active",
+          "paused",
+          "unloadable"
+        ],
+        "type": "object",
+        "properties": {
+          "all": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "active": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "paused": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "unloadable": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "error": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32",
+            "default": 0
+          }
+        }
+      },
+      "JobExecutionRecord": {
+        "required": [
+          "schedulerName",
+          "fireInstanceId",
+          "instanceName",
+          "jobName",
+          "jobGroup",
+          "firedTimeUtc",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "schedulerName": {
+            "type": "string"
+          },
+          "fireInstanceId": {
+            "type": "string"
+          },
+          "instanceName": {
+            "type": "string"
+          },
+          "jobName": {
+            "type": "string"
+          },
+          "jobGroup": {
+            "type": "string"
+          },
+          "jobType": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "triggerName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "triggerGroup": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "scheduledFireTimeUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "firedTimeUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedTimeUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "durationMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobExecutionStatus"
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "refireCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "attempt": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "data": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "hasLog": {
+            "type": "boolean"
+          },
+          "log": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/JobRunLogEntry"
+            }
+          }
+        }
+      },
+      "JobExecutionStatus": {
+        "enum": [
+          "Running",
+          "Succeeded",
+          "Failed",
+          "Vetoed",
+          "Cancelled",
+          "Retried",
+          "Misfired"
+        ]
+      },
+      "JobFile": {
+        "required": [
+          "version",
+          "scheduler",
+          "exportedAtUtc",
+          "jobs"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "scheduler": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "exportedAtUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "jobs": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/JobFileEntry"
+            }
+          }
+        }
+      },
+      "JobFileEntry": {
+        "required": [
+          "group",
+          "name",
+          "type",
+          "description",
+          "paused",
+          "retry",
+          "data",
+          "triggers"
+        ],
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "type": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "paused": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "retry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JobRetryPolicy"
+              }
+            ]
+          },
+          "data": {
+            "type": [
+              "null",
+              "object"
+            ]
+          },
+          "triggers": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/JobFileTrigger"
+            }
+          }
+        }
+      },
+      "JobFileTrigger": {
+        "required": [
+          "name",
+          "kind",
+          "cronExpression",
+          "timeZone",
+          "startAtUtc",
+          "intervalSeconds",
+          "repeatCount",
+          "skipMissed"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "kind": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "cronExpression": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "timeZone": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "startAtUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "intervalSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "repeatCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "skipMissed": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          }
+        }
+      },
+      "JobKey": {
+        "required": [
+          "name",
+          "group"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          }
+        }
+      },
+      "JobPage": {
+        "required": [
+          "jobs",
+          "total",
+          "page",
+          "pageSize",
+          "counts",
+          "types"
+        ],
+        "type": "object",
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            }
+          },
+          "total": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "page": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "pageSize": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/JobCounts"
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "JobParameterInfo": {
+        "required": [
+          "key",
+          "type",
+          "required",
+          "description",
+          "defaultValue",
+          "choices"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "defaultValue": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "choices": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "JobRetryPolicy": {
+        "required": [
+          "maxRetries",
+          "delaySeconds"
+        ],
+        "type": "object",
+        "properties": {
+          "maxRetries": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "delaySeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "exponential": {
+            "type": "boolean",
+            "default": false
+          },
+          "retryOn": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "JobRunLogEntry": {
+        "required": [
+          "timeUtc",
+          "level",
+          "category",
+          "message"
+        ],
+        "type": "object",
+        "properties": {
+          "timeUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "level": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "JobRunStatistics": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "succeeded": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "failed": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "vetoed": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "cancelled": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "retries": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "misfires": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "running": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "successRate": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d\u002B)?(?:[eE][\u002B-]?\\d\u002B)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "averageDurationMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "medianDurationMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "p95DurationMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "maxDurationMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "lateStarts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "maxLateMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "JobTypeInfo": {
+        "required": [
+          "typeName",
+          "displayName",
+          "description",
+          "hidden",
+          "parameters"
+        ],
+        "type": "object",
+        "properties": {
+          "typeName": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobParameterInfo"
+            }
+          },
+          "retry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JobRetryPolicy"
+              }
+            ]
+          }
+        }
+      },
+      "Message": {
+        "required": [
+          "message"
+        ],
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "title": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "status": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "instance": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "RecentRun": {
+        "required": [
+          "id",
+          "status",
+          "firedTimeUtc",
+          "durationMs",
+          "attempt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobExecutionStatus"
+          },
+          "firedTimeUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "durationMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "attempt": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "RunJobRequest": {
+        "required": [
+          "data"
+        ],
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "retryOf": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "RunningJob": {
+        "required": [
+          "name",
+          "group",
+          "jobType",
+          "triggerName",
+          "triggerGroup",
+          "fireInstanceId",
+          "instanceName",
+          "firedTimeUtc",
+          "runningForMs"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "jobType": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "triggerName": {
+            "type": "string"
+          },
+          "triggerGroup": {
+            "type": "string"
+          },
+          "fireInstanceId": {
+            "type": "string"
+          },
+          "instanceName": {
+            "type": "string"
+          },
+          "firedTimeUtc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "runningForMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "RunningJobs": {
+        "required": [
+          "source",
+          "jobs"
+        ],
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningJob"
+            }
+          }
+        }
+      },
+      "Scheduler": {
+        "required": [
+          "schedulerName",
+          "schedulerInstanceId",
+          "version",
+          "started",
+          "inStandbyMode",
+          "jobStore",
+          "jobStoreClustered",
+          "jobStoreSupportsPersistence",
+          "threadPoolSize",
+          "numberOfJobsExecuted",
+          "runningSince",
+          "clusterNodes",
+          "canManage",
+          "historyEnabled",
+          "secretReferences",
+          "refreshSeconds",
+          "schedulers",
+          "features",
+          "timeZone"
+        ],
+        "type": "object",
+        "properties": {
+          "schedulerName": {
+            "type": "string"
+          },
+          "schedulerInstanceId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "started": {
+            "type": "boolean"
+          },
+          "inStandbyMode": {
+            "type": "boolean"
+          },
+          "jobStore": {
+            "type": "string"
+          },
+          "jobStoreClustered": {
+            "type": "boolean"
+          },
+          "jobStoreSupportsPersistence": {
+            "type": "boolean"
+          },
+          "threadPoolSize": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "numberOfJobsExecuted": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "runningSince": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "clusterNodes": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ClusterNode"
+            }
+          },
+          "canManage": {
+            "type": "boolean"
+          },
+          "historyEnabled": {
+            "type": "boolean"
+          },
+          "secretReferences": {
+            "type": "boolean"
+          },
+          "refreshSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "schedulers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timeZone": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "Trigger": {
+        "required": [
+          "name",
+          "group",
+          "kind",
+          "cronExpression",
+          "timeZone",
+          "state",
+          "nextFireTimeUtc",
+          "previousFireTimeUtc",
+          "misfireInstruction"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "cronExpression": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "timeZone": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "nextFireTimeUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "previousFireTimeUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "misfireInstruction": {
+            "type": "string"
+          },
+          "attempt": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "startTimeUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "intervalSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "repeatCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "skipsMissed": {
+            "type": "boolean",
+            "default": false
+          },
+          "calendarName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "TriggerFireTimes": {
+        "required": [
+          "group",
+          "name",
+          "fireTimesUtc"
+        ],
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "fireTimesUtc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      },
+      "TriggerRequest": {
+        "required": [
+          "name",
+          "cronExpression",
+          "timeZone"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "cronExpression": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "timeZone": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "skipMissed": {
+            "type": "boolean",
+            "default": false
+          },
+          "kind": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "startAtUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "intervalSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "repeatCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "UpdateJobRequest": {
+        "required": [
+          "description",
+          "data",
+          "triggers"
+        ],
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "data": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "triggers": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TriggerRequest"
+            }
+          },
+          "retry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JobRetryPolicy"
+              }
+            ]
+          },
+          "triggerKinds": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Scheduler"
+    },
+    {
+      "name": "Jobs"
+    },
+    {
+      "name": "Runs"
+    },
+    {
+      "name": "History"
+    },
+    {
+      "name": "Export and import"
+    },
+    {
+      "name": "Cron"
+    }
+  ]
+}
