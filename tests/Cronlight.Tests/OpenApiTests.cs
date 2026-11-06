@@ -121,9 +121,30 @@ public class OpenApiTests
         if (Environment.GetEnvironmentVariable("CRONLIGHT_UPDATE_OPENAPI") == "1")
             await File.WriteAllTextAsync(baseline, actual);
         var expected = File.Exists(baseline) ? (await File.ReadAllTextAsync(baseline)).ReplaceLineEndings("\n") : "";
-        Assert.True(expected == actual,
-            "The API differs from tests/Cronlight.Tests/openapi.baseline.json. If the change only adds, accept it with " +
-            "CRONLIGHT_UPDATE_OPENAPI=1 dotnet test --filter The_API_matches_its_baseline, and review the baseline's diff.");
+        if (expected == actual)
+            return;
+        var (want, got) = (expected.Split('\n'), actual.Split('\n'));
+        var line = Enumerable.Range(0, Math.Min(want.Length, got.Length)).FirstOrDefault(i => want[i] != got[i], Math.Min(want.Length, got.Length));
+        Assert.Fail($"The API differs from tests/Cronlight.Tests/openapi.baseline.json at line {line + 1}: expected " +
+            $"'{want.ElementAtOrDefault(line)?.Trim()}', got '{got.ElementAtOrDefault(line)?.Trim()}' (under {string.Join(" > ", Holders(got, line))}). " +
+            "If the change only adds, accept it with CRONLIGHT_UPDATE_OPENAPI=1 dotnet test --filter The_API_matches_its_baseline, " +
+            "and review the baseline's diff.");
+    }
+
+    /// <summary>The properties that hold a line of the indented document, outermost first.</summary>
+    private static IEnumerable<string> Holders(string[] lines, int line)
+    {
+        var path = new List<string>();
+        for (int i = line - 1, indent = int.MaxValue; i >= 0 && indent > 0; i--)
+        {
+            var depth = lines[i].Length - lines[i].TrimStart().Length;
+            if (depth < indent && lines[i].TrimStart().StartsWith('"') && lines[i].TrimEnd() is var open && (open.EndsWith('{') || open.EndsWith('[')))
+            {
+                path.Insert(0, lines[i].Trim().Split(':')[0].Trim('"'));
+                indent = depth;
+            }
+        }
+        return path;
     }
 
     private static string Baseline([CallerFilePath] string source = "") =>
