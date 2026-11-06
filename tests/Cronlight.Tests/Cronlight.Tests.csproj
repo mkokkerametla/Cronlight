@@ -46,6 +46,7 @@
   <ItemGroup>
     <None Include="..\..\samples\Cronlight.SampleHost\tables_sqlite.sql" Link="tables_sqlite.sql" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Schemas\*.sql" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="openapi.baseline.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

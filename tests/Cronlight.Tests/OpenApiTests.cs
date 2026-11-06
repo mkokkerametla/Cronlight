@@ -117,10 +117,13 @@ public class OpenApiTests
         document["info"]!.AsObject().Remove("version");
         var actual = document.ToJsonString(new JsonSerializerOptions { WriteIndented = true }).ReplaceLineEndings("\n") + "\n";
 
-        var baseline = Baseline();
         if (Environment.GetEnvironmentVariable("CRONLIGHT_UPDATE_OPENAPI") == "1")
-            await File.WriteAllTextAsync(baseline, actual);
-        var expected = File.Exists(baseline) ? (await File.ReadAllTextAsync(baseline)).ReplaceLineEndings("\n") : "";
+        {
+            await File.WriteAllTextAsync(SourceBaseline(), actual);
+            return;
+        }
+        // The copy built next to the tests: a CI build maps source paths, so the source file cannot be found from here
+        var expected = (await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "openapi.baseline.json"))).ReplaceLineEndings("\n");
         if (expected == actual)
             return;
         var (want, got) = (expected.Split('\n'), actual.Split('\n'));
@@ -147,6 +150,6 @@ public class OpenApiTests
         return path;
     }
 
-    private static string Baseline([CallerFilePath] string source = "") =>
+    private static string SourceBaseline([CallerFilePath] string source = "") =>
         Path.Combine(Path.GetDirectoryName(source)!, "openapi.baseline.json");
 }
